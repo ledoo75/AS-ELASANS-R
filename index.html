@@ -238,6 +238,9 @@ let G_ODEMELER = [];
 let G_ASANSORLER = [];
 let G_BILDIRIMLER = [];
 let G_SON_GORULEN = null; // bildirim okundu takibi için zaman damgası
+let G_AVANSLAR = [];          // KareKara mantığı: personele verilen avanslar
+let G_AVANS_KULLANIM = [];    // avanstan kullanılan/düşülen tutarlar
+let G_KULLANICILAR = [];      // personel listesi (avans dropdown'u için)
 
 function subscribeAll() {
   const role = currentUserData?.rol;
@@ -308,11 +311,29 @@ function subscribeAll() {
     rebuildBildirimler();
   }));
 
+  // Avanslar (Personel Cari — sadece admin/teknisyen erişimi olan veri, bina rolüne gösterilmez)
+  if (role !== 'bina') {
+    const avansQ = query(collection(db, 'avanslar'), orderBy('tarih', 'desc'));
+    unsubscribers.push(onSnapshot(avansQ, snap => {
+      G_AVANSLAR = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (document.getElementById('muhTab-personel')?.style.display !== 'none') renderPersonelCari();
+    }));
+
+    const avansKullanimQ = query(collection(db, 'avansKullanimlar'), orderBy('tarih', 'desc'));
+    unsubscribers.push(onSnapshot(avansKullanimQ, snap => {
+      G_AVANS_KULLANIM = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (document.getElementById('muhTab-personel')?.style.display !== 'none') renderPersonelCari();
+    }));
+  }
+
   // Kullanıcılar (sadece admin)
   if (role === 'admin') {
     const kulQ = query(collection(db, 'kullanicilar'));
     unsubscribers.push(onSnapshot(kulQ, snap => {
-      renderKullanicilar(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      G_KULLANICILAR = data;
+      renderKullanicilar(data);
+      doldurPersonelSecimi();
     }));
   }
 }
@@ -1460,6 +1481,351 @@ function renderMuhasebe() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   MUHASEBE SEKME GEÇİŞİ
+═══════════════════════════════════════════════════════════════ */
+window.switchMuhasebeTab = (tab, btn) => {
+  document.querySelectorAll('.muh-tab-content').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.muh-tab-btn').forEach(el => el.classList.remove('muh-tab-active'));
+  document.getElementById('muhTab-' + tab).style.display = 'block';
+  if (btn) btn.classList.add('muh-tab-active');
+
+  if (tab === 'personel') renderPersonelCari();
+  if (tab === 'musteri') { doldurMusteriSecimi(); renderMusteriCariListesi(); }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   PERSONEL CARİ — KareKara şoför avans/bakiye mantığı
+   (Personele avans verilir, kullanım düşülür, net bakiye gösterilir)
+═══════════════════════════════════════════════════════════════ */
+function doldurPersonelSecimi() {
+  const sel = document.getElementById('f-avans-personel');
+  if (!sel) return;
+  const mevcut = sel.value;
+  const personeller = G_KULLANICILAR.filter(u => u.rol === 'admin' || u.rol === 'teknisyen');
+  sel.innerHTML = '<option value="">— Seçiniz —</option>' +
+    personeller.map(p => `<option value="${p.id}" data-ad="${(p.ad||'').replace(/"/g,'')}">${p.ad}</option>`).join('');
+  if (mevcut) sel.value = mevcut;
+}
+
+window.saveAvans = async () => {
+  const personelSel = document.getElementById('f-avans-personel');
+  const personelId  = personelSel.value;
+  const personelAd  = personelSel.selectedOptions[0]?.dataset.ad || '';
+  const tutar       = parseFloat(document.getElementById('f-avans-tutar').value) || 0;
+  const tarih       = document.getElementById('f-avans-tarih').value;
+  const not         = document.getElementById('f-avans-not').value.trim();
+
+  if (!personelId || !tutar || !tarih) { alert('Personel, tutar ve tarih zorunludur.'); return; }
+
+  try {
+    await addDoc(collection(db, 'avanslar'), {
+      personelId, personelAd, tutar, tarih, not,
+      verenAd: currentUserData?.ad || '—',
+      olusturuldu: serverTimestamp()
+    });
+    closeModal('mAvans');
+    document.getElementById('f-avans-tutar').value = '';
+    document.getElementById('f-avans-tarih').value = '';
+    document.getElementById('f-avans-not').value = '';
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.deleteAvans = async (id) => {
+  if (!confirm('Bu avans kaydını silmek istediğinizden emin misiniz?')) return;
+  await deleteDoc(doc(db, 'avanslar', id));
+};
+
+window.openAvansKullanimModal = (personelId, personelAd) => {
+  document.getElementById('f-avk-personel').value = personelId;
+  document.getElementById('f-avk-tutar').value = '';
+  document.getElementById('f-avk-tarih').value = new Date().toISOString().slice(0,10);
+  document.getElementById('f-avk-aciklama').value = '';
+  document.getElementById('mAvansKullanimTitle').textContent = `${personelAd} — Avans Kullanımı`;
+  openModal('mAvansKullanim');
+};
+
+window.saveAvansKullanim = async () => {
+  const personelId = document.getElementById('f-avk-personel').value;
+  const tutar       = parseFloat(document.getElementById('f-avk-tutar').value) || 0;
+  const tarih       = document.getElementById('f-avk-tarih').value;
+  const aciklama    = document.getElementById('f-avk-aciklama').value.trim();
+
+  if (!tutar || !tarih) { alert('Tutar ve tarih zorunludur.'); return; }
+
+  const avansKaydi = G_AVANSLAR.find(a => a.personelId === personelId);
+  const personelAd = avansKaydi?.personelAd || G_KULLANICILAR.find(u => u.id === personelId)?.ad || '—';
+
+  try {
+    await addDoc(collection(db, 'avansKullanimlar'), {
+      personelId, personelAd, tutar, tarih, aciklama,
+      olusturuldu: serverTimestamp()
+    });
+    closeModal('mAvansKullanim');
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.deleteAvansKullanim = async (id) => {
+  if (!confirm('Bu kullanım kaydını silmek istediğinizden emin misiniz?')) return;
+  await deleteDoc(doc(db, 'avansKullanimlar', id));
+};
+
+function renderPersonelCari() {
+  const tbody = document.getElementById('personelCariTableBody');
+  const logEl = document.getElementById('avansHareketListesi');
+  if (!tbody) return;
+
+  doldurPersonelSecimi();
+
+  // Personel bazında toplam avans ve kullanım hesapla
+  const personelMap = {};
+  G_AVANSLAR.forEach(a => {
+    if (!personelMap[a.personelId]) personelMap[a.personelId] = { ad: a.personelAd, avans: 0, kullanim: 0 };
+    personelMap[a.personelId].avans += (a.tutar || 0);
+  });
+  G_AVANS_KULLANIM.forEach(k => {
+    if (!personelMap[k.personelId]) personelMap[k.personelId] = { ad: k.personelAd, avans: 0, kullanim: 0 };
+    personelMap[k.personelId].kullanim += (k.tutar || 0);
+  });
+
+  const personelList = Object.entries(personelMap).map(([id, v]) => ({
+    id, ad: v.ad, avans: v.avans, kullanim: v.kullanim, bakiye: v.avans - v.kullanim
+  }));
+
+  if (!personelList.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz avans kaydı yok.</td></tr>`;
+  } else {
+    tbody.innerHTML = personelList.map(p => {
+      const bakiyeRenk = p.bakiye < 0 ? '#EF4444' : p.bakiye > 0 ? '#10B981' : '#94A3B8';
+      return `
+      <tr class="tbl-row">
+        <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${p.ad}</td>
+        <td style="padding:12px;text-align:right;font-size:12px;color:#00ADB5;font-weight:600;">${p.avans.toLocaleString('tr-TR')} ₺</td>
+        <td style="padding:12px;text-align:right;font-size:12px;color:#F59E0B;">${p.kullanim.toLocaleString('tr-TR')} ₺</td>
+        <td style="padding:12px;text-align:right;font-size:13px;font-weight:800;color:${bakiyeRenk};">${p.bakiye.toLocaleString('tr-TR')} ₺</td>
+        <td style="padding:12px;text-align:right;">
+          <button onclick="openAvansKullanimModal('${p.id}','${p.ad.replace(/'/g,"\\'")}')" style="font-size:11px;color:#F59E0B;background:none;border:none;cursor:pointer;" class="admin-only">+ Kullanım</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Son hareketler (avans + kullanım birleşik, tarihe göre)
+  const hareketler = [
+    ...G_AVANSLAR.map(a => ({ tip:'avans', ad:a.personelAd, tutar:a.tutar, tarih:a.tarih, not:a.not, id:a.id, renk:'#00ADB5' })),
+    ...G_AVANS_KULLANIM.map(k => ({ tip:'kullanim', ad:k.personelAd, tutar:k.tutar, tarih:k.tarih, not:k.aciklama, id:k.id, renk:'#F59E0B' }))
+  ].sort((a,b) => (b.tarih||'').localeCompare(a.tarih||'')).slice(0, 20);
+
+  logEl.innerHTML = hareketler.length ? hareketler.map(h => `
+    <div style="padding:11px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.4);">
+      <span class="sbadge" style="background:${h.renk}22;color:${h.renk};border:1px solid ${h.renk}44;flex-shrink:0;">${h.tip==='avans'?'Avans':'Kullanım'}</span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${h.ad}</div>
+        <div style="font-size:11px;color:#475569;margin-top:1px;">${h.not||'—'}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="font-size:12px;font-weight:700;color:${h.renk};">${h.tip==='avans'?'+':'-'}${h.tutar.toLocaleString('tr-TR')} ₺</div>
+        <div style="font-size:10px;color:#475569;font-family:monospace;">${h.tarih}</div>
+      </div>
+      <button onclick="${h.tip==='avans'?'deleteAvans':'deleteAvansKullanim'}('${h.id}')" class="admin-only" style="font-size:10px;color:#EF4444;background:none;border:none;cursor:pointer;flex-shrink:0;">✕</button>
+    </div>`).join('') : `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Henüz hareket yok.</div>`;
+
+  const role = currentUserData?.rol;
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = role === 'admin' ? '' : 'none';
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MÜŞTERİ CARİ — Bina bazlı tahsilat / borç-alacak ekstresi
+═══════════════════════════════════════════════════════════════ */
+function doldurMusteriSecimi() {
+  const sel = document.getElementById('musteriCariSecim');
+  if (!sel) return;
+  const mevcut = sel.value;
+  sel.innerHTML = '<option value="">— Bina Seçin —</option>' +
+    G_BINALAR.map(b => `<option value="${b.ad}">${b.ad}</option>`).join('');
+  if (mevcut) sel.value = mevcut;
+}
+
+function renderMusteriCariListesi() {
+  const tbody = document.getElementById('musteriCariTableBody');
+  if (!tbody) return;
+
+  if (!G_BINALAR.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz bina kaydı yok.</td></tr>`;
+    return;
+  }
+
+  const bugun = new Date();
+  const buAy = bugun.toISOString().slice(0,7);
+
+  tbody.innerHTML = G_BINALAR.map(b => {
+    const sozlesme = G_SOZLESMELER.find(s => s.bina === b.ad);
+    const tahsilatlar = G_ODEMELER.filter(o => o.bina === b.ad);
+    const toplamTahsilat = tahsilatlar.reduce((s,o) => s + (o.tutar||0), 0);
+
+    const buAyOdendiMi = tahsilatlar.some(o => (o.tarih||'').startsWith(buAy));
+    let durum, durumRenk;
+    if (!sozlesme) { durum = 'Sözleşme Yok'; durumRenk = '#475569'; }
+    else if (buAyOdendiMi) { durum = 'Bu Ay Ödendi'; durumRenk = '#10B981'; }
+    else { durum = 'Bu Ay Bekliyor'; durumRenk = '#F59E0B'; }
+
+    return `
+    <tr class="tbl-row">
+      <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${b.ad}</td>
+      <td style="padding:12px;text-align:right;font-size:12px;color:#94A3B8;">${sozlesme?.tutar ? sozlesme.tutar.toLocaleString('tr-TR')+' ₺' : '—'}</td>
+      <td style="padding:12px;text-align:right;font-size:12px;color:#10B981;font-weight:600;">${toplamTahsilat.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:12px;text-align:right;"><span class="sbadge" style="background:${durumRenk}22;color:${durumRenk};border:1px solid ${durumRenk}44;">${durum}</span></td>
+      <td style="padding:12px;text-align:right;">
+        <button onclick="document.getElementById('musteriCariSecim').value='${b.ad.replace(/'/g,"\\'")}';renderMusteriCariDetay();" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">Detay →</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+window.renderMusteriCariDetay = () => {
+  const binaAdi = document.getElementById('musteriCariSecim').value;
+  const detayEl = document.getElementById('musteriCariDetay');
+  if (!binaAdi) { detayEl.style.display = 'none'; return; }
+
+  const sozlesme = G_SOZLESMELER.find(s => s.bina === binaAdi);
+  const tahsilatlar = G_ODEMELER.filter(o => o.bina === binaAdi).sort((a,b) => (b.tarih||'').localeCompare(a.tarih||''));
+  const toplamTahsilat = tahsilatlar.reduce((s,o) => s + (o.tutar||0), 0);
+
+  detayEl.style.display = 'block';
+  detayEl.innerHTML = `
+    <div class="card" style="padding:18px;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:14px;margin-bottom:14px;">
+        <div>
+          <h3 style="font-size:14px;font-weight:800;color:#E2E8F0;">${binaAdi} — Cari Ekstresi</h3>
+          <p style="font-size:11px;color:#475569;margin-top:3px;">Sözleşme: ${sozlesme?.tip || 'Yok'} ${sozlesme?.tutar ? '· '+sozlesme.tutar.toLocaleString('tr-TR')+' ₺/ay' : ''}</p>
+        </div>
+        <button onclick="downloadMusteriEkstresi('${binaAdi.replace(/'/g,"\\'")}')" class="btn-sm" style="padding:9px 16px;">📄 Ekstre PDF İndir</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+        <div style="background:rgba(15,23,42,.6);border-radius:8px;padding:12px;">
+          <div style="font-size:10px;color:#475569;margin-bottom:4px;">TOPLAM TAHSİLAT</div>
+          <div style="font-size:17px;font-weight:800;color:#10B981;">${toplamTahsilat.toLocaleString('tr-TR')} ₺</div>
+        </div>
+        <div style="background:rgba(15,23,42,.6);border-radius:8px;padding:12px;">
+          <div style="font-size:10px;color:#475569;margin-bottom:4px;">ÖDEME SAYISI</div>
+          <div style="font-size:17px;font-weight:800;color:#E2E8F0;">${tahsilatlar.length}</div>
+        </div>
+        <div style="background:rgba(15,23,42,.6);border-radius:8px;padding:12px;">
+          <div style="font-size:10px;color:#475569;margin-bottom:4px;">SON ÖDEME</div>
+          <div style="font-size:14px;font-weight:700;color:#E2E8F0;">${tahsilatlar[0]?.tarih || '—'}</div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);">
+        <h4 style="font-size:12px;font-weight:700;color:#E2E8F0;">Ödeme Geçmişi</h4>
+      </div>
+      ${tahsilatlar.length ? tahsilatlar.map(o => `
+        <div style="padding:11px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.4);">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12px;font-weight:600;color:#E2E8F0;">${o.tarih}</div>
+            <div style="font-size:11px;color:#475569;margin-top:1px;">${o.aciklama || o.tur || '—'}</div>
+          </div>
+          <div style="font-size:13px;font-weight:700;color:#10B981;">${(o.tutar||0).toLocaleString('tr-TR')} ₺</div>
+        </div>`).join('') : `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Henüz ödeme kaydı yok.</div>`}
+    </div>`;
+};
+
+window.downloadMusteriEkstresi = (binaAdi) => {
+  if (typeof window.jspdf === 'undefined') { alert('PDF kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.'); return; }
+
+  const { jsPDF } = window.jspdf;
+  const docPdf = new jsPDF({ unit: 'mm', format: 'a4' });
+  const pageW = 210;
+  const margin = 20;
+  let y = 28;
+
+  const sozlesme = G_SOZLESMELER.find(s => s.bina === binaAdi);
+  const tahsilatlar = G_ODEMELER.filter(o => o.bina === binaAdi).sort((a,b) => (a.tarih||'').localeCompare(b.tarih||''));
+  const toplamTahsilat = tahsilatlar.reduce((s,o) => s + (o.tutar||0), 0);
+
+  docPdf.setFillColor(15, 23, 42);
+  docPdf.rect(0, 0, pageW, 16, 'F');
+  docPdf.setTextColor(255, 255, 255);
+  docPdf.setFont('helvetica', 'bold');
+  docPdf.setFontSize(13);
+  docPdf.text('AS-EL ASANSÖR', margin, 10.5);
+  docPdf.setFont('helvetica', 'normal');
+  docPdf.setFontSize(8);
+  docPdf.text('1989\'dan Beri Güvenle', pageW - margin, 10.5, { align: 'right' });
+
+  docPdf.setTextColor(15, 23, 42);
+  docPdf.setFont('helvetica', 'bold');
+  docPdf.setFontSize(18);
+  docPdf.text('CARİ HESAP EKSTRESİ', pageW / 2, y, { align: 'center' });
+  y += 6;
+  docPdf.setDrawColor(0, 173, 181);
+  docPdf.setLineWidth(0.8);
+  docPdf.line(margin, y, pageW - margin, y);
+  y += 12;
+
+  docPdf.setFont('helvetica', 'normal');
+  docPdf.setFontSize(10);
+  docPdf.setTextColor(71, 85, 105);
+  docPdf.text(`Bina / Müşteri: ${binaAdi}`, margin, y);
+  docPdf.text(`Düzenleme: ${new Date().toLocaleDateString('tr-TR')}`, pageW - margin, y, { align: 'right' });
+  y += 7;
+  docPdf.text(`Sözleşme: ${sozlesme?.tip || '—'} ${sozlesme?.tutar ? '('+sozlesme.tutar.toLocaleString('tr-TR')+' ₺/ay)' : ''}`, margin, y);
+  y += 14;
+
+  // Tablo başlığı
+  docPdf.setFillColor(0, 173, 181);
+  docPdf.rect(margin, y, pageW - margin*2, 9, 'F');
+  docPdf.setTextColor(255, 255, 255);
+  docPdf.setFont('helvetica', 'bold');
+  docPdf.setFontSize(9);
+  docPdf.text('TARİH', margin + 4, y + 6);
+  docPdf.text('AÇIKLAMA', margin + 40, y + 6);
+  docPdf.text('TUTAR', pageW - margin - 4, y + 6, { align: 'right' });
+  y += 9;
+
+  docPdf.setFont('helvetica', 'normal');
+  docPdf.setFontSize(9);
+  let satirRengi = false;
+  tahsilatlar.forEach(o => {
+    if (y > 265) { docPdf.addPage(); y = 20; }
+    if (satirRengi) {
+      docPdf.setFillColor(248, 250, 252);
+      docPdf.rect(margin, y, pageW - margin*2, 8, 'F');
+    }
+    docPdf.setTextColor(71, 85, 105);
+    docPdf.text(o.tarih || '—', margin + 4, y + 5.5);
+    docPdf.text((o.aciklama || o.tur || '—').slice(0, 45), margin + 40, y + 5.5);
+    docPdf.setTextColor(16, 129, 89);
+    docPdf.setFont('helvetica', 'bold');
+    docPdf.text(`${(o.tutar||0).toLocaleString('tr-TR')} ₺`, pageW - margin - 4, y + 5.5, { align: 'right' });
+    docPdf.setFont('helvetica', 'normal');
+    y += 8;
+    satirRengi = !satirRengi;
+  });
+
+  y += 6;
+  if (y > 260) { docPdf.addPage(); y = 20; }
+
+  // Toplam kutusu
+  docPdf.setFillColor(0, 173, 181);
+  docPdf.roundedRect(margin, y, pageW - margin*2, 20, 2, 2, 'F');
+  docPdf.setTextColor(255, 255, 255);
+  docPdf.setFont('helvetica', 'bold');
+  docPdf.setFontSize(11);
+  docPdf.text('TOPLAM TAHSİLAT', margin + 8, y + 8.5);
+  docPdf.setFontSize(16);
+  docPdf.text(`${toplamTahsilat.toLocaleString('tr-TR')} ₺`, pageW - margin - 8, y + 13, { align: 'right' });
+
+  docPdf.setFontSize(8);
+  docPdf.setTextColor(148, 163, 184);
+  docPdf.text('AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17', pageW / 2, 285, { align: 'center' });
+
+  docPdf.save(`Cari_Ekstre_${binaAdi.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.pdf`);
+};
+
+/* ═══════════════════════════════════════════════════════════════
    MAKBUZ — PDF İNDİRME (jsPDF)
 ═══════════════════════════════════════════════════════════════ */
 window.downloadMakbuz = (odemeId) => {
@@ -2008,6 +2374,9 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
 .btn-sm:hover { box-shadow: 0 0 16px rgba(0,173,181,.3); transform: translateY(-1px); }
 .btn-ghost { background: rgba(30,41,59,.8); color:#94A3B8; border:none; padding:8px 14px; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; transition:background .15s; }
 .btn-ghost:hover { background: rgba(30,41,59,1); color:#CBD5E1; }
+.muh-tab-btn { padding:9px 16px; font-size:12px; font-weight:600; color:#64748B; background:transparent; border:none; border-radius:8px; cursor:pointer; transition:all .15s; white-space:nowrap; }
+.muh-tab-btn:hover { color:#CBD5E1; }
+.muh-tab-active { background:rgba(0,173,181,.15) !important; color:#00ADB5 !important; }
 .db-page { display: none; }
 .db-page.active { display: block; }
 
@@ -2505,37 +2874,105 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
           <div>
             <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Muhasebe</h2>
-            <p style="font-size:11px;color:#475569;margin-top:2px;">Gelir takibi ve ödeme kayıtları</p>
+            <p style="font-size:11px;color:#475569;margin-top:2px;">Gelir takibi, personel cari ve müşteri ekstresi</p>
           </div>
-          <div style="display:flex;gap:8px;">
+        </div>
+
+        <!-- Sekmeler -->
+        <div style="display:flex;gap:1px;margin-bottom:16px;background:rgba(30,41,59,.5);padding:3px;border-radius:10px;width:fit-content;flex-wrap:wrap;">
+          <button onclick="switchMuhasebeTab('odemeler',this)" class="muh-tab-btn muh-tab-active" data-tab="odemeler">💰 Ödemeler</button>
+          <button onclick="switchMuhasebeTab('personel',this)" class="muh-tab-btn admin-only" data-tab="personel">👤 Personel Cari</button>
+          <button onclick="switchMuhasebeTab('musteri',this)" class="muh-tab-btn" data-tab="musteri">🏢 Müşteri Cari</button>
+        </div>
+
+        <!-- ═══ SEKME: ÖDEMELER (mevcut) ═══ -->
+        <div id="muhTab-odemeler" class="muh-tab-content">
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px;">
             <button onclick="exportOdemelerCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
             <button onclick="openModal('mOdeme')" class="btn-sm admin-only">+ Ödeme Kaydet</button>
           </div>
-        </div>
 
-        <!-- Özet kartları -->
-        <div id="muhasebeStats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;"></div>
+          <!-- Özet kartları -->
+          <div id="muhasebeStats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;"></div>
 
-        <!-- Ay filtresi -->
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
-          <input id="muhasebeAyFiltre" type="month" class="db-input" style="max-width:180px;" onchange="renderMuhasebe()"/>
-          <button onclick="document.getElementById('muhasebeAyFiltre').value='';renderMuhasebe()" class="btn-ghost" style="padding:9px 14px;">Tümünü Göster</button>
-        </div>
-
-        <div class="card" style="padding:0;overflow:hidden;">
-          <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;">
-              <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
-                <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
-                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tarih</th>
-                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tutar</th>
-                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Ödeme Türü</th>
-                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Açıklama</th>
-                <th style="padding:11px 12px;"></th>
-              </tr></thead>
-              <tbody id="odemeTableBody"><tr><td colspan="6" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
-            </table>
+          <!-- Ay filtresi -->
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+            <input id="muhasebeAyFiltre" type="month" class="db-input" style="max-width:180px;" onchange="renderMuhasebe()"/>
+            <button onclick="document.getElementById('muhasebeAyFiltre').value='';renderMuhasebe()" class="btn-ghost" style="padding:9px 14px;">Tümünü Göster</button>
           </div>
+
+          <div class="card" style="padding:0;overflow:hidden;">
+            <div style="overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;">
+                <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
+                  <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
+                  <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tarih</th>
+                  <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tutar</th>
+                  <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Ödeme Türü</th>
+                  <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Açıklama</th>
+                  <th style="padding:11px 12px;"></th>
+                </tr></thead>
+                <tbody id="odemeTableBody"><tr><td colspan="6" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ SEKME: PERSONEL CARİ (KareKara şoför cari mantığı) ═══ -->
+        <div id="muhTab-personel" class="muh-tab-content" style="display:none;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+            <p style="font-size:11px;color:#475569;">Personele verilen avanslar ve net bakiye durumu</p>
+            <button onclick="openModal('mAvans')" class="btn-sm admin-only">+ Avans Ver</button>
+          </div>
+
+          <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
+            <div style="overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;">
+                <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
+                  <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Personel</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Verilen Avans</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Kullanılan</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Net Bakiye</th>
+                  <th style="padding:11px 12px;"></th>
+                </tr></thead>
+                <tbody id="personelCariTableBody"><tr><td colspan="5" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card" style="padding:0;overflow:hidden;">
+            <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);">
+              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">Son Avans Hareketleri</h3>
+            </div>
+            <div id="avansHareketListesi"></div>
+          </div>
+        </div>
+
+        <!-- ═══ SEKME: MÜŞTERİ CARİ (bina ekstresi) ═══ -->
+        <div id="muhTab-musteri" class="muh-tab-content" style="display:none;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+            <p style="font-size:11px;color:#475569;">Bina bazlı tahsilat ve borç/alacak durumu</p>
+            <select id="musteriCariSecim" class="db-input" style="max-width:240px;" onchange="renderMusteriCariDetay()">
+              <option value="">— Bina Seçin —</option>
+            </select>
+          </div>
+
+          <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
+            <div style="overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;">
+                <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
+                  <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Aylık Sözleşme</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Toplam Tahsilat</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
+                  <th style="padding:11px 12px;"></th>
+                </tr></thead>
+                <tbody id="musteriCariTableBody"><tr><td colspan="5" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="musteriCariDetay" style="display:none;"></div>
         </div>
       </div>
 
@@ -2732,6 +3169,50 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mOdeme')" class="btn-ghost">İptal</button>
       <button onclick="saveOdeme()" class="btn-sm">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Avans Ver Modal (Personel Cari — KareKara mantığı) -->
+<div id="modal-mAvans" class="modal-wrap" onclick="if(event.target===this)closeModal('mAvans')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Personele Avans Ver</h3>
+      <button onclick="closeModal('mAvans')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Personel *</label>
+        <select id="f-avans-personel" class="db-input"><option value="">— Seçiniz —</option></select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-avans-tutar" type="number" class="db-input" placeholder="2000"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-avans-tarih" type="date" class="db-input"/></div>
+      </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not</label><input id="f-avans-not" type="text" class="db-input" placeholder="Örn: Haziran ayı yol/yakıt avansı"/></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mAvans')" class="btn-ghost">İptal</button>
+      <button onclick="saveAvans()" class="btn-sm">Avans Ver</button>
+    </div>
+  </div>
+</div>
+
+<!-- Avans Kullanım Kaydet Modal -->
+<div id="modal-mAvansKullanim" class="modal-wrap" onclick="if(event.target===this)closeModal('mAvansKullanim')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;" id="mAvansKullanimTitle">Avans Kullanımı Kaydet</h3>
+      <button onclick="closeModal('mAvansKullanim')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <input type="hidden" id="f-avk-personel"/>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kullanılan Tutar (₺) *</label><input id="f-avk-tutar" type="number" class="db-input" placeholder="350"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-avk-tarih" type="date" class="db-input"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Açıklama</label><input id="f-avk-aciklama" type="text" class="db-input" placeholder="Örn: Yakıt, malzeme, yol masrafı..."/></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mAvansKullanim')" class="btn-ghost">İptal</button>
+      <button onclick="saveAvansKullanim()" class="btn-sm">Kaydet</button>
     </div>
   </div>
 </div>
