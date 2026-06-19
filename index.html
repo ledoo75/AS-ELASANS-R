@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AS-EL Asansör | 1989'dan Beri Güvenle</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
 <!-- ══ FIREBASE SDK (CDN) ══════════════════════════════════════ -->
 <script type="module">
@@ -209,6 +210,13 @@ function closeDashboard() {
 /* ═══════════════════════════════════════════════════════════════
    FIRESTORE — REALTIME SUBSCRIPTIONS
 ═══════════════════════════════════════════════════════════════ */
+// Global veri önbelleği — takvim, performans gibi sayfalar bunları kullanır
+let G_BAKIMLAR = [];
+let G_ARIZALAR = [];
+let G_SOZLESMELER = [];
+let G_BINALAR = [];
+let G_ODEMELER = [];
+
 function subscribeAll() {
   const role = currentUserData?.rol;
   const bina = currentUserData?.bina || null;
@@ -218,6 +226,7 @@ function subscribeAll() {
   unsubscribers.push(onSnapshot(binaQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     if (role === 'bina' && bina) data = data.filter(b => b.ad === bina);
+    G_BINALAR = data;
     renderBinalar(data);
     renderBinaSayac(data.length);
   }));
@@ -227,8 +236,11 @@ function subscribeAll() {
   unsubscribers.push(onSnapshot(bakimQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     if (role === 'bina' && bina) data = data.filter(b => b.bina === bina);
+    G_BAKIMLAR = data;
     renderBakimlar(data);
     renderBekleyenSayac(data.filter(b => b.durum === 'bekliyor').length);
+    if (document.getElementById('pg-takvim')?.classList.contains('active')) renderCalendar();
+    if (document.getElementById('pg-performans')?.classList.contains('active')) renderPerformans();
   }));
 
   // Arızalar
@@ -236,8 +248,28 @@ function subscribeAll() {
   unsubscribers.push(onSnapshot(arizaQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     if (role === 'bina' && bina) data = data.filter(a => a.bina === bina);
+    G_ARIZALAR = data;
     renderArizalar(data);
     renderAcikArizaSayac(data.filter(a => a.durum === 'acik').length);
+    if (document.getElementById('pg-performans')?.classList.contains('active')) renderPerformans();
+  }));
+
+  // Sözleşmeler
+  const sozQ = query(collection(db, 'sozlesmeler'), orderBy('bina'));
+  unsubscribers.push(onSnapshot(sozQ, snap => {
+    let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (role === 'bina' && bina) data = data.filter(s => s.bina === bina);
+    G_SOZLESMELER = data;
+    renderSozlesmeler(data);
+  }));
+
+  // Ödemeler (Muhasebe)
+  const odemeQ = query(collection(db, 'odemeler'), orderBy('tarih', 'desc'));
+  unsubscribers.push(onSnapshot(odemeQ, snap => {
+    let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (role === 'bina' && bina) data = data.filter(o => o.bina === bina);
+    G_ODEMELER = data;
+    if (document.getElementById('pg-muhasebe')?.classList.contains('active')) renderMuhasebe();
   }));
 
   // Kullanıcılar (sadece admin)
@@ -265,13 +297,18 @@ function setupUI() {
   const navDefs = {
     admin: [
       { id:'dashboard',   icon:'grid',     label:'Genel Bakış' },
+      { id:'takvim',      icon:'calendar', label:'Bakım Takvimi' },
       { id:'binalar',     icon:'building', label:'Bina Yönetimi' },
       { id:'bakimlar',    icon:'tool',     label:'Bakım Takibi' },
       { id:'arizalar',    icon:'alert',    label:'Arıza Kayıtları' },
+      { id:'sozlesmeler', icon:'file',     label:'Sözleşme & Fatura' },
+      { id:'muhasebe',    icon:'cash',     label:'Muhasebe' },
+      { id:'performans',  icon:'chart',    label:'Teknisyen Performans' },
       { id:'kullanicilar',icon:'users',    label:'Kullanıcılar' },
     ],
     teknisyen: [
       { id:'dashboard', icon:'grid',     label:'Genel Bakış' },
+      { id:'takvim',    icon:'calendar', label:'Bakım Takvimi' },
       { id:'binalar',   icon:'building', label:'Binalar' },
       { id:'bakimlar',  icon:'tool',     label:'Bakım Takibi' },
       { id:'arizalar',  icon:'alert',    label:'Arıza Kayıtları' },
@@ -280,6 +317,8 @@ function setupUI() {
       { id:'dashboard', icon:'grid',  label:'Genel Bakış' },
       { id:'bakimlar',  icon:'tool',  label:'Bakım Durumu' },
       { id:'arizalar',  icon:'alert', label:'Arıza Bildir' },
+      { id:'sozlesmeler', icon:'file', label:'Sözleşmem' },
+      { id:'muhasebe',    icon:'cash', label:'Ödemelerim' },
     ],
   };
 
@@ -289,6 +328,10 @@ function setupUI() {
     tool:     `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 11-6 0 3 3 0 016 0z"/>`,
     alert:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>`,
     users:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>`,
+    calendar: `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>`,
+    file:     `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>`,
+    chart:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>`,
+    cash:     `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/>`,
   };
 
   const items  = navDefs[role] || navDefs.bina;
@@ -336,9 +379,14 @@ window.showPage = (name, btn) => {
   if (btn) btn.classList.add('active');
   const titles = {
     dashboard:'Genel Bakış', binalar:'Bina Yönetimi', bakimlar:'Bakım Takibi',
-    arizalar:'Arıza Kayıtları', kullanicilar:'Kullanıcı Yönetimi'
+    arizalar:'Arıza Kayıtları', kullanicilar:'Kullanıcı Yönetimi',
+    takvim:'Bakım Takvimi', sozlesmeler:'Sözleşme & Fatura Takibi',
+    performans:'Teknisyen Performansı', muhasebe:'Muhasebe'
   };
   document.getElementById('pageTitle').textContent = titles[name] || name;
+  if (name === 'takvim') renderCalendar();
+  if (name === 'performans') renderPerformans();
+  if (name === 'muhasebe') renderMuhasebe();
   closeMobileSidebar();
 };
 
@@ -414,10 +462,18 @@ function renderBakimlar(data) {
       <p style="font-size:11px;color:#475569;margin-bottom:10px;">${b.kabin||''} · ${b.tip||''}</p>
       <div style="font-size:11px;color:#64748B;margin-bottom:3px;">📅 ${tarihStr(b.tarih)}</div>
       <div style="font-size:11px;color:#64748B;margin-bottom:12px;">👤 ${b.teknisyen||'—'}</div>
-      <div style="display:flex;gap:8px;">
-        ${b.durum==='bekliyor'?`<button onclick="completeBakim('${b.id}')" class="btn-sm" style="flex:1;padding:7px;font-size:11px;">✓ Tamamla</button>`:''}
-        <button onclick="deleteBakim('${b.id}')" class="btn-ghost admin-only" style="flex:1;padding:7px;font-size:11px;">Sil</button>
-      </div>
+      ${b.durum==='bekliyor'?`
+        <button onclick="completeBakim('${b.id}')" style="width:100%;padding:12px;font-size:13px;font-weight:700;background:linear-gradient(135deg,#10B981,#059669);color:#fff;border:none;border-radius:10px;cursor:pointer;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:6px;">
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.5;"><path d="M5 13l4 4L19 7"/></svg>
+          Bakım Yapıldı
+        </button>
+        <div style="display:flex;gap:8px;">
+          <button onclick="sendBakimReminder('${b.id}')" style="flex:1;padding:8px;font-size:11px;background:rgba(34,197,94,.15);color:#22C55E;border:1px solid rgba(34,197,94,.25);border-radius:8px;cursor:pointer;font-weight:600;">📲 Hatırlat</button>
+          <button onclick="deleteBakim('${b.id}')" class="btn-ghost admin-only" style="flex:1;padding:8px;font-size:11px;">Sil</button>
+        </div>
+      ` : `
+        <button onclick="deleteBakim('${b.id}')" class="btn-ghost admin-only" style="width:100%;padding:8px;font-size:11px;">Sil</button>
+      `}
     </div>`).join('');
 
   // Dashboard listesi (ilk 4 bekleyen)
@@ -547,6 +603,7 @@ function renderKullanicilar(data) {
 window.saveBina = async () => {
   const ad      = document.getElementById('f-bina-ad').value.trim();
   const adres   = document.getElementById('f-bina-adres').value.trim();
+  const telefon = document.getElementById('f-bina-telefon').value.trim();
   const asansor = parseInt(document.getElementById('f-bina-asansor').value) || 0;
   const sozlesme= document.getElementById('f-bina-sozlesme').value;
   const durum   = document.getElementById('f-bina-durum').value;
@@ -554,7 +611,7 @@ window.saveBina = async () => {
 
   if (!ad) { alert('Bina adı zorunludur.'); return; }
 
-  const data = { ad, adres, asansorSayisi: asansor, sozlesme, durum, guncellendi: serverTimestamp() };
+  const data = { ad, adres, telefon, asansorSayisi: asansor, sozlesme, durum, guncellendi: serverTimestamp() };
   try {
     if (editId) {
       await updateDoc(doc(db, 'binalar', editId), data);
@@ -573,6 +630,7 @@ window.editBina = async (id) => {
   const b = snap.data();
   document.getElementById('f-bina-ad').value       = b.ad || '';
   document.getElementById('f-bina-adres').value    = b.adres || '';
+  document.getElementById('f-bina-telefon').value  = b.telefon || '';
   document.getElementById('f-bina-asansor').value  = b.asansorSayisi || '';
   document.getElementById('f-bina-sozlesme').value = b.sozlesme || '';
   document.getElementById('f-bina-durum').value    = b.durum || 'ok';
@@ -587,10 +645,536 @@ window.deleteBina = async (id, ad) => {
 };
 
 function resetBinaForm() {
-  ['f-bina-ad','f-bina-adres','f-bina-asansor'].forEach(id => document.getElementById(id).value = '');
+  ['f-bina-ad','f-bina-adres','f-bina-telefon','f-bina-asansor'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('f-bina-editId').value = '';
   document.getElementById('mBinaTitle').textContent = 'Yeni Bina Ekle';
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   BAKIM TAKVİMİ
+═══════════════════════════════════════════════════════════════ */
+let calCurrentDate = new Date();
+
+window.calMonthShift = (delta, toToday) => {
+  if (toToday) { calCurrentDate = new Date(); }
+  else { calCurrentDate.setMonth(calCurrentDate.getMonth() + delta); }
+  renderCalendar();
+};
+
+function tarihToDate(ts) {
+  if (!ts) return null;
+  if (ts.toDate) return ts.toDate();
+  if (typeof ts === 'string') return new Date(ts);
+  return null;
+}
+
+function renderCalendar() {
+  const grid = document.getElementById('calGrid');
+  const label = document.getElementById('calMonthLabel');
+  if (!grid || !label) return;
+
+  const year  = calCurrentDate.getFullYear();
+  const month = calCurrentDate.getMonth();
+  const ayAdlari = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+  label.textContent = `${ayAdlari[month]} ${year}`;
+
+  const firstDay = new Date(year, month, 1);
+  const lastDay  = new Date(year, month + 1, 0);
+  // Pazartesi=0 olacak şekilde offset hesapla
+  let startOffset = firstDay.getDay() - 1;
+  if (startOffset < 0) startOffset = 6;
+
+  const today = new Date();
+  const isToday = (d) => d.getDate() === today.getDate() && d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+
+  // Bu aydaki bakımları günlere göre grupla
+  const bakimByDay = {};
+  G_BAKIMLAR.forEach(b => {
+    const d = tarihToDate(b.tarih);
+    if (!d || d.getMonth() !== month || d.getFullYear() !== year) return;
+    const day = d.getDate();
+    if (!bakimByDay[day]) bakimByDay[day] = [];
+    bakimByDay[day].push(b);
+  });
+
+  const gunler = ['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'];
+  let html = gunler.map(g => `<div style="text-align:center;font-size:10px;font-weight:700;color:#475569;padding:6px 0;text-transform:uppercase;">${g}</div>`).join('');
+
+  // Boş hücreler (ayın başlangıcından önce)
+  for (let i = 0; i < startOffset; i++) {
+    html += `<div></div>`;
+  }
+
+  for (let day = 1; day <= lastDay.getDate(); day++) {
+    const items = bakimByDay[day] || [];
+    const dateObj = new Date(year, month, day);
+    const todayCls = isToday(dateObj) ? 'border-color:#00ADB5;background:rgba(0,173,181,.06);' : '';
+    const hasBekliyor = items.some(i => i.durum === 'bekliyor');
+    const hasTamam = items.length > 0 && items.every(i => i.durum === 'tamamlandi');
+
+    let dotColor = '';
+    if (hasBekliyor) dotColor = '#F59E0B';
+    else if (hasTamam) dotColor = '#10B981';
+
+    html += `
+      <div onclick="showCalDay(${year},${month},${day})" style="min-height:64px;border:1px solid rgba(30,41,59,.6);border-radius:8px;padding:6px;cursor:pointer;transition:border-color .15s;${todayCls}" onmouseover="this.style.borderColor='rgba(0,173,181,.4)'" onmouseout="this.style.borderColor='${isToday(dateObj)?'#00ADB5':'rgba(30,41,59,.6)'}'">
+        <div style="font-size:11px;font-weight:600;color:${isToday(dateObj)?'#00ADB5':'#94A3B8'};margin-bottom:4px;">${day}</div>
+        ${items.length > 0 ? `
+          <div style="display:flex;align-items:center;gap:4px;">
+            <span style="width:6px;height:6px;border-radius:50%;background:${dotColor||'#475569'};flex-shrink:0;"></span>
+            <span style="font-size:10px;color:#CBD5E1;font-weight:600;">${items.length} bakım</span>
+          </div>
+        ` : ''}
+      </div>`;
+  }
+
+  grid.innerHTML = html;
+}
+
+window.showCalDay = (year, month, day) => {
+  const detail = document.getElementById('calDayDetail');
+  const items = G_BAKIMLAR.filter(b => {
+    const d = tarihToDate(b.tarih);
+    return d && d.getDate() === day && d.getMonth() === month && d.getFullYear() === year;
+  });
+
+  if (!items.length) { detail.style.display = 'none'; return; }
+
+  const tarihStr = `${day} / ${month+1} / ${year}`;
+  const colorMap = { bekliyor:'#F59E0B', tamamlandi:'#10B981', iptal:'#EF4444' };
+  const labelMap = { bekliyor:'Bekliyor', tamamlandi:'Tamamlandı', iptal:'İptal' };
+
+  detail.innerHTML = `
+    <div class="card" style="padding:16px;">
+      <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:12px;">📅 ${tarihStr} — ${items.length} Bakım</h3>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        ${items.map(b => `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:rgba(15,23,42,.6);border-radius:8px;border-left:3px solid ${colorMap[b.durum]||'#475569'};">
+            <div style="flex:1;">
+              <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${b.bina}</div>
+              <div style="font-size:11px;color:#64748B;margin-top:2px;">${b.kabin||''} · ${b.tip||''} · ${b.teknisyen||'—'}</div>
+            </div>
+            <span class="sbadge" style="background:${colorMap[b.durum]}22;color:${colorMap[b.durum]};border:1px solid ${colorMap[b.durum]}44;">${labelMap[b.durum]||b.durum}</span>
+          </div>`).join('')}
+      </div>
+    </div>`;
+  detail.style.display = 'block';
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   FIRESTORE CRUD — SÖZLEŞME & FATURA
+═══════════════════════════════════════════════════════════════ */
+window.saveSozlesme = async () => {
+  const bina     = document.getElementById('f-soz-bina').value.trim();
+  const tip      = document.getElementById('f-soz-tip').value;
+  const tutar    = parseFloat(document.getElementById('f-soz-tutar').value) || 0;
+  const gun      = parseInt(document.getElementById('f-soz-gun').value) || null;
+  const sonOdeme = document.getElementById('f-soz-sonodeme').value;
+  const durum    = document.getElementById('f-soz-durum').value;
+  const not      = document.getElementById('f-soz-not').value.trim();
+  const editId   = document.getElementById('f-soz-editId').value;
+
+  if (!bina) { alert('Bina adı zorunludur.'); return; }
+
+  const data = { bina, tip, tutar, odemeGunu: gun, sonOdemeTarihi: sonOdeme, durum, not, guncellendi: serverTimestamp() };
+  try {
+    if (editId) {
+      await updateDoc(doc(db, 'sozlesmeler', editId), data);
+    } else {
+      data.olusturuldu = serverTimestamp();
+      await addDoc(collection(db, 'sozlesmeler'), data);
+    }
+    closeModal('mSozlesme');
+    resetSozlesmeForm();
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.editSozlesme = async (id) => {
+  const snap = await getDoc(doc(db, 'sozlesmeler', id));
+  if (!snap.exists()) return;
+  const s = snap.data();
+  document.getElementById('f-soz-bina').value      = s.bina || '';
+  document.getElementById('f-soz-tip').value       = s.tip || 'Aylık Periyodik Bakım';
+  document.getElementById('f-soz-tutar').value     = s.tutar || '';
+  document.getElementById('f-soz-gun').value       = s.odemeGunu || '';
+  document.getElementById('f-soz-sonodeme').value  = s.sonOdemeTarihi || '';
+  document.getElementById('f-soz-durum').value     = s.durum || 'bekliyor';
+  document.getElementById('f-soz-not').value       = s.not || '';
+  document.getElementById('f-soz-editId').value    = id;
+  document.getElementById('mSozlesmeTitle').textContent = 'Sözleşme Düzenle';
+  openModal('mSozlesme');
+};
+
+window.deleteSozlesme = async (id, bina) => {
+  if (!confirm(`"${bina}" sözleşmesini silmek istediğinizden emin misiniz?`)) return;
+  await deleteDoc(doc(db, 'sozlesmeler', id));
+};
+
+function resetSozlesmeForm() {
+  ['f-soz-bina','f-soz-tutar','f-soz-gun','f-soz-sonodeme','f-soz-not'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-soz-editId').value = '';
+  document.getElementById('mSozlesmeTitle').textContent = 'Yeni Sözleşme Ekle';
+}
+
+function renderSozlesmeler(data) {
+  const tbody = document.getElementById('sozlesmeTableBody');
+  const statsEl = document.getElementById('sozlesmeStats');
+  if (!tbody) return;
+
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz sözleşme eklenmemiş.</td></tr>`;
+    if (statsEl) statsEl.innerHTML = '';
+    return;
+  }
+
+  const durumBadge = d => d==='odendi'
+    ? `<span class="sbadge badge-ok-sm">Ödendi</span>`
+    : d==='gecikti'
+    ? `<span class="sbadge badge-err-sm">Gecikti</span>`
+    : `<span class="sbadge badge-warn-sm">Bekliyor</span>`;
+
+  tbody.innerHTML = data.map(s => `
+    <tr class="tbl-row">
+      <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${s.bina}</td>
+      <td style="padding:12px;font-size:12px;color:#64748B;">${s.tip || '—'}</td>
+      <td style="padding:12px;font-size:12px;color:#CBD5E1;font-family:monospace;">${s.tutar ? s.tutar.toLocaleString('tr-TR') + ' ₺' : '—'}</td>
+      <td style="padding:12px;font-size:12px;color:#64748B;">${s.odemeGunu ? 'Ayın ' + s.odemeGunu + '\'i' : (s.sonOdemeTarihi || '—')}</td>
+      <td style="padding:12px;">${durumBadge(s.durum || 'bekliyor')}</td>
+      <td style="padding:12px;display:flex;gap:6px;">
+        <button onclick="editSozlesme('${s.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;" class="admin-only">Düzenle</button>
+        <button onclick="deleteSozlesme('${s.id}','${(s.bina||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
+      </td>
+    </tr>`).join('');
+
+  // İstatistikler
+  if (statsEl) {
+    const toplam = data.reduce((s,x) => s + (x.tutar||0), 0);
+    const odenenSayisi = data.filter(x => x.durum === 'odendi').length;
+    const gecikenSayisi = data.filter(x => x.durum === 'gecikti').length;
+    statsEl.innerHTML = `
+      <div class="card" style="padding:16px;">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Toplam Aylık Gelir</div>
+        <div style="font-size:22px;font-weight:900;color:#10B981;">${toplam.toLocaleString('tr-TR')} ₺</div>
+      </div>
+      <div class="card" style="padding:16px;">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Ödenen Sözleşme</div>
+        <div style="font-size:22px;font-weight:900;color:#E2E8F0;">${odenenSayisi} / ${data.length}</div>
+      </div>
+      <div class="card" style="padding:16px;">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Geciken Ödeme</div>
+        <div style="font-size:22px;font-weight:900;color:${gecikenSayisi>0?'#EF4444':'#E2E8F0'};">${gecikenSayisi}</div>
+      </div>`;
+  }
+
+  const role = currentUserData?.rol;
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = role === 'admin' ? '' : 'none';
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TEKNİSYEN PERFORMANSI
+═══════════════════════════════════════════════════════════════ */
+function renderPerformans() {
+  const cardsEl = document.getElementById('performansCards');
+  const logEl   = document.getElementById('performansLog');
+  if (!cardsEl || !logEl) return;
+
+  // Teknisyen bazında bakım + arıza sayıları
+  const stats = {};
+  function ensureTeknisyen(name) {
+    if (!name) name = '—';
+    if (!stats[name]) stats[name] = { bakimTamam:0, bakimBekleyen:0, arizaCozum:0, arizaAcik:0 };
+    return stats[name];
+  }
+
+  G_BAKIMLAR.forEach(b => {
+    const s = ensureTeknisyen(b.teknisyen);
+    if (b.durum === 'tamamlandi') s.bakimTamam++;
+    else if (b.durum === 'bekliyor') s.bakimBekleyen++;
+  });
+
+  G_ARIZALAR.forEach(a => {
+    // arızalarda doğrudan teknisyen alanı yoksa "bildiren" kullanılıyor olabilir, ikisini de dene
+    const name = a.cozenTeknisyen || a.teknisyen || null;
+    if (!name) return;
+    const s = ensureTeknisyen(name);
+    if (a.durum === 'kapali') s.arizaCozum++;
+    else s.arizaAcik++;
+  });
+
+  const names = Object.keys(stats).filter(n => n !== '—');
+  if (!names.length) {
+    cardsEl.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:#475569;font-size:13px;grid-column:1/-1;">Henüz teknisyen ataması yapılmış bakım/arıza yok.</div>`;
+    logEl.innerHTML = '';
+    return;
+  }
+
+  // Toplam iş sayısına göre sırala
+  const sorted = names.map(n => ({ name: n, ...stats[n], toplam: stats[n].bakimTamam + stats[n].arizaCozum }))
+                       .sort((a,b) => b.toplam - a.toplam);
+
+  const maxToplam = sorted[0]?.toplam || 1;
+
+  cardsEl.innerHTML = sorted.map((t, i) => {
+    const pct = Math.round((t.toplam / maxToplam) * 100);
+    const initials = t.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+    const madalya = i===0 ? '🥇' : i===1 ? '🥈' : i===2 ? '🥉' : '';
+    return `
+    <div class="card" style="padding:16px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#00ADB5,#0891B2);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:800;flex-shrink:0;">${initials}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:700;color:#E2E8F0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${madalya} ${t.name}</div>
+          <div style="font-size:11px;color:#475569;">${t.toplam} iş tamamlandı</div>
+        </div>
+      </div>
+      <div class="prog-bar" style="margin-bottom:12px;"><div class="prog-fill" style="width:${pct}%"></div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:center;">
+        <div style="background:rgba(15,23,42,.6);border-radius:6px;padding:8px;">
+          <div style="font-size:15px;font-weight:800;color:#10B981;">${t.bakimTamam}</div>
+          <div style="font-size:9px;color:#475569;margin-top:2px;">Bakım Tamam</div>
+        </div>
+        <div style="background:rgba(15,23,42,.6);border-radius:6px;padding:8px;">
+          <div style="font-size:15px;font-weight:800;color:#00ADB5;">${t.arizaCozum}</div>
+          <div style="font-size:9px;color:#475569;margin-top:2px;">Arıza Çözüldü</div>
+        </div>
+        <div style="background:rgba(15,23,42,.6);border-radius:6px;padding:8px;">
+          <div style="font-size:15px;font-weight:800;color:#F59E0B;">${t.bakimBekleyen}</div>
+          <div style="font-size:9px;color:#475569;margin-top:2px;">Bakım Bekliyor</div>
+        </div>
+        <div style="background:rgba(15,23,42,.6);border-radius:6px;padding:8px;">
+          <div style="font-size:15px;font-weight:800;color:#EF4444;">${t.arizaAcik}</div>
+          <div style="font-size:9px;color:#475569;margin-top:2px;">Açık Arıza</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Son tamamlanan işler logu (bakım + arıza birleşik, tarihe göre)
+  const tamamlananBakimlar = G_BAKIMLAR.filter(b => b.durum === 'tamamlandi').map(b => ({
+    tip: 'Bakım', bina: b.bina, kisi: b.teknisyen || '—', tarih: b.tamamlanmaTarihi || b.tarih, renk: '#10B981'
+  }));
+  const cozulenArizalar = G_ARIZALAR.filter(a => a.durum === 'kapali').map(a => ({
+    tip: 'Arıza', bina: a.bina, kisi: a.cozenTeknisyen || a.teknisyen || '—', tarih: a.cozumTarihi || a.tarih, renk: '#00ADB5'
+  }));
+
+  const tumIsler = [...tamamlananBakimlar, ...cozulenArizalar].sort((a,b) => {
+    const da = tarihToDate(a.tarih)?.getTime() || 0;
+    const db_ = tarihToDate(b.tarih)?.getTime() || 0;
+    return db_ - da;
+  }).slice(0, 15);
+
+  logEl.innerHTML = tumIsler.length ? tumIsler.map(item => {
+    const d = tarihToDate(item.tarih);
+    const tarihStr = d ? d.toLocaleDateString('tr-TR') : '—';
+    return `
+      <div style="padding:11px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.4);">
+        <span class="sbadge" style="background:${item.renk}22;color:${item.renk};border:1px solid ${item.renk}44;flex-shrink:0;">${item.tip}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${item.bina}</div>
+          <div style="font-size:11px;color:#475569;margin-top:1px;">${item.kisi}</div>
+        </div>
+        <div style="font-size:11px;color:#64748B;flex-shrink:0;">${tarihStr}</div>
+      </div>`;
+  }).join('') : `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Henüz tamamlanan iş yok.</div>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MUHASEBE — ÖDEME KAYITLARI
+═══════════════════════════════════════════════════════════════ */
+window.saveOdeme = async () => {
+  const bina      = document.getElementById('f-odeme-bina').value.trim();
+  const tutar     = parseFloat(document.getElementById('f-odeme-tutar').value) || 0;
+  const tarih     = document.getElementById('f-odeme-tarih').value;
+  const tur       = document.getElementById('f-odeme-tur').value;
+  const aciklama  = document.getElementById('f-odeme-aciklama').value.trim();
+
+  if (!bina || !tutar || !tarih) { alert('Bina, tutar ve tarih zorunludur.'); return; }
+
+  try {
+    await addDoc(collection(db, 'odemeler'), {
+      bina, tutar, tarih, tur, aciklama,
+      kaydeden: currentUserData?.ad || '—',
+      olusturuldu: serverTimestamp()
+    });
+    closeModal('mOdeme');
+    document.getElementById('f-odeme-bina').value = '';
+    document.getElementById('f-odeme-tutar').value = '';
+    document.getElementById('f-odeme-tarih').value = '';
+    document.getElementById('f-odeme-aciklama').value = '';
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.deleteOdeme = async (id, bina) => {
+  if (!confirm(`"${bina}" ödeme kaydını silmek istediğinizden emin misiniz?`)) return;
+  await deleteDoc(doc(db, 'odemeler', id));
+};
+
+function renderMuhasebe() {
+  const tbody    = document.getElementById('odemeTableBody');
+  const statsEl  = document.getElementById('muhasebeStats');
+  const binaList = document.getElementById('odemeBinaListesi');
+  if (!tbody) return;
+
+  // Bina datalist doldur (admin formundan kolay seçim için)
+  if (binaList) {
+    binaList.innerHTML = G_BINALAR.map(b => `<option value="${b.ad}">`).join('');
+  }
+
+  const ayFiltre = document.getElementById('muhasebeAyFiltre')?.value || '';
+  let data = G_ODEMELER;
+  if (ayFiltre) {
+    data = data.filter(o => (o.tarih || '').startsWith(ayFiltre));
+  }
+
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Bu dönemde ödeme kaydı yok.</td></tr>`;
+  } else {
+    tbody.innerHTML = data.map(o => `
+      <tr class="tbl-row">
+        <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${o.bina}</td>
+        <td style="padding:12px;font-size:12px;color:#64748B;font-family:monospace;">${o.tarih}</td>
+        <td style="padding:12px;font-size:13px;color:#10B981;font-weight:700;">${(o.tutar||0).toLocaleString('tr-TR')} ₺</td>
+        <td style="padding:12px;"><span class="sbadge badge-info-sm">${o.tur||'—'}</span></td>
+        <td style="padding:12px;font-size:12px;color:#64748B;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${o.aciklama||'—'}</td>
+        <td style="padding:12px;display:flex;gap:8px;">
+          <button onclick="downloadMakbuz('${o.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">📄 Makbuz</button>
+          <button onclick="deleteOdeme('${o.id}','${(o.bina||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  // Özet kartları
+  if (statsEl) {
+    const toplamGelir = data.reduce((s,o) => s + (o.tutar||0), 0);
+    const odemeSayisi = data.length;
+    const benzersizBinaSayisi = new Set(data.map(o => o.bina)).size;
+    const ortalama = odemeSayisi ? Math.round(toplamGelir / odemeSayisi) : 0;
+
+    statsEl.innerHTML = `
+      <div class="card" style="padding:16px;">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Toplam Gelir</div>
+        <div style="font-size:20px;font-weight:900;color:#10B981;">${toplamGelir.toLocaleString('tr-TR')} ₺</div>
+      </div>
+      <div class="card" style="padding:16px;">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Ödeme Sayısı</div>
+        <div style="font-size:20px;font-weight:900;color:#E2E8F0;">${odemeSayisi}</div>
+      </div>
+      <div class="card" style="padding:16px;">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Ödeyen Bina</div>
+        <div style="font-size:20px;font-weight:900;color:#E2E8F0;">${benzersizBinaSayisi}</div>
+      </div>
+      <div class="card" style="padding:16px;">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Ortalama Ödeme</div>
+        <div style="font-size:20px;font-weight:900;color:#E2E8F0;">${ortalama.toLocaleString('tr-TR')} ₺</div>
+      </div>`;
+  }
+
+  const role = currentUserData?.rol;
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = role === 'admin' ? '' : 'none';
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MAKBUZ — PDF İNDİRME (jsPDF)
+═══════════════════════════════════════════════════════════════ */
+window.downloadMakbuz = (odemeId) => {
+  const o = G_ODEMELER.find(x => x.id === odemeId);
+  if (!o) { alert('Ödeme kaydı bulunamadı.'); return; }
+  if (typeof window.jspdf === 'undefined') { alert('PDF kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.'); return; }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+
+  const pageW = 210;
+  const margin = 20;
+  let y = 28;
+
+  // Üst başlık şeridi
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, pageW, 16, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('AS-EL ASANSÖR', margin, 10.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.text('1989\'dan Beri Güvenle', pageW - margin, 10.5, { align: 'right' });
+
+  // Başlık
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.text('ÖDEME MAKBUZU', pageW / 2, y, { align: 'center' });
+  y += 6;
+  doc.setDrawColor(0, 173, 181);
+  doc.setLineWidth(0.8);
+  doc.line(margin, y, pageW - margin, y);
+  y += 12;
+
+  // Makbuz No / Tarih
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`Makbuz No: MKB-${odemeId.slice(0,8).toUpperCase()}`, margin, y);
+  doc.text(`Düzenleme Tarihi: ${new Date().toLocaleDateString('tr-TR')}`, pageW - margin, y, { align: 'right' });
+  y += 14;
+
+  // Bilgi kutusu
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(margin, y, pageW - margin*2, 46, 2, 2, 'F');
+  y += 9;
+
+  const rows = [
+    ['Bina / Müşteri', o.bina],
+    ['Ödeme Tarihi', o.tarih],
+    ['Ödeme Türü', o.tur || '—'],
+    ['Açıklama', o.aciklama || '—'],
+    ['Kaydı Giren', o.kaydeden || '—'],
+  ];
+  doc.setFontSize(10);
+  rows.forEach(([label, value]) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(100, 116, 139);
+    doc.text(label + ':', margin + 6, y);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(15, 23, 42);
+    doc.text(String(value), margin + 55, y);
+    y += 7.5;
+  });
+
+  y += 14;
+
+  // Tutar kutusu
+  doc.setFillColor(0, 173, 181);
+  doc.roundedRect(margin, y, pageW - margin*2, 22, 2, 2, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('ÖDENEN TUTAR', margin + 8, y + 9);
+  doc.setFontSize(18);
+  doc.text(`${(o.tutar||0).toLocaleString('tr-TR')} ₺`, pageW - margin - 8, y + 14, { align: 'right' });
+  y += 36;
+
+  // İmza alanı
+  doc.setTextColor(71, 85, 105);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.line(margin, y, margin + 60, y);
+  doc.line(pageW - margin - 60, y, pageW - margin, y);
+  y += 5;
+  doc.text('Ödeyen İmza', margin, y);
+  doc.text('AS-EL Asansör Yetkilisi', pageW - margin - 60, y);
+
+  // Alt bilgi
+  doc.setFontSize(8);
+  doc.setTextColor(148, 163, 184);
+  doc.text('AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17', pageW / 2, 285, { align: 'center' });
+
+  doc.save(`Makbuz_${o.bina.replace(/\s+/g,'_')}_${o.tarih}.pdf`);
+};
 
 /* ═══════════════════════════════════════════════════════════════
    FIRESTORE CRUD — BAKIM
@@ -628,6 +1212,30 @@ window.deleteBakim = async (id) => {
   await deleteDoc(doc(db, 'bakimlar', id));
 };
 
+// ── WHATSAPP HATIRLATICI ─────────────────────────────────────
+// Bina kaydında telefon varsa direkt o numarayla WhatsApp açılır,
+// yoksa kullanıcı kendi seçtiği bir kişiyle paylaşabileceği genel mesaj açılır.
+window.sendBakimReminder = (bakimId) => {
+  const b = G_BAKIMLAR.find(x => x.id === bakimId);
+  if (!b) return;
+
+  const bina = G_BINALAR.find(x => x.ad === b.bina);
+  const tel = bina?.telefon ? bina.telefon.replace(/[^0-9]/g, '') : '';
+
+  const tarihStr = (() => {
+    const d = tarihToDate(b.tarih);
+    return d ? d.toLocaleDateString('tr-TR') : (b.tarih || '');
+  })();
+
+  const mesaj = `Merhaba, ${b.bina} binanız için ${tarihStr} tarihinde planlanan${b.kabin?' '+b.kabin:''} ${b.tip||'periyodik bakım'} hatırlatma amaçlı iletiyoruz. AS-EL Asansör ekibi olarak belirtilen tarihte yerinde olacağız.`;
+
+  const url = tel
+    ? `https://wa.me/90${tel.replace(/^0/, '')}?text=${encodeURIComponent(mesaj)}`
+    : `https://wa.me/?text=${encodeURIComponent(mesaj)}`;
+
+  window.open(url, '_blank');
+};
+
 /* ═══════════════════════════════════════════════════════════════
    FIRESTORE CRUD — ARIZA
 ═══════════════════════════════════════════════════════════════ */
@@ -652,7 +1260,13 @@ window.saveAriza = async () => {
 };
 
 window.closeAriza = async (id) => {
-  await updateDoc(doc(db, 'arizalar', id), { durum: 'kapali', cozumTarihi: serverTimestamp() });
+  const teknisyen = prompt('Arızayı çözen teknisyenin adını girin (performans takibi için):', currentUserData?.ad || '');
+  if (teknisyen === null) return; // iptal edildi
+  await updateDoc(doc(db, 'arizalar', id), {
+    durum: 'kapali',
+    cozumTarihi: serverTimestamp(),
+    cozenTeknisyen: teknisyen.trim() || currentUserData?.ad || '—'
+  });
 };
 
 window.deleteAriza = async (id) => {
@@ -1420,6 +2034,106 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
         </div>
       </div>
 
+      <!-- BAKIM TAKVİMİ -->
+      <div id="pg-takvim" class="db-page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+          <div>
+            <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Bakım Takvimi</h2>
+            <p style="font-size:11px;color:#475569;margin-top:2px;">Aylık planlanmış bakımlar</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button onclick="calMonthShift(-1)" class="btn-ghost" style="padding:7px 12px;">←</button>
+            <span id="calMonthLabel" style="font-size:13px;font-weight:700;color:#E2E8F0;min-width:140px;text-align:center;"></span>
+            <button onclick="calMonthShift(1)" class="btn-ghost" style="padding:7px 12px;">→</button>
+            <button onclick="calMonthShift(0,true)" class="btn-sm" style="padding:7px 12px;">Bugün</button>
+          </div>
+        </div>
+        <div class="card" style="padding:14px;overflow-x:auto;">
+          <div id="calGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;min-width:560px;"></div>
+        </div>
+        <div id="calDayDetail" style="display:none;margin-top:14px;"></div>
+      </div>
+
+      <!-- SÖZLEŞME & FATURA -->
+      <div id="pg-sozlesmeler" class="db-page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <div>
+            <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Sözleşme & Fatura Takibi</h2>
+            <p style="font-size:11px;color:#475569;margin-top:2px;">Ödeme tarihleri ve borç durumu</p>
+          </div>
+          <button onclick="openModal('mSozlesme')" class="btn-sm admin-only">+ Sözleşme Ekle</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;" id="sozlesmeStats"></div>
+
+        <div class="card" style="padding:0;overflow:hidden;">
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;">
+              <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
+                <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Sözleşme Tipi</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tutar</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Ödeme Günü</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
+                <th style="padding:11px 12px;" class="admin-only"></th>
+              </tr></thead>
+              <tbody id="sozlesmeTableBody"><tr><td colspan="6" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TEKNİSYEN PERFORMANS -->
+      <div id="pg-performans" class="db-page">
+        <div style="margin-bottom:16px;">
+          <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Teknisyen Performansı</h2>
+          <p style="font-size:11px;color:#475569;margin-top:2px;">Tamamlanan iş istatistikleri</p>
+        </div>
+        <div id="performansCards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-bottom:16px;"></div>
+        <div class="card" style="padding:0;overflow:hidden;">
+          <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);">
+            <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">Son Tamamlanan İşler</h3>
+          </div>
+          <div id="performansLog"></div>
+        </div>
+      </div>
+
+      <!-- MUHASEBE -->
+      <div id="pg-muhasebe" class="db-page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+          <div>
+            <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Muhasebe</h2>
+            <p style="font-size:11px;color:#475569;margin-top:2px;">Gelir takibi ve ödeme kayıtları</p>
+          </div>
+          <button onclick="openModal('mOdeme')" class="btn-sm admin-only">+ Ödeme Kaydet</button>
+        </div>
+
+        <!-- Özet kartları -->
+        <div id="muhasebeStats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;"></div>
+
+        <!-- Ay filtresi -->
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+          <input id="muhasebeAyFiltre" type="month" class="db-input" style="max-width:180px;" onchange="renderMuhasebe()"/>
+          <button onclick="document.getElementById('muhasebeAyFiltre').value='';renderMuhasebe()" class="btn-ghost" style="padding:9px 14px;">Tümünü Göster</button>
+        </div>
+
+        <div class="card" style="padding:0;overflow:hidden;">
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;">
+              <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
+                <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tarih</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tutar</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Ödeme Türü</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Açıklama</th>
+                <th style="padding:11px 12px;"></th>
+              </tr></thead>
+              <tbody id="odemeTableBody"><tr><td colspan="6" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
     </div><!-- /db-content -->
   </div><!-- /db-main -->
 </div><!-- /db-body -->
@@ -1485,6 +2199,7 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label><input id="f-bina-ad" type="text" class="db-input" placeholder="Örn: Tuna Apartmanı"/></div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Adres</label><input id="f-bina-adres" type="text" class="db-input" placeholder="Mahalle, İlçe, İstanbul"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İletişim Telefonu</label><input id="f-bina-telefon" type="tel" class="db-input" placeholder="05XX XXX XX XX"/></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Asansör Adedi</label><input id="f-bina-asansor" type="number" class="db-input" placeholder="2"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Durum</label>
@@ -1542,6 +2257,61 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mAriza')" class="btn-ghost">İptal</button>
       <button onclick="saveAriza()" style="padding:8px 16px;background:#EF4444;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Bildir</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sözleşme Modal -->
+<div id="modal-mSozlesme" class="modal-wrap" onclick="if(event.target===this)closeModal('mSozlesme')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 id="mSozlesmeTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">Yeni Sözleşme Ekle</h3>
+      <button onclick="closeModal('mSozlesme')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <input type="hidden" id="f-soz-editId"/>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label><input id="f-soz-bina" type="text" class="db-input" placeholder="Tuna Apartmanı"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Sözleşme Tipi</label>
+        <select id="f-soz-tip" class="db-input"><option>Aylık Periyodik Bakım</option><option>Yıllık Bakım Paketi</option><option>Sadece Arıza Hizmeti</option></select></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺)</label><input id="f-soz-tutar" type="number" class="db-input" placeholder="1500"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Günü (Ayın)</label><input id="f-soz-gun" type="number" min="1" max="31" class="db-input" placeholder="5"/></div>
+      </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Son Ödeme Tarihi</label><input id="f-soz-sonodeme" type="date" class="db-input"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Durum</label>
+        <select id="f-soz-durum" class="db-input"><option value="odendi">Ödendi</option><option value="bekliyor">Bekliyor</option><option value="gecikti">Gecikti</option></select></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Notlar</label><textarea id="f-soz-not" rows="2" class="db-input" style="resize:none;" placeholder="Ek bilgi..."></textarea></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mSozlesme')" class="btn-ghost">İptal</button>
+      <button onclick="saveSozlesme()" class="btn-sm">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ödeme Ekle Modal -->
+<div id="modal-mOdeme" class="modal-wrap" onclick="if(event.target===this)closeModal('mOdeme')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Ödeme Kaydet</h3>
+      <button onclick="closeModal('mOdeme')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label>
+        <input id="f-odeme-bina" type="text" class="db-input" placeholder="Tuna Apartmanı" list="odemeBinaListesi"/>
+        <datalist id="odemeBinaListesi"></datalist>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-odeme-tutar" type="number" class="db-input" placeholder="1500"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-odeme-tarih" type="date" class="db-input"/></div>
+      </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Türü</label>
+        <select id="f-odeme-tur" class="db-input"><option>Nakit</option><option>Havale/EFT</option><option>Kredi Kartı</option><option>Çek</option></select></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Açıklama</label><input id="f-odeme-aciklama" type="text" class="db-input" placeholder="Örn: Haziran ayı periyodik bakım ödemesi"/></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mOdeme')" class="btn-ghost">İptal</button>
+      <button onclick="saveOdeme()" class="btn-sm">Kaydet</button>
     </div>
   </div>
 </div>
