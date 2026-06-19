@@ -1,386 +1,1293 @@
 <!DOCTYPE html>
-<html lang="tr" class="scroll-smooth">
+<html lang="tr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AS-EL Asansör | Halis ÖZDEMİR Liderliğinde 1989'dan Beri Güvenle</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Alpine.js CDN -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        brandDark: '#0F172A', /* Derin Lacivert */
-                        brandLight: '#F8FAFC', /* Kurumsal Açık Gri */
-                        brandCyan: '#00ADB5', /* Güven Veren Turkuaz */
-                    }
-                }
-            }
-        }
-    </script>
-</head>
-<body x-data="{ mobileMenuOpen: false }" class="bg-white text-slate-800 font-sans selection:bg-brandCyan/20 selection:text-brandDark overflow-x-hidden relative">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AS-EL Asansör | 1989'dan Beri Güvenle</title>
+<script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- SABİT FLOATING WHATSAPP HIZLI MESAJ BUTONU -->
-    <a href="https://wa.me/905334977317?text=Merhaba,%20AS-EL%20Asans%C3%B6r%20hizmetleriniz%20hakk%C4%B1nda%20bilgi%20almak%20istiyorum." 
-       target="_blank" 
-       class="fixed bottom-6 right-6 z-[99] w-14 h-14 bg-emerald-500 rounded-full flex items-center justify-center shadow-lg hover:bg-emerald-600 hover:scale-110 transition duration-300 group"
-       title="WhatsApp ile İletişime Geçin">
-        <svg class="w-7 h-7 fill-white" viewBox="0 0 24 24">
-            <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.513 2.266 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.724-1.457L0 24zm6.59-4.846c1.6.95 3.188 1.449 4.825 1.451 5.436 0 9.86-4.42 9.863-9.864.001-2.637-1.03-5.115-2.905-6.99-1.875-1.875-4.355-2.907-6.992-2.908-5.442 0-9.866 4.42-9.869 9.865-.001 1.713.457 3.39 1.323 4.877l-.994 3.634 3.739-.981zM17.487 14.39c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
-        </svg>
-    </a>
+<!-- ══ FIREBASE SDK (CDN) ══════════════════════════════════════ -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc,
+         onSnapshot, query, orderBy, serverTimestamp, getDoc, setDoc }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-    <!-- 1. HEADER (Büyütülmüş & Belirgin Logo) -->
-    <header class="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-24 flex items-center justify-between">
-            
-            <!-- Logo -->
-            <a href="#" class="flex items-center h-16 transition-transform duration-200 hover:scale-[1.02]">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 550 180" class="h-full w-auto">
-                    <g>
-                        <rect x="55" y="55" width="14" height="70" rx="4" fill="#00ADB5" />
-                        <rect x="75" y="35" width="16" height="110" rx="4" fill="#0F172A" />
-                        <rect x="97" y="55" width="14" height="70" rx="4" fill="#00ADB5" />
-                        <path d="M 83 43 L 78 48 L 88 48 Z" fill="#FFFFFF" />
-                        <rect x="81" y="48" width="4" height="10" fill="#FFFFFF" />
-                        <path d="M 83 127 L 78 122 L 88 122 Z" fill="#FFFFFF" />
-                        <rect x="81" y="112" width="4" height="10" fill="#FFFFFF" />
-                        <line x1="62" y1="50" x2="62" y2="40" stroke="#00ADB5" stroke-width="2" stroke-dasharray="2 2" />
-                        <line x1="104" y1="50" x2="104" y2="40" stroke="#00ADB5" stroke-width="2" stroke-dasharray="2 2" />
-                    </g>
-                    <g stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M 170 90 L 190 50 L 210 90" stroke="#0F172A" stroke-width="7.5" fill="none" />
-                        <path d="M 250 54 L 225 54 L 225 70 L 250 70 L 250 86 L 225 86" stroke="#0F172A" stroke-width="7.5" fill="none" />
-                        <path d="M 265 70 L 275 70" stroke="#00ADB5" stroke-width="7.5" fill="none" />
-                        <path d="M 315 54 L 290 54 L 290 86 L 315 86 M 290 70 L 310 70" stroke="#0F172A" stroke-width="7.5" fill="none" />
-                        <path d="M 330 54 L 330 86 L 355 86" stroke="#0F172A" stroke-width="7.5" fill="none" />
-                    </g>
-                    <text x="170" y="122" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="14" fill="#00ADB5" letter-spacing="8.5">ASANSÖR</text>
-                </svg>
-            </a>
+/* ═══════════════════════════════════════════════════════════════
+   FIREBASE CONFIG
+═══════════════════════════════════════════════════════════════ */
+const firebaseConfig = {
+  apiKey: "AIzaSyDYrIvIFOg8bMv-EZUUNKy8sRLCBF_kQtM",
+  authDomain: "aselasansor-4c211.firebaseapp.com",
+  projectId: "aselasansor-4c211",
+  storageBucket: "aselasansor-4c211.firebasestorage.app",
+  messagingSenderId: "106028502354",
+  appId: "1:106028502354:web:509eed9228422f9b28be8b",
+  measurementId: "G-MVPSH9PS1Z"
+};
 
-            <!-- Navigasyon -->
-            <nav class="hidden md:flex space-x-10 text-sm font-bold tracking-wider uppercase">
-                <a href="#" class="text-brandCyan">Ana Sayfa</a>
-                <a href="#tarihce" class="text-slate-600 hover:text-slate-900 transition">Kurucumuz &amp; Tarihçe</a>
-                <a href="#hizmetlerimiz" class="text-slate-600 hover:text-slate-900 transition">Hizmetlerimiz</a>
-                <a href="#iletisim" class="text-slate-600 hover:text-slate-900 transition">İletişim</a>
-            </nav>
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
 
-            <div class="hidden sm:block">
-                <a href="https://wa.me/905334977317" target="_blank" class="inline-flex items-center justify-center px-6 py-3 text-xs font-bold uppercase tracking-wider text-white bg-emerald-500 rounded hover:bg-emerald-600 transition duration-200">
-                    WhatsApp Destek
-                </a>
-            </div>
+/* ═══════════════════════════════════════════════════════════════
+   GLOBAL STATE
+═══════════════════════════════════════════════════════════════ */
+let currentUser     = null;
+let currentUserData = null;
+let unsubscribers   = [];
 
-            <!-- Mobil Menü Butonu -->
-            <button @click="mobileMenuOpen = !mobileMenuOpen" class="md:hidden text-slate-600 hover:text-slate-900 focus:outline-none">
-                <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path x-show="!mobileMenuOpen" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-                    <path x-show="mobileMenuOpen" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-            </button>
-        </div>
+/* ═══════════════════════════════════════════════════════════════
+   AUTH STATE OBSERVER
+═══════════════════════════════════════════════════════════════ */
+// Kullanıcı adına göre otomatik profil bilgileri
+const AUTO_PROFILES = {
+  'tanju@aselasansor.com': {
+    ad: 'Tanju',
+    email: 'tanju@aselasansor.com',
+    rol: 'admin',
+    rolLabel: 'Yönetici',
+    initials: 'T',
+    kurucu: true,
+    bina: null
+  },
+  'tayfun@aselasansor.com': {
+    ad: 'Tayfun',
+    email: 'tayfun@aselasansor.com',
+    rol: 'admin',
+    rolLabel: 'Yönetici',
+    initials: 'TF',
+    kurucu: false,
+    bina: null
+  }
+  // Yeni kullanıcı ekleyince buraya da ekleyin
+};
 
-        <!-- Mobil Menü İçeriği -->
-        <div x-show="mobileMenuOpen" x-transition class="md:hidden bg-slate-50 border-b border-slate-200 px-4 pt-2 pb-6 space-y-4">
-            <a href="#" @click="mobileMenuOpen = false" class="block text-brandCyan py-2 text-sm font-bold uppercase">Ana Sayfa</a>
-            <a href="#tarihce" @click="mobileMenuOpen = false" class="block text-slate-600 hover:text-slate-900 py-2 text-sm font-bold uppercase">Kurucumuz &amp; Tarihçe</a>
-            <a href="#hizmetlerimiz" @click="mobileMenuOpen = false" class="block text-slate-600 hover:text-slate-900 py-2 text-sm font-bold uppercase">Hizmetlerimiz</a>
-            <a href="#iletisim" @click="mobileMenuOpen = false" class="block text-slate-600 hover:text-slate-900 py-2 text-sm font-bold uppercase">İletişim</a>
-        </div>
-    </header>
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    const userRef = doc(db, 'kullanicilar', user.uid);
+    let snap = await getDoc(userRef);
 
-    <!-- 2. HERO -->
-    <section class="relative bg-brandLight py-20 lg:py-28 overflow-hidden">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="lg:grid lg:grid-cols-12 lg:gap-16 items-center">
-                
-                <!-- Sol Kısım -->
-                <div class="lg:col-span-7 space-y-6 text-center lg:text-left">
-                    <span class="inline-flex items-center px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider bg-brandCyan/10 text-brandCyan">
-                        1989'dan Beri Sektörün Çekirdeğinden
-                    </span>
-                    <h1 class="text-4xl sm:text-5xl md:text-6xl font-extrabold text-brandDark tracking-tight leading-tight">
-                        Güven ve Tecrübeyle <br/>
-                        <span class="text-brandCyan">Binalarınızı Yükseltiyoruz</span>
-                    </h1>
-                    <p class="text-slate-500 text-lg leading-relaxed font-light">
-                        AS-EL Asansör, kurucumuz Halis ÖZDEMİR liderliğinde, yarım asra yaklaşan saha deneyimi ve sarsılmaz mühendislik ahlakıyla projelerinize hayat vermektedir.
-                    </p>
-                    <div class="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start pt-2">
-                        <a href="#tarihce" class="px-8 py-4 text-xs font-bold uppercase tracking-wider text-white bg-brandDark rounded hover:bg-brandCyan transition duration-200 text-center">
-                            Kurucumuzun Hikayesi
-                        </a>
-                        <a href="https://wa.me/905334977317" target="_blank" class="px-8 py-4 text-xs font-bold uppercase tracking-wider text-white bg-emerald-500 rounded hover:bg-emerald-600 transition duration-200 text-center">
-                            WhatsApp ile Görüşün
-                        </a>
-                    </div>
-                </div>
-
-                <!-- Sağ Kısım: Logo ve İsim Birleşik (Header ile Aynı), Kurucu İsmi Altta -->
-                <div class="lg:col-span-5 mt-16 lg:mt-0 flex justify-center">
-                    <div class="w-full max-w-sm bg-white border border-slate-200 rounded-2xl p-10 flex flex-col justify-between shadow-sm relative overflow-hidden group">
-                        <div class="absolute inset-0 bg-slate-50 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                        <div class="relative z-10 space-y-6">
-                            <!-- Üst Bilgi -->
-                            <div class="flex justify-between items-center text-xs text-slate-400 font-mono">
-                                <span>MARKA TESCİL</span>
-                                <span class="text-brandCyan font-bold">EST. 1989</span>
-                            </div>
-                            
-                            <!-- Ortada: Logo ve İsim Aynı Şekilde (Header'dakiyle birebir aynı vektörel logo) -->
-                            <div class="flex justify-center py-6">
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 550 180" class="w-full h-auto max-w-[280px]">
-                                    <g>
-                                        <rect x="55" y="55" width="14" height="70" rx="4" fill="#00ADB5" />
-                                        <rect x="75" y="35" width="16" height="110" rx="4" fill="#0F172A" />
-                                        <rect x="97" y="55" width="14" height="70" rx="4" fill="#00ADB5" />
-                                        <path d="M 83 43 L 78 48 L 88 48 Z" fill="#FFFFFF" />
-                                        <rect x="81" y="48" width="4" height="10" fill="#FFFFFF" />
-                                        <path d="M 83 127 L 78 122 L 88 122 Z" fill="#FFFFFF" />
-                                        <rect x="81" y="112" width="4" height="10" fill="#FFFFFF" />
-                                        <line x1="62" y1="50" x2="62" y2="40" stroke="#00ADB5" stroke-width="2" stroke-dasharray="2 2" />
-                                        <line x1="104" y1="50" x2="104" y2="40" stroke="#00ADB5" stroke-width="2" stroke-dasharray="2 2" />
-                                    </g>
-                                    <g stroke-linecap="round" stroke-linejoin="round">
-                                        <path d="M 170 90 L 190 50 L 210 90" stroke="#0F172A" stroke-width="7.5" fill="none" />
-                                        <path d="M 250 54 L 225 54 L 225 70 L 250 70 L 250 86 L 225 86" stroke="#0F172A" stroke-width="7.5" fill="none" />
-                                        <path d="M 265 70 L 275 70" stroke="#00ADB5" stroke-width="7.5" fill="none" />
-                                        <path d="M 315 54 L 290 54 L 290 86 L 315 86 M 290 70 L 310 70" stroke="#0F172A" stroke-width="7.5" fill="none" />
-                                        <path d="M 330 54 L 330 86 L 355 86" stroke="#0F172A" stroke-width="7.5" fill="none" />
-                                    </g>
-                                    <text x="170" y="122" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="14" fill="#00ADB5" letter-spacing="8.5">ASANSÖR</text>
-                                </svg>
-                            </div>
-
-                            <!-- Altta: Kurucu Adı Soyadı -->
-                            <div class="text-center border-t border-slate-100 pt-6">
-                                <div class="w-12 h-[2px] bg-brandCyan/40 mx-auto mb-4"></div>
-                                <p class="text-sm font-bold text-slate-700 tracking-wide">Kurucu: Halis ÖZDEMİR</p>
-                                <p class="text-[10px] text-slate-400 uppercase tracking-widest mt-1">1989'dan Beri Sektörde</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-            </div>
-        </div>
-    </section>
-
-    <!-- 3. KURUCUMUZUN ÖZ GEÇMİŞİ & TARİHÇE -->
-    <section id="tarihce" class="py-24 bg-white reveal">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="lg:grid lg:grid-cols-12 lg:gap-16 items-center">
-                
-                <!-- Sol Taraf: Kurucu Bilgileri -->
-                <div class="lg:col-span-5 flex justify-center">
-                    <div class="w-full max-w-sm bg-brandLight border border-slate-200 rounded-2xl p-8 flex flex-col justify-between min-h-[420px] shadow-sm">
-                        <div class="space-y-6">
-                            <span class="text-[10px] font-bold text-brandCyan uppercase tracking-widest">Founder Profile</span>
-                            <h3 class="text-3xl font-extrabold text-brandDark tracking-tight">Halis ÖZDEMİR</h3>
-                            <p class="text-xs text-brandCyan font-semibold uppercase tracking-wider">Kurucu Genel Müdür</p>
-                            
-                            <div class="border-t border-slate-200 pt-6 space-y-4 text-sm text-slate-500">
-                                <p class="italic">"Bir asansörün kalitesi, ardındaki mühendislik hassasiyeti ve montajı yapan ustanın meslek ahlakı kadardır."</p>
-                                <span class="block text-xs font-bold text-slate-400">— Halis ÖZDEMİR, 1989</span>
-                            </div>
-                        </div>
-
-                        <div class="border-t border-slate-200 pt-6 flex justify-between items-center">
-                            <span class="text-[10px] text-slate-400 font-mono">DENEYİM: 37 YIL</span>
-                            <span class="text-emerald-500 text-xs font-bold uppercase tracking-wider">Aktif Görevde</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Sağ Taraf: Öz Geçmiş Detayları -->
-                <div class="lg:col-span-7 mt-12 lg:mt-0 space-y-6">
-                    <span class="text-xs text-brandCyan uppercase tracking-widest font-bold">KÖKLÜ GEÇMİŞ &amp; BİYOGRAFİ</span>
-                    <h2 class="text-3xl sm:text-4xl font-extrabold text-brandDark">Çekirdekten Yetişen Yarım Asırlık Deneyim</h2>
-                    <p class="text-slate-500 leading-relaxed font-light">
-                        AS-EL Asansör’ün temelleri, kurucumuz **Halis ÖZDEMİR**’in **1989** yılında dikey taşımacılık sektörüne adım atmasıyla atılmıştır. Sektörün en alt kademesinden, saha montaj ekiplerinden yetişen ÖZDEMİR, asansör mekaniği, elektronik kumanda sistemleri ve proje yönetimi alanlarında benzersiz bir uzmanlık edinmiştir.
-                    </p>
-                    <p class="text-slate-500 leading-relaxed font-light">
-                        37 yılı aşkın bir süredir asansör montajı, periyodik bakım süreçleri ve teknik modernizasyon alanlarında fiilen görev yapan ve yüzlerce başarılı projeyi bizzat yöneten Halis ÖZDEMİR, saha disiplinini ve kurumsal kalite prensiplerini AS-EL çatısı altında bir araya getirmiştir.
-                    </p>
-                    <p class="text-slate-500 leading-relaxed font-light">
-                        Bugün firmamız, kurucumuzun ilk gün benimsediği "güvenlikte sıfır taviz" ve "şeffaf mühendislik" ilkeleriyle, binalarınıza sadece konfor değil, aynı zamanda koşulsuz emniyet taşımaya devam etmektedir.
-                    </p>
-                </div>
-
-            </div>
-        </div>
-    </section>
-
-    <!-- 4. HİZMETLERİMİZ -->
-    <section id="hizmetlerimiz" class="py-24 bg-brandLight border-y border-slate-200 reveal">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="text-center max-w-3xl mx-auto space-y-4 mb-16">
-                <span class="text-xs text-brandCyan uppercase tracking-widest font-bold">HİZMET ALANLARIMIZ</span>
-                <h2 class="text-3xl sm:text-4xl font-extrabold text-brandDark">Uluslararası Normlarda Mühendislik</h2>
-                <p class="text-slate-500 text-sm">Kurucumuzun saha hassasiyetiyle şekillenen hizmetlerimiz, EN 81-20/50 güvenlik kurallarına %100 uygun olarak gerçekleştirilir.</p>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <!-- Hizmet 1 -->
-                <div class="bg-white border border-slate-200 p-8 rounded-xl transition duration-200 hover:shadow-md">
-                    <div class="w-12 h-12 rounded bg-brandLight border border-slate-200 flex items-center justify-center mb-6">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" class="w-8 h-8">
-                            <line x1="12" y1="52" x2="52" y2="52" stroke="#00ADB5" stroke-width="3"/>
-                            <rect x="18" y="18" width="28" height="28" rx="4" stroke="#0F172A" stroke-width="3" fill="none"/>
-                            <path d="M 32 38 L 32 24 M 27 29 L 32 24 L 37 29" stroke="#00ADB5" stroke-width="3"/>
-                        </svg>
-                    </div>
-                    <h3 class="text-lg font-bold text-brandDark mb-2">Montaj ve Projelendirme</h3>
-                    <p class="text-slate-500 text-sm leading-relaxed">Mimari yapı analiz edilerek, trafik hesaplarına uygun, sessiz ve yüksek güvenlik standartlarında kurulum süreçleri.</p>
-                </div>
-
-                <!-- Hizmet 2 -->
-                <div class="bg-white border border-slate-200 p-8 rounded-xl transition duration-200 hover:shadow-md">
-                    <div class="w-12 h-12 rounded bg-brandLight border border-slate-200 flex items-center justify-center mb-6">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" class="w-8 h-8">
-                            <rect x="16" y="16" width="32" height="32" rx="4" stroke="#0F172A" stroke-width="3" fill="none"/>
-                            <path d="M 46 18 L 41 23 C 39 21, 37 21, 35 23 C 33 25, 33 28, 35 30 L 22 43 C 20 45, 20 48, 22 50 C 24 52, 27 52, 29 50 L 42 37 C 44 39, 47 39, 49 37 C 51 35, 51 32, 49 30 L 54 25" stroke="#00ADB5" stroke-width="3" fill="none"/>
-                        </svg>
-                    </div>
-                    <h3 class="text-lg font-bold text-brandDark mb-2">Tescilli Periyodik Bakım</h3>
-                    <p class="text-slate-500 text-sm leading-relaxed">Asansörlerinizin güvenli çalışması, yöneticinin yasal yükümlülüklerinin korunması için her ay yapılan tescilli servisler.</p>
-                </div>
-
-                <!-- Hizmet 3 -->
-                <div class="bg-white border border-slate-200 p-8 rounded-xl transition duration-200 hover:shadow-md">
-                    <div class="w-12 h-12 rounded bg-brandLight border border-slate-200 flex items-center justify-center mb-6">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" class="w-8 h-8">
-                            <path d="M 32 12 A 20 20 0 0 1 52 32" stroke="#00ADB5" stroke-width="3"/>
-                            <path d="M 48 28 L 52 32 L 56 28" stroke="#00ADB5" stroke-width="3"/>
-                            <path d="M 32 52 A 20 20 0 0 1 12 32" stroke="#00ADB5" stroke-width="3"/>
-                            <path d="M 16 36 L 12 32 L 8 36" stroke="#00ADB5" stroke-width="3"/>
-                            <line x1="28" y1="22" x2="28" y2="42" stroke="#0F172A" stroke-width="3"/>
-                        </svg>
-                    </div>
-                    <h3 class="text-lg font-bold text-brandDark mb-2">Teknoloji Modernizasyonu</h3>
-                    <p class="text-slate-500 text-sm leading-relaxed">Eskiyen asansörlerinizin kontrol kartları, elektrik panoları ve motorlarının enerji verimli ünitelerle revizyonu.</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- 5. İLETİŞİM & PROJE TALEP FORMU -->
-    <section id="iletisim" class="py-24 bg-white reveal">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="max-w-3xl mx-auto text-center mb-16 space-y-4">
-                <span class="text-xs text-brandCyan uppercase tracking-widest font-bold">CONTACT &amp; OFFER</span>
-                <h2 class="text-3xl font-extrabold text-brandDark">İletişim ve Teklif Formu</h2>
-                <p class="text-slate-500 text-sm">Projeleriniz veya aylık periyodik bakım anlaşmalarınız için mühendislerimizle iletişime geçebilirsiniz.</p>
-            </div>
-
-            <div class="grid grid-cols-1 lg:grid-cols-12 gap-12">
-                <!-- Sol Taraf -->
-                <div class="lg:col-span-5 flex flex-col justify-between space-y-12">
-                    <div class="space-y-8">
-                        <div>
-                            <h3 class="text-xs font-bold text-brandDark uppercase tracking-wider mb-2">Merkez Ofis</h3>
-                            <p class="text-slate-500 text-sm leading-relaxed">İncirtepe Mah. 269. Sok. No: 3 Daire: 1<br/>Esenyurt / İstanbul</p>
-                        </div>
-                        <div>
-                            <h3 class="text-xs font-bold text-brandDark uppercase tracking-wider mb-2">Telefon &amp; WhatsApp Destek</h3>
-                            <p class="text-brandDark font-extrabold text-2xl tracking-tight">0533 497 73 17</p>
-                            <p class="text-xs text-slate-400 mt-1">7/24 Kesintisiz WhatsApp Hattı</p>
-                            <a href="https://wa.me/905334977317?text=Merhaba,%20AS-EL%20Asans%C3%B6r%20hizmetleriniz%20hakk%C4%B1nda%20bilgi%20almak%20istiyorum." target="_blank" class="inline-flex items-center space-x-2 mt-4 px-5 py-2.5 bg-emerald-500 text-white text-xs font-bold uppercase tracking-wider rounded hover:bg-emerald-600 transition">
-                                <svg class="w-4 h-4 fill-white" viewBox="0 0 24 24">
-                                    <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.513 2.266 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.724-1.457L0 24zm6.59-4.846c1.6.95 3.188 1.449 4.825 1.451 5.436 0 9.86-4.42 9.863-9.864.001-2.637-1.03-5.115-2.905-6.99-1.875-1.875-4.355-2.907-6.992-2.908-5.442 0-9.866 4.42-9.869 9.865-.001 1.713.457 3.39 1.323 4.877l-.994 3.634 3.739-.981zM17.487 14.39c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
-                                </svg>
-                                <span>WhatsApp Mesaj Gönder</span>
-                            </a>
-                        </div>
-                        <div>
-                            <h3 class="text-xs font-bold text-brandDark uppercase tracking-wider mb-2">Kurumsal Yazışma</h3>
-                            <p class="text-slate-500 text-sm">info@as-elasansor.com</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Form Alanı -->
-                <div class="lg:col-span-7 bg-brandLight border border-slate-200 p-8 rounded-2xl" x-data="{ formSubmitted: false, loading: false }">
-                    <div x-show="formSubmitted" class="mb-6 p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-sm">
-                        Proje talebiniz kurucu ekibimize iletilmiştir. Mühendislerimiz sizinle en kısa sürede iletişime geçecektir.
-                    </div>
-
-                    <form @submit.prevent="loading = true; setTimeout(() => { loading = false; formSubmitted = true }, 1000)" class="space-y-6" x-show="!formSubmitted">
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                            <div>
-                                <label class="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Adınız Soyadınız</label>
-                                <input type="text" required class="w-full bg-white border border-slate-200 rounded-lg px-4 py-3 text-slate-800 focus:outline-none focus:border-brandCyan">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Telefon Numaranız</label>
-                                <input type="tel" required class="w-full bg-white border border-slate-200 rounded-lg px-4 py-3 text-slate-800 focus:outline-none focus:border-brandCyan">
-                            </div>
-                        </div>
-
-                        <div>
-                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Talep Edilen Hizmet</label>
-                            <select class="w-full bg-white border border-slate-200 rounded-lg px-4 py-3 text-slate-800 focus:outline-none focus:border-brandCyan">
-                                <option>Sıfırdan Proje / Montaj</option>
-                                <option>Aylık Periyodik Bakım Anlaşması</option>
-                                <option>Teknik Modernizasyon / Yenileme</option>
-                            </select>
-                        </div>
-
-                        <div>
-                            <label class="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Proje Notları ve Adres Detayı</label>
-                            <textarea rows="4" class="w-full bg-white border border-slate-200 rounded-lg px-4 py-3 text-slate-800 focus:outline-none focus:border-brandCyan"></textarea>
-                        </div>
-
-                        <button type="submit" class="w-full py-4 bg-brandDark text-white hover:bg-brandCyan transition duration-200 text-xs font-bold uppercase tracking-wider rounded-lg flex items-center justify-center">
-                            <span x-show="!loading">Proje Teklifi Gönder</span>
-                            <span x-show="loading" class="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full"></span>
-                        </button>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- FOOTER -->
-    <footer class="bg-brandDark text-slate-400 py-12 border-t border-slate-800">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-6">
-            <span class="text-sm">
-                &copy; 2026 AS-EL ASANSÖR. Tüm hakları saklıdır.
-            </span>
-            <div class="flex space-x-6 text-sm">
-                <a href="#" class="hover:text-brandCyan transition">Gizlilik Politikası</a>
-                <a href="#" class="hover:text-brandCyan transition">Yasal Şartlar</a>
-            </div>
-        </div>
-    </footer>
-
-    <!-- INTERSECTION OBSERVER SCRIPT -->
-    <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            const reveals = document.querySelectorAll('.reveal');
-            
-            const revealOnScroll = () => {
-                for (let i = 0; i < reveals.length; i++) {
-                    let windowHeight = window.innerHeight;
-                    let elementTop = reveals[i].getBoundingClientRect().top;
-                    let elementVisible = 100;
-                    
-                    if (elementTop < windowHeight - elementVisible) {
-                        reveals[i].classList.add('active');
-                    }
-                }
-            };
-
-            window.addEventListener('scroll', revealOnScroll);
-            revealOnScroll();
+    // Firestore'da profil yoksa otomatik oluştur
+    if (!snap.exists()) {
+      const autoProfile = AUTO_PROFILES[user.email];
+      if (autoProfile) {
+        await setDoc(userRef, {
+          ...autoProfile,
+          olusturuldu: serverTimestamp()
         });
-    </script>
+        snap = await getDoc(userRef);
+      } else {
+        await signOut(auth);
+        showLoginError('Kullanıcı profili bulunamadı. Yönetici ile iletişime geçin.');
+        return;
+      }
+    }
+
+    currentUserData = snap.data();
+    currentUser     = user;
+    closeLogin();
+    openDashboard();
+  } else {
+    currentUser     = null;
+    currentUserData = null;
+    closeDashboard();
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   LOGIN
+═══════════════════════════════════════════════════════════════ */
+window.openLogin = () => {
+  document.getElementById('loginOverlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => document.getElementById('lu').focus(), 180);
+};
+window.closeLogin = () => {
+  document.getElementById('loginOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+};
+window.toggleLP = () => {
+  const p = document.getElementById('lp');
+  p.type = p.type === 'password' ? 'text' : 'password';
+};
+
+function showLoginError(msg) {
+  const el = document.getElementById('loginErr');
+  el.querySelector('span').textContent = msg;
+  el.style.display = 'flex';
+}
+
+// Kullanıcı adı → email eşleştirme tablosu
+// Yeni kullanıcı ekledikçe buraya da ekleyin
+const USERNAME_MAP = {
+  'tanju':     'tanju@aselasansor.com',
+  'tayfun':    'tayfun@aselasansor.com',
+  // Yeni kullanıcı ekleyince buraya da ekleyin:
+  // 'yeniad':  'yeniad@aselasansor.com',
+};
+
+window.doLogin = async () => {
+  const username = document.getElementById('lu').value.trim().toLowerCase();
+  const pass     = document.getElementById('lp').value;
+  const btn      = document.getElementById('loginBtn');
+  const err      = document.getElementById('loginErr');
+
+  if (!username || !pass) { showLoginError('Kullanıcı adı ve şifre giriniz.'); return; }
+
+  // Kullanıcı adını email'e çevir
+  const email = USERNAME_MAP[username] || (username.includes('@') ? username : null);
+  if (!email) { showLoginError('Kullanıcı adı bulunamadı.'); return; }
+
+  err.style.display = 'none';
+  btn.innerHTML = '<span class="spinner"></span>';
+  btn.disabled = true;
+
+  try {
+    await signInWithEmailAndPassword(auth, email, pass);
+    // onAuthStateChanged devralır
+  } catch (e) {
+    let msg = 'Kullanıcı adı veya şifre hatalı.';
+    if (e.code === 'auth/too-many-requests')
+      msg = 'Çok fazla deneme. Lütfen bekleyin.';
+    showLoginError(msg);
+    btn.innerHTML = 'Giriş Yap';
+    btn.disabled = false;
+  }
+};
+
+window.doLogout = async () => {
+  unsubscribers.forEach(u => u());
+  unsubscribers = [];
+  await signOut(auth);
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   DASHBOARD OPEN / CLOSE
+═══════════════════════════════════════════════════════════════ */
+function openDashboard() {
+  document.getElementById('dashboard').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  setupUI();
+  subscribeAll();
+  document.getElementById('pageDate').textContent = new Date().toLocaleDateString('tr-TR',
+    { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+}
+
+function closeDashboard() {
+  document.getElementById('dashboard').classList.remove('open');
+  document.body.style.overflow = '';
+  // reset
+  document.querySelectorAll('.db-page').forEach(p => p.classList.remove('active'));
+  document.getElementById('pg-dashboard').classList.add('active');
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FIRESTORE — REALTIME SUBSCRIPTIONS
+═══════════════════════════════════════════════════════════════ */
+function subscribeAll() {
+  const role = currentUserData?.rol;
+  const bina = currentUserData?.bina || null;
+
+  // Binalar
+  const binaQ = query(collection(db, 'binalar'), orderBy('ad'));
+  unsubscribers.push(onSnapshot(binaQ, snap => {
+    let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (role === 'bina' && bina) data = data.filter(b => b.ad === bina);
+    renderBinalar(data);
+    renderBinaSayac(data.length);
+  }));
+
+  // Bakımlar
+  const bakimQ = query(collection(db, 'bakimlar'), orderBy('tarih'));
+  unsubscribers.push(onSnapshot(bakimQ, snap => {
+    let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (role === 'bina' && bina) data = data.filter(b => b.bina === bina);
+    renderBakimlar(data);
+    renderBekleyenSayac(data.filter(b => b.durum === 'bekliyor').length);
+  }));
+
+  // Arızalar
+  const arizaQ = query(collection(db, 'arizalar'), orderBy('tarih', 'desc'));
+  unsubscribers.push(onSnapshot(arizaQ, snap => {
+    let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (role === 'bina' && bina) data = data.filter(a => a.bina === bina);
+    renderArizalar(data);
+    renderAcikArizaSayac(data.filter(a => a.durum === 'acik').length);
+  }));
+
+  // Kullanıcılar (sadece admin)
+  if (role === 'admin') {
+    const kulQ = query(collection(db, 'kullanicilar'));
+    unsubscribers.push(onSnapshot(kulQ, snap => {
+      renderKullanicilar(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }));
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   UI SETUP (ROL BAZLI)
+═══════════════════════════════════════════════════════════════ */
+function setupUI() {
+  const u    = currentUserData;
+  const role = u?.rol;
+
+  document.getElementById('userNameSidebar').textContent  = u?.ad || '';
+  document.getElementById('userRoleSidebar').textContent  = u?.rolLabel || '';
+  document.getElementById('userAvatar').textContent       = u?.initials || '??';
+  document.getElementById('pageTitle').textContent        = 'Genel Bakış';
+
+  // Sidebar nav
+  const navDefs = {
+    admin: [
+      { id:'dashboard',   icon:'grid',     label:'Genel Bakış' },
+      { id:'binalar',     icon:'building', label:'Bina Yönetimi' },
+      { id:'bakimlar',    icon:'tool',     label:'Bakım Takibi' },
+      { id:'arizalar',    icon:'alert',    label:'Arıza Kayıtları' },
+      { id:'kullanicilar',icon:'users',    label:'Kullanıcılar' },
+    ],
+    teknisyen: [
+      { id:'dashboard', icon:'grid',     label:'Genel Bakış' },
+      { id:'binalar',   icon:'building', label:'Binalar' },
+      { id:'bakimlar',  icon:'tool',     label:'Bakım Takibi' },
+      { id:'arizalar',  icon:'alert',    label:'Arıza Kayıtları' },
+    ],
+    bina: [
+      { id:'dashboard', icon:'grid',  label:'Genel Bakış' },
+      { id:'bakimlar',  icon:'tool',  label:'Bakım Durumu' },
+      { id:'arizalar',  icon:'alert', label:'Arıza Bildir' },
+    ],
+  };
+
+  const ICONS = {
+    grid:     `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>`,
+    building: `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-2 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>`,
+    tool:     `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 11-6 0 3 3 0 016 0z"/>`,
+    alert:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>`,
+    users:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>`,
+  };
+
+  const items  = navDefs[role] || navDefs.bina;
+  const navEl  = document.getElementById('sidebarNav');
+  navEl.innerHTML = items.map((item, i) => `
+    <div class="nav-item${i===0?' active':''}" onclick="showPage('${item.id}',this)">
+      <svg viewBox="0 0 24 24" style="width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;flex-shrink:0;">${ICONS[item.icon]}</svg>
+      <span>${item.label}</span>
+      <span id="badge-${item.id}" class="nav-badge" style="display:none;"></span>
+    </div>`).join('');
+
+  // Bina yöneticisi banner
+  if (role === 'bina') {
+    document.getElementById('binaBanner').style.display = 'flex';
+    document.getElementById('binaBannerText').textContent = `"${u.bina}" binası görüntüleniyor.`;
+    document.getElementById('topbarNewBakim').style.display = 'none';
+  } else {
+    document.getElementById('binaBanner').style.display = 'none';
+    document.getElementById('topbarNewBakim').style.display = 'flex';
+  }
+
+  // Admin-only butonlar
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = role === 'admin' ? '' : 'none';
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   NAVİGASYON
+═══════════════════════════════════════════════════════════════ */
+window.showPage = (name, btn) => {
+  document.querySelectorAll('.db-page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+  const pg = document.getElementById('pg-' + name);
+  if (pg) pg.classList.add('active');
+  if (btn) btn.classList.add('active');
+  const titles = {
+    dashboard:'Genel Bakış', binalar:'Bina Yönetimi', bakimlar:'Bakım Takibi',
+    arizalar:'Arıza Kayıtları', kullanicilar:'Kullanıcı Yönetimi'
+  };
+  document.getElementById('pageTitle').textContent = titles[name] || name;
+  closeMobileSidebar();
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   RENDER — BİNALAR
+═══════════════════════════════════════════════════════════════ */
+function renderBinalar(data) {
+  const tbody = document.getElementById('binaTableBody');
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz bina eklenmemiş.</td></tr>`;
+    return;
+  }
+  const durumBadge = d => d==='ok'
+    ? `<span class="sbadge badge-ok-sm">Normal</span>`
+    : d==='err'
+    ? `<span class="sbadge badge-err-sm">Arıza Var</span>`
+    : `<span class="sbadge badge-warn-sm">Bakım Yaklaşıyor</span>`;
+
+  tbody.innerHTML = data.map(b => `
+    <tr class="tbl-row">
+      <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${b.ad}</td>
+      <td style="padding:12px;font-size:12px;color:#64748B;">${b.adres || '—'}</td>
+      <td style="padding:12px;font-size:12px;color:#CBD5E1;">${b.asansorSayisi || 0} adet</td>
+      <td style="padding:12px;font-size:11px;color:#64748B;font-family:monospace;">${b.sozlesme || '—'}</td>
+      <td style="padding:12px;">${durumBadge(b.durum || 'ok')}</td>
+      <td style="padding:12px;display:flex;gap:6px;">
+        <button onclick="editBina('${b.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;" class="admin-only">Düzenle</button>
+        <button onclick="deleteBina('${b.id}','${b.ad}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
+      </td>
+    </tr>`).join('');
+
+  // Güncelle admin-only görünürlük
+  const role = currentUserData?.rol;
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = role === 'admin' ? '' : 'none';
+  });
+}
+
+function renderBinaSayac(n) {
+  document.getElementById('stat-bina').textContent = n;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RENDER — BAKIMLAR
+═══════════════════════════════════════════════════════════════ */
+function renderBakimlar(data) {
+  const grid = document.getElementById('bakimGrid');
+  const list = document.getElementById('bakimDashList');
+
+  if (!data.length) {
+    grid.innerHTML = `<div style="padding:28px;text-align:center;color:#475569;font-size:13px;grid-column:1/-1;">Henüz bakım kaydı yok.</div>`;
+    list.innerHTML = `<div style="padding:16px 18px;font-size:12px;color:#475569;">Yaklaşan bakım yok.</div>`;
+    return;
+  }
+
+  const colorMap = { bekliyor:'#F59E0B', tamamlandi:'#10B981', iptal:'#EF4444' };
+  const labelMap = { bekliyor:'Bekliyor', tamamlandi:'Tamamlandı', iptal:'İptal' };
+  const badgeMap = { bekliyor:'badge-warn-sm', tamamlandi:'badge-ok-sm', iptal:'badge-err-sm' };
+
+  const tarihStr = ts => {
+    if (!ts) return '—';
+    if (ts.toDate) return ts.toDate().toLocaleDateString('tr-TR');
+    return ts;
+  };
+
+  grid.innerHTML = data.map(b => `
+    <div class="card" style="padding:16px;border-left:3px solid ${colorMap[b.durum]||'#475569'};">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <span class="sbadge ${badgeMap[b.durum]||''}">${labelMap[b.durum]||b.durum}</span>
+        <span style="font-size:9px;color:#334155;font-family:monospace;">${b.id.slice(0,8).toUpperCase()}</span>
+      </div>
+      <h4 style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:3px;">${b.bina}</h4>
+      <p style="font-size:11px;color:#475569;margin-bottom:10px;">${b.kabin||''} · ${b.tip||''}</p>
+      <div style="font-size:11px;color:#64748B;margin-bottom:3px;">📅 ${tarihStr(b.tarih)}</div>
+      <div style="font-size:11px;color:#64748B;margin-bottom:12px;">👤 ${b.teknisyen||'—'}</div>
+      <div style="display:flex;gap:8px;">
+        ${b.durum==='bekliyor'?`<button onclick="completeBakim('${b.id}')" class="btn-sm" style="flex:1;padding:7px;font-size:11px;">✓ Tamamla</button>`:''}
+        <button onclick="deleteBakim('${b.id}')" class="btn-ghost admin-only" style="flex:1;padding:7px;font-size:11px;">Sil</button>
+      </div>
+    </div>`).join('');
+
+  // Dashboard listesi (ilk 4 bekleyen)
+  const bekleyenler = data.filter(b => b.durum === 'bekliyor').slice(0, 4);
+  list.innerHTML = bekleyenler.length
+    ? bekleyenler.map(b => `
+        <div style="padding:11px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.4);">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;color:#E2E8F0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${b.bina}</div>
+            <div style="font-size:11px;color:#475569;margin-top:1px;">${b.tip||''}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div style="font-size:11px;font-weight:600;color:#CBD5E1;">${tarihStr(b.tarih)}</div>
+            <span class="sbadge badge-warn-sm" style="margin-top:3px;display:inline-block;">Bekliyor</span>
+          </div>
+        </div>`).join('')
+    : `<div style="padding:16px 18px;font-size:12px;color:#475569;">Tüm bakımlar güncel ✓</div>`;
+
+  // Güncelle admin-only
+  const role = currentUserData?.rol;
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = role === 'admin' ? '' : 'none';
+  });
+}
+
+function renderBekleyenSayac(n) {
+  document.getElementById('stat-bakim').textContent = n;
+  const badge = document.getElementById('badge-bakimlar');
+  if (badge && n > 0) { badge.textContent = n; badge.className = 'nav-badge badge-warn-sm'; badge.style.display = 'inline'; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RENDER — ARIZALAR
+═══════════════════════════════════════════════════════════════ */
+function renderArizalar(data) {
+  const list = document.getElementById('arizaList');
+  if (!data.length) {
+    list.innerHTML = `<div style="padding:28px;text-align:center;color:#475569;font-size:13px;">Kayıtlı arıza yok.</div>`;
+    return;
+  }
+  const tarihStr = ts => {
+    if (!ts) return '—';
+    if (ts.toDate) return ts.toDate().toLocaleString('tr-TR');
+    return ts;
+  };
+  list.innerHTML = data.map(a => `
+    <div class="card" style="padding:16px 18px;border-left:3px solid ${a.durum==='acik'?'#EF4444':'#10B981'};opacity:${a.durum==='kapali'?.7:1};">
+      <div style="display:flex;align-items:start;gap:12px;">
+        <div style="width:38px;height:38px;border-radius:10px;background:${a.durum==='acik'?'rgba(239,68,68,.1)':'rgba(16,185,129,.1)'};display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:none;stroke:${a.durum==='acik'?'#EF4444':'#10B981'};stroke-width:2;stroke-linecap:round;">
+            ${a.durum==='acik'
+              ? '<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>'
+              : '<path d="M5 13l4 4L19 7"/>'}
+          </svg>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+            <span style="font-size:13px;font-weight:700;color:#E2E8F0;">${a.bina} ${a.kabin?'— '+a.kabin:''}</span>
+            <span class="sbadge ${a.durum==='acik'?'badge-err-sm':'badge-ok-sm'}">${a.durum==='acik'?'Açık':'Çözüldü'}</span>
+          </div>
+          <p style="font-size:12px;color:#64748B;margin-bottom:5px;">${a.aciklama||'—'}</p>
+          <div style="font-size:10px;color:#334155;font-family:monospace;">${tarihStr(a.tarih)} · ${a.tip||''}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;">
+          ${a.durum==='acik'?`<button onclick="closeAriza('${a.id}')" class="btn-sm" style="padding:5px 10px;font-size:10px;">✓ Çözüldü</button>`:''}
+          <button onclick="deleteAriza('${a.id}')" class="btn-ghost admin-only" style="padding:5px 10px;font-size:10px;">Sil</button>
+        </div>
+      </div>
+    </div>`).join('');
+
+  const role = currentUserData?.rol;
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = role === 'admin' ? '' : 'none';
+  });
+}
+
+function renderAcikArizaSayac(n) {
+  document.getElementById('stat-ariza').textContent = n;
+  const badge = document.getElementById('badge-arizalar');
+  if (badge && n > 0) { badge.textContent = n; badge.className = 'nav-badge badge-err-sm'; badge.style.display = 'inline'; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RENDER — KULLANICILAR
+═══════════════════════════════════════════════════════════════ */
+function renderKullanicilar(data) {
+  const tbody = document.getElementById('kullaniciTableBody');
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="padding:28px;text-align:center;color:#475569;">Kullanıcı bulunamadı.</td></tr>`;
+    return;
+  }
+  const rolLabel = { admin:'Yönetici', teknisyen:'Teknisyen', bina:'Bina Yöneticisi' };
+  const rolBadge = { admin:'badge-info-sm', teknisyen:'badge-warn-sm', bina:'badge-ok-sm' };
+  tbody.innerHTML = data.map(u => {
+    const avatarBg = u.kurucu ? 'linear-gradient(135deg,#F59E0B,#EF4444)' : 'linear-gradient(135deg,#00ADB5,#0891B2)';
+    const kurucuBadge = u.kurucu ? '<span style="margin-left:6px;font-size:9px;background:rgba(245,158,11,.15);color:#F59E0B;border:1px solid rgba(245,158,11,.25);padding:1px 6px;border-radius:4px;font-weight:700;">🔒 KURUCU</span>' : '';
+    const actionCell = u.kurucu
+      ? '<span style="font-size:10px;color:#F59E0B;font-family:monospace;">Korumalı</span>'
+      : `<button onclick="deleteKullanici('${u.id}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>`;
+    return `
+    <tr class="tbl-row">
+      <td style="padding:12px 18px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:30px;height:30px;border-radius:8px;background:${avatarBg};display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800;">${u.initials||'??'}</div>
+          <span style="font-size:13px;font-weight:600;color:#E2E8F0;">${u.ad}${kurucuBadge}</span>
+        </div>
+      </td>
+      <td style="padding:12px;font-size:12px;color:#64748B;font-family:monospace;">${u.email||'—'}</td>
+      <td style="padding:12px;"><span class="sbadge ${rolBadge[u.rol]||''}">${rolLabel[u.rol]||u.rol}</span></td>
+      <td style="padding:12px;font-size:11px;color:#64748B;">${u.bina||'—'}</td>
+      <td style="padding:12px;">${actionCell}</td>
+    </tr>`;
+  }).join('');
+  const role = currentUserData?.rol;
+  document.querySelectorAll('.admin-only').forEach(el => { el.style.display = role === 'admin' ? '' : 'none'; });
+}
+
+window.deleteKullanici = async (id) => {
+  const snap = await getDoc(doc(db, 'kullanicilar', id));
+  if (snap.exists() && snap.data().kurucu) {
+    alert('Kurucu hesabı silinemez!');
+    return;
+  }
+  if (!confirm('Bu kullanıcıyı silmek istediğinizden emin misiniz?')) return;
+  await deleteDoc(doc(db, 'kullanicilar', id));
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   FIRESTORE CRUD — BİNA
+═══════════════════════════════════════════════════════════════ */
+window.saveBina = async () => {
+  const ad      = document.getElementById('f-bina-ad').value.trim();
+  const adres   = document.getElementById('f-bina-adres').value.trim();
+  const asansor = parseInt(document.getElementById('f-bina-asansor').value) || 0;
+  const sozlesme= document.getElementById('f-bina-sozlesme').value;
+  const durum   = document.getElementById('f-bina-durum').value;
+  const editId  = document.getElementById('f-bina-editId').value;
+
+  if (!ad) { alert('Bina adı zorunludur.'); return; }
+
+  const data = { ad, adres, asansorSayisi: asansor, sozlesme, durum, guncellendi: serverTimestamp() };
+  try {
+    if (editId) {
+      await updateDoc(doc(db, 'binalar', editId), data);
+    } else {
+      data.olusturuldu = serverTimestamp();
+      await addDoc(collection(db, 'binalar'), data);
+    }
+    closeModal('mBina');
+    resetBinaForm();
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.editBina = async (id) => {
+  const snap = await getDoc(doc(db, 'binalar', id));
+  if (!snap.exists()) return;
+  const b = snap.data();
+  document.getElementById('f-bina-ad').value       = b.ad || '';
+  document.getElementById('f-bina-adres').value    = b.adres || '';
+  document.getElementById('f-bina-asansor').value  = b.asansorSayisi || '';
+  document.getElementById('f-bina-sozlesme').value = b.sozlesme || '';
+  document.getElementById('f-bina-durum').value    = b.durum || 'ok';
+  document.getElementById('f-bina-editId').value   = id;
+  document.getElementById('mBinaTitle').textContent = 'Bina Düzenle';
+  openModal('mBina');
+};
+
+window.deleteBina = async (id, ad) => {
+  if (!confirm(`"${ad}" binasını silmek istediğinizden emin misiniz?`)) return;
+  await deleteDoc(doc(db, 'binalar', id));
+};
+
+function resetBinaForm() {
+  ['f-bina-ad','f-bina-adres','f-bina-asansor'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-bina-editId').value = '';
+  document.getElementById('mBinaTitle').textContent = 'Yeni Bina Ekle';
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FIRESTORE CRUD — BAKIM
+═══════════════════════════════════════════════════════════════ */
+window.saveBakim = async () => {
+  const bina     = document.getElementById('f-bakim-bina').value.trim();
+  const kabin    = document.getElementById('f-bakim-kabin').value.trim();
+  const tip      = document.getElementById('f-bakim-tip').value;
+  const tarih    = document.getElementById('f-bakim-tarih').value;
+  const teknik   = document.getElementById('f-bakim-teknik').value.trim();
+  const notlar   = document.getElementById('f-bakim-notlar').value.trim();
+
+  if (!bina || !tarih) { alert('Bina ve tarih zorunludur.'); return; }
+
+  try {
+    await addDoc(collection(db, 'bakimlar'), {
+      bina, kabin, tip, tarih, teknisyen: teknik, notlar,
+      durum: 'bekliyor', olusturuldu: serverTimestamp()
+    });
+    closeModal('mBakim');
+    document.getElementById('f-bakim-bina').value = '';
+    document.getElementById('f-bakim-kabin').value = '';
+    document.getElementById('f-bakim-tarih').value = '';
+    document.getElementById('f-bakim-teknik').value = '';
+    document.getElementById('f-bakim-notlar').value = '';
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.completeBakim = async (id) => {
+  await updateDoc(doc(db, 'bakimlar', id), { durum: 'tamamlandi', tamamlanmaTarihi: serverTimestamp() });
+};
+
+window.deleteBakim = async (id) => {
+  if (!confirm('Bu bakım kaydını silmek istediğinizden emin misiniz?')) return;
+  await deleteDoc(doc(db, 'bakimlar', id));
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   FIRESTORE CRUD — ARIZA
+═══════════════════════════════════════════════════════════════ */
+window.saveAriza = async () => {
+  const bina     = document.getElementById('f-ariza-bina').value.trim();
+  const kabin    = document.getElementById('f-ariza-kabin').value.trim();
+  const tip      = document.getElementById('f-ariza-tip').value;
+  const aciklama = document.getElementById('f-ariza-aciklama').value.trim();
+
+  if (!bina) { alert('Bina zorunludur.'); return; }
+
+  try {
+    await addDoc(collection(db, 'arizalar'), {
+      bina, kabin, tip, aciklama, durum: 'acik',
+      tarih: serverTimestamp(), bildiren: currentUserData?.ad || '—'
+    });
+    closeModal('mAriza');
+    document.getElementById('f-ariza-bina').value = '';
+    document.getElementById('f-ariza-kabin').value = '';
+    document.getElementById('f-ariza-aciklama').value = '';
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.closeAriza = async (id) => {
+  await updateDoc(doc(db, 'arizalar', id), { durum: 'kapali', cozumTarihi: serverTimestamp() });
+};
+
+window.deleteAriza = async (id) => {
+  if (!confirm('Bu arıza kaydını silmek istediğinizden emin misiniz?')) return;
+  await deleteDoc(doc(db, 'arizalar', id));
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   KULLANICI OLUŞTUR (Admin paneli üzerinden)
+═══════════════════════════════════════════════════════════════ */
+window.saveKullanici = async () => {
+  // Not: Firebase Auth üzerinden kullanıcı oluşturmak için
+  // Firebase Admin SDK (sunucu tarafı) gerekir.
+  // Burada sadece Firestore'a profil kaydediyoruz.
+  // Kullanıcıyı Authentication konsolundan ekleyip UID'yi almanız gerekir.
+  alert('Yeni kullanıcı eklemek için:\n1. Firebase Console → Authentication → Add user\n2. Oluşturulan UID ile Firestore → kullanicilar koleksiyonuna profil ekleyin.\n\nBu işlem güvenlik gereği sunucu tarafında yapılmalıdır.');
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   MODAL & SIDEBAR HELPERS
+═══════════════════════════════════════════════════════════════ */
+window.openModal  = (id) => { document.getElementById('modal-'+id).classList.add('open'); };
+window.closeModal = (id) => { document.getElementById('modal-'+id).classList.remove('open'); };
+window.openMobileSidebar  = () => { document.getElementById('dbSidebar').classList.add('open'); document.getElementById('sidebarOverlay').style.display='block'; };
+window.closeMobileSidebar = () => { document.getElementById('dbSidebar').classList.remove('open'); document.getElementById('sidebarOverlay').style.display='none'; };
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-wrap.open').forEach(m => m.classList.remove('open'));
+    closeLogin();
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   İLK KURULUM: Firestore'a örnek kullanıcı profili yaz
+   (Sadece ilk açılışta, eğer koleksiyon boşsa)
+═══════════════════════════════════════════════════════════════ */
+window.setupInitialAdmin = async () => {
+  // Bu fonksiyon sadece ilk kurulum için.
+  // Authentication'da admin kullanıcısı oluşturduktan sonra
+  // bu fonksiyonu çağırın: setupInitialAdmin()
+  alert('Kurulum talimatları için konsola bakın.');
+  console.log(`
+=== İLK KURULUM ===
+1. Firebase Console → Authentication → Add user
+   Email: admin@aselasansor.com  Şifre: (güçlü şifre)
+2. Oluşan UID'yi kopyalayın
+3. Firestore → kullanicilar koleksiyonu → Yeni belge
+   Document ID: (kopyaladığınız UID)
+   Fields:
+     ad: "Halis Özdemir"
+     email: "admin@aselasansor.com"
+     rol: "admin"
+     initials: "HÖ"
+     rolLabel: "Yönetici"
+     bina: null
+
+Teknisyen için:
+   rol: "teknisyen"
+   rolLabel: "Teknisyen"
+
+Bina yöneticisi için:
+   rol: "bina"
+   rolLabel: "Bina Yöneticisi"
+   bina: "Tuna Apartmanı"  (hangi binaysa)
+`);
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   CONTACT FORM
+═══════════════════════════════════════════════════════════════ */
+window.submitContactForm = async (btn) => {
+  const ad    = document.getElementById('c-ad').value.trim();
+  const tel   = document.getElementById('c-tel').value.trim();
+  const hizmet= document.getElementById('c-hizmet').value;
+  const not   = document.getElementById('c-not').value.trim();
+  if (!ad || !tel) { alert('Ad ve telefon zorunludur.'); return; }
+  btn.textContent = 'Gönderiliyor...'; btn.disabled = true;
+  try {
+    await addDoc(collection(db, 'talepler'), {
+      ad, tel, hizmet, not, tarih: serverTimestamp(), durum: 'yeni'
+    });
+    document.getElementById('contactSuccess').style.display = 'block';
+    btn.style.display = 'none';
+  } catch(e) {
+    btn.textContent = 'Proje Teklifi Gönder'; btn.disabled = false;
+    alert('Hata: ' + e.message);
+  }
+};
+</script>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; background: #fff; color: #0F172A; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* ── LOGIN OVERLAY ────────────────────────────────────────── */
+#loginOverlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(8,12,20,0.88);
+  backdrop-filter: blur(14px);
+  display: none; align-items: center; justify-content: center; padding: 16px;
+}
+#loginOverlay.open { display: flex; }
+.login-card {
+  background: #0D1629; border: 1px solid rgba(0,173,181,0.18);
+  border-radius: 18px; width: 100%; max-width: 400px;
+  box-shadow: 0 40px 100px rgba(0,0,0,.7);
+  animation: popIn .22s cubic-bezier(.34,1.56,.64,1);
+}
+@keyframes popIn { from{opacity:0;transform:scale(.94) translateY(12px)} to{opacity:1;transform:scale(1)} }
+
+.l-input {
+  background: rgba(8,12,20,.8); border: 1px solid rgba(51,65,85,.8);
+  color: #E2E8F0; width: 100%; padding: 11px 14px; border-radius: 10px;
+  font-size: 14px; font-family: 'Inter', sans-serif;
+  transition: border-color .2s, box-shadow .2s;
+}
+.l-input:focus { outline: none; border-color: #00ADB5; box-shadow: 0 0 0 3px rgba(0,173,181,.12); }
+.l-input::placeholder { color: #475569; }
+.btn-login {
+  background: linear-gradient(135deg,#00ADB5,#0891B2);
+  color: #fff; width: 100%; padding: 12px; border: none; border-radius: 10px;
+  font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  cursor: pointer; transition: box-shadow .2s, transform .15s; display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.btn-login:hover:not(:disabled) { box-shadow: 0 0 24px rgba(0,173,181,.35); transform: translateY(-1px); }
+.btn-login:disabled { opacity: .7; cursor: not-allowed; }
+
+/* ── SPINNER ─────────────────────────────────────────────── */
+.spinner {
+  width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.3);
+  border-top-color: #fff; border-radius: 50%;
+  animation: spin .6s linear infinite; display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── DASHBOARD ───────────────────────────────────────────── */
+#dashboard { display: none; position: fixed; inset: 0; z-index: 9998; }
+#dashboard.open { display: flex; }
+.db-body { background: #080C14; color: #E2E8F0; display: flex; width: 100%; height: 100%; overflow: hidden; }
+
+.db-sidebar {
+  width: 248px; flex-shrink: 0; background: #0A0F1E;
+  border-right: 1px solid rgba(30,41,59,.8);
+  display: flex; flex-direction: column; transition: transform .28s;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border-radius: 8px; margin-bottom: 2px; font-size: 13px; font-weight: 500;
+  color: #64748B; cursor: pointer; border: 1px solid transparent; transition: all .15s;
+}
+.nav-item:hover { background: rgba(0,173,181,.06); color: #CBD5E1; border-color: rgba(0,173,181,.1); }
+.nav-item.active { background: rgba(0,173,181,.1); color: #00ADB5; border-color: rgba(0,173,181,.2); }
+.nav-badge { margin-left: auto; font-size: 10px; font-family: 'JetBrains Mono',monospace; padding: 2px 6px; border-radius: 4px; }
+.badge-warn-sm { background: rgba(245,158,11,.12); color: #F59E0B; border: 1px solid rgba(245,158,11,.2); }
+.badge-err-sm  { background: rgba(239,68,68,.12);  color: #EF4444;  border: 1px solid rgba(239,68,68,.2); }
+.badge-ok-sm   { background: rgba(16,185,129,.12); color: #10B981;  border: 1px solid rgba(16,185,129,.2); }
+.badge-info-sm { background: rgba(0,173,181,.12);  color: #00ADB5;  border: 1px solid rgba(0,173,181,.2); }
+
+.db-main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.db-topbar { flex-shrink: 0; background: rgba(10,15,30,.95); border-bottom: 1px solid rgba(30,41,59,.8); padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; backdrop-filter: blur(10px); }
+.db-content { flex: 1; overflow-y: auto; padding: 20px; }
+.db-content::-webkit-scrollbar { width: 4px; }
+.db-content::-webkit-scrollbar-thumb { background: #1E293B; border-radius: 4px; }
+
+.card {
+  background: #0A0F1E; border: 1px solid rgba(30,41,59,.8); border-radius: 12px;
+  transition: border-color .2s, transform .2s, box-shadow .2s; position: relative; overflow: hidden;
+}
+.card::before {
+  content:''; position:absolute; top:0; left:0; right:0; height:2px;
+  background: linear-gradient(90deg,transparent,#00ADB5,transparent);
+  opacity:0; transition: opacity .2s;
+}
+.card:hover::before { opacity: 1; }
+.card:hover { border-color: rgba(0,173,181,.18); transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+
+.sbadge { font-size: 10px; padding: 2px 8px; border-radius: 20px; font-family: 'JetBrains Mono',monospace; display: inline-block; }
+.tbl-row { border-bottom: 1px solid rgba(30,41,59,.5); transition: background .12s; }
+.tbl-row:hover { background: rgba(0,173,181,.03); }
+.tbl-row:last-child { border-bottom: none; }
+.btn-sm { background: linear-gradient(135deg,#00ADB5,#0891B2); color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:12px; font-weight:700; cursor:pointer; transition: box-shadow .2s, transform .15s; }
+.btn-sm:hover { box-shadow: 0 0 16px rgba(0,173,181,.3); transform: translateY(-1px); }
+.btn-ghost { background: rgba(30,41,59,.8); color:#94A3B8; border:none; padding:8px 14px; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; transition:background .15s; }
+.btn-ghost:hover { background: rgba(30,41,59,1); color:#CBD5E1; }
+.db-page { display: none; }
+.db-page.active { display: block; }
+
+/* MODAL */
+.modal-wrap { position:fixed; inset:0; background:rgba(0,0,0,.7); backdrop-filter:blur(4px); z-index:10000; display:none; align-items:center; justify-content:center; padding:16px; }
+.modal-wrap.open { display:flex; }
+.modal-box { background:#0D1629; border:1px solid rgba(0,173,181,.2); border-radius:16px; width:100%; max-width:500px; max-height:88vh; overflow-y:auto; box-shadow:0 40px 80px rgba(0,0,0,.6); animation:popIn .2s ease; }
+.modal-box::-webkit-scrollbar { width:4px; }
+.modal-box::-webkit-scrollbar-thumb { background:#1E293B; border-radius:4px; }
+.db-input { background:rgba(8,12,20,.8); border:1px solid rgba(51,65,85,.8); color:#E2E8F0; width:100%; padding:10px 14px; border-radius:8px; font-size:13px; transition:border-color .2s; font-family:'Inter',sans-serif; }
+.db-input:focus { outline:none; border-color:#00ADB5; box-shadow:0 0 0 3px rgba(0,173,181,.1); }
+.db-input::placeholder { color: #475569; }
+
+/* SITE */
+.site-input { width:100%;padding:11px 14px;border:1px solid #E2E8F0;border-radius:8px;font-size:14px;color:#0F172A;background:#fff;transition:border-color .2s;font-family:'Inter',sans-serif; }
+.site-input:focus { outline:none; border-color:#00ADB5; }
+
+/* Mobile */
+#sidebarOverlay { display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:49; }
+@media(max-width:768px){
+  .db-sidebar{position:absolute!important;height:100%!important;z-index:50!important;transform:translateX(-100%)!important;}
+  .db-sidebar.open{transform:translateX(0)!important;}
+  #mobileMenuBtn{display:flex!important;}
+  .hidden-sm{display:none!important;}
+  .hero-grid{grid-template-columns:1fr!important;}
+}
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════
+     PUBLIC SITE
+════════════════════════════════════ -->
+<div id="siteContent">
+
+<!-- Floating WA -->
+<a href="https://wa.me/905334977317?text=Merhaba,%20AS-EL%20Asansör%20hakkında%20bilgi%20almak%20istiyorum."
+   target="_blank"
+   style="position:fixed;bottom:24px;right:24px;z-index:998;width:54px;height:54px;background:#22C55E;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 20px rgba(34,197,94,.4);transition:transform .2s;"
+   onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+  <svg viewBox="0 0 24 24" style="width:26px;height:26px;fill:#fff"><path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.513 2.266 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.724-1.457L0 24zm6.59-4.846c1.6.95 3.188 1.449 4.825 1.451 5.436 0 9.86-4.42 9.863-9.864.001-2.637-1.03-5.115-2.905-6.99-1.875-1.875-4.355-2.907-6.992-2.908-5.442 0-9.866 4.42-9.869 9.865-.001 1.713.457 3.39 1.323 4.877l-.994 3.634 3.739-.981zM17.487 14.39c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/></svg>
+</a>
+
+<!-- HEADER -->
+<header style="position:sticky;top:0;z-index:50;background:rgba(255,255,255,.97);backdrop-filter:blur(12px);border-bottom:1px solid #E2E8F0;">
+  <div style="max-width:1200px;margin:0 auto;padding:0 20px;height:76px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
+    <a href="#" style="display:flex;align-items:center;height:48px;text-decoration:none;flex-shrink:0;">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 550 180" style="height:100%;width:auto;">
+        <g><rect x="55" y="55" width="14" height="70" rx="4" fill="#00ADB5"/><rect x="75" y="35" width="16" height="110" rx="4" fill="#0F172A"/><rect x="97" y="55" width="14" height="70" rx="4" fill="#00ADB5"/><path d="M 83 43 L 78 48 L 88 48 Z" fill="#fff"/><rect x="81" y="48" width="4" height="10" fill="#fff"/><path d="M 83 127 L 78 122 L 88 122 Z" fill="#fff"/><rect x="81" y="112" width="4" height="10" fill="#fff"/></g>
+        <g stroke-linecap="round" stroke-linejoin="round"><path d="M 170 90 L 190 50 L 210 90" stroke="#0F172A" stroke-width="7.5" fill="none"/><path d="M 250 54 L 225 54 L 225 70 L 250 70 L 250 86 L 225 86" stroke="#0F172A" stroke-width="7.5" fill="none"/><path d="M 265 70 L 275 70" stroke="#00ADB5" stroke-width="7.5" fill="none"/><path d="M 315 54 L 290 54 L 290 86 L 315 86 M 290 70 L 310 70" stroke="#0F172A" stroke-width="7.5" fill="none"/><path d="M 330 54 L 330 86 L 355 86" stroke="#0F172A" stroke-width="7.5" fill="none"/></g>
+        <text x="170" y="122" font-family="system-ui,sans-serif" font-weight="600" font-size="14" fill="#00ADB5" letter-spacing="8.5">ASANSÖR</text>
+      </svg>
+    </a>
+    <nav style="display:flex;gap:28px;" class="hidden-sm">
+      <a href="#" style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#00ADB5;text-decoration:none;">Ana Sayfa</a>
+      <a href="#tarihce" style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#64748B;text-decoration:none;">Kurucumuz</a>
+      <a href="#hizmetler" style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#64748B;text-decoration:none;">Hizmetler</a>
+      <a href="#iletisim" style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#64748B;text-decoration:none;">İletişim</a>
+    </nav>
+    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+      <button onclick="openLogin()" style="display:flex;align-items:center;gap:7px;padding:9px 18px;background:#0F172A;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;transition:background .2s;" onmouseover="this.style.background='#00ADB5'" onmouseout="this.style.background='#0F172A'">
+        <svg style="width:14px;height:14px" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
+        Panel Girişi
+      </button>
+      <a href="https://wa.me/905334977317" target="_blank" class="hidden-sm" style="padding:9px 18px;background:#22C55E;color:#fff;border-radius:8px;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;text-decoration:none;">WhatsApp</a>
+    </div>
+  </div>
+</header>
+
+<!-- HERO -->
+<section style="background:#F8FAFC;padding:72px 20px;">
+  <div style="max-width:1200px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;" class="hero-grid">
+    <div>
+      <span style="display:inline-flex;padding:6px 14px;border-radius:20px;background:rgba(0,173,181,.1);color:#00ADB5;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:18px;">1989'dan Beri Sektörün Çekirdeğinden</span>
+      <h1 style="font-size:clamp(30px,5vw,54px);font-weight:900;color:#0F172A;line-height:1.08;letter-spacing:-.03em;margin-bottom:18px;">Güven ve Tecrübeyle<br><span style="color:#00ADB5;">Binalarınızı<br>Yükseltiyoruz</span></h1>
+      <p style="color:#64748B;font-size:16px;line-height:1.75;margin-bottom:28px;">AS-EL Asansör, kurucumuz Halis ÖZDEMİR liderliğinde, yarım asra yaklaşan saha deneyimi ve sarsılmaz mühendislik ahlakıyla projelerinize hayat vermektedir.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <a href="#tarihce" style="padding:13px 26px;background:#0F172A;color:#fff;border-radius:8px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;text-decoration:none;transition:background .2s;" onmouseover="this.style.background='#00ADB5'" onmouseout="this.style.background='#0F172A'">Hikayemiz</a>
+        <a href="https://wa.me/905334977317" target="_blank" style="padding:13px 26px;background:#22C55E;color:#fff;border-radius:8px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;text-decoration:none;">WhatsApp</a>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:center;" class="hidden-sm">
+      <div style="width:320px;background:#fff;border:1px solid #E2E8F0;border-radius:20px;padding:32px;box-shadow:0 4px 24px rgba(0,0,0,.06);">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#94A3B8;font-family:monospace;margin-bottom:16px;"><span>MARKA TESCİL</span><span style="color:#00ADB5;font-weight:700;">EST. 1989</span></div>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 550 180" style="width:100%;">
+          <g><rect x="55" y="55" width="14" height="70" rx="4" fill="#00ADB5"/><rect x="75" y="35" width="16" height="110" rx="4" fill="#0F172A"/><rect x="97" y="55" width="14" height="70" rx="4" fill="#00ADB5"/><path d="M 83 43 L 78 48 L 88 48 Z" fill="#fff"/><rect x="81" y="48" width="4" height="10" fill="#fff"/><path d="M 83 127 L 78 122 L 88 122 Z" fill="#fff"/><rect x="81" y="112" width="4" height="10" fill="#fff"/></g>
+          <g stroke-linecap="round" stroke-linejoin="round"><path d="M 170 90 L 190 50 L 210 90" stroke="#0F172A" stroke-width="7.5" fill="none"/><path d="M 250 54 L 225 54 L 225 70 L 250 70 L 250 86 L 225 86" stroke="#0F172A" stroke-width="7.5" fill="none"/><path d="M 265 70 L 275 70" stroke="#00ADB5" stroke-width="7.5" fill="none"/><path d="M 315 54 L 290 54 L 290 86 L 315 86 M 290 70 L 310 70" stroke="#0F172A" stroke-width="7.5" fill="none"/><path d="M 330 54 L 330 86 L 355 86" stroke="#0F172A" stroke-width="7.5" fill="none"/></g>
+          <text x="170" y="122" font-family="system-ui,sans-serif" font-weight="600" font-size="14" fill="#00ADB5" letter-spacing="8.5">ASANSÖR</text>
+        </svg>
+        <div style="text-align:center;border-top:1px solid #F1F5F9;padding-top:18px;margin-top:18px;">
+          <p style="font-size:13px;font-weight:700;color:#334155;">Kurucu: Halis ÖZDEMİR</p>
+          <p style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:.12em;margin-top:4px;">1989'dan Beri Sektörde</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TARIHCE -->
+<section id="tarihce" style="padding:72px 20px;background:#fff;">
+  <div style="max-width:1200px;margin:0 auto;display:grid;grid-template-columns:1fr 1.4fr;gap:56px;align-items:center;" class="hero-grid">
+    <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:20px;padding:32px;">
+      <span style="font-size:10px;font-weight:700;color:#00ADB5;text-transform:uppercase;letter-spacing:.12em;">Founder Profile</span>
+      <h3 style="font-size:28px;font-weight:900;color:#0F172A;margin:10px 0 4px;">Halis ÖZDEMİR</h3>
+      <p style="font-size:11px;font-weight:600;color:#00ADB5;text-transform:uppercase;letter-spacing:.1em;margin-bottom:20px;">Kurucu Genel Müdür</p>
+      <p style="font-size:14px;color:#64748B;font-style:italic;line-height:1.7;border-top:1px solid #E2E8F0;padding-top:18px;">"Bir asansörün kalitesi, ardındaki mühendislik hassasiyeti ve montajı yapan ustanın meslek ahlakı kadardır."</p>
+      <div style="border-top:1px solid #E2E8F0;padding-top:14px;margin-top:18px;display:flex;justify-content:space-between;">
+        <span style="font-size:10px;color:#94A3B8;font-family:monospace;">DENEYİM: 37 YIL</span>
+        <span style="font-size:11px;font-weight:700;color:#22C55E;text-transform:uppercase;">Aktif Görevde</span>
+      </div>
+    </div>
+    <div>
+      <span style="font-size:10px;font-weight:700;color:#00ADB5;text-transform:uppercase;letter-spacing:.12em;">Biyografi</span>
+      <h2 style="font-size:clamp(22px,3vw,34px);font-weight:900;color:#0F172A;margin:10px 0 18px;letter-spacing:-.02em;">Çekirdekten Yetişen Yarım Asırlık Deneyim</h2>
+      <p style="color:#64748B;font-size:15px;line-height:1.8;margin-bottom:14px;">AS-EL Asansör'ün temelleri, kurucumuz Halis ÖZDEMİR'in 1989 yılında dikey taşımacılık sektörüne adım atmasıyla atılmıştır. Sektörün en alt kademesinden yetişen ÖZDEMİR, asansör mekaniği, elektronik kumanda sistemleri ve proje yönetimi alanlarında benzersiz uzmanlık edinmiştir.</p>
+      <p style="color:#64748B;font-size:15px;line-height:1.8;">37 yılı aşkın sürede yüzlerce başarılı projeyi bizzat yöneten Halis ÖZDEMİR, "güvenlikte sıfır taviz" ve "şeffaf mühendislik" ilkeleriyle AS-EL'i sektörün güvenilir markalarından biri haline getirmiştir.</p>
+    </div>
+  </div>
+</section>
+
+<!-- HİZMETLER -->
+<section id="hizmetler" style="padding:72px 20px;background:#F8FAFC;border-top:1px solid #E2E8F0;border-bottom:1px solid #E2E8F0;">
+  <div style="max-width:1200px;margin:0 auto;">
+    <div style="text-align:center;margin-bottom:48px;">
+      <span style="font-size:10px;font-weight:700;color:#00ADB5;text-transform:uppercase;letter-spacing:.12em;">Hizmet Alanlarımız</span>
+      <h2 style="font-size:clamp(24px,3.5vw,38px);font-weight:900;color:#0F172A;margin:10px 0 10px;letter-spacing:-.02em;">Uluslararası Normlarda Mühendislik</h2>
+      <p style="color:#64748B;font-size:14px;">EN 81-20/50 güvenlik kurallarına %100 uygun hizmetler.</p>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;">
+      <div style="background:#fff;border:1px solid #E2E8F0;border-radius:14px;padding:28px;transition:box-shadow .2s,transform .2s;" onmouseover="this.style.boxShadow='0 8px 28px rgba(0,0,0,.08)';this.style.transform='translateY(-2px)'" onmouseout="this.style.boxShadow='none';this.style.transform='none'">
+        <div style="width:44px;height:44px;border-radius:10px;background:#F8FAFC;border:1px solid #E2E8F0;display:flex;align-items:center;justify-content:center;margin-bottom:16px;"><svg viewBox="0 0 64 64" style="width:26px;height:26px;"><line x1="12" y1="52" x2="52" y2="52" stroke="#00ADB5" stroke-width="3"/><rect x="18" y="18" width="28" height="28" rx="4" stroke="#0F172A" stroke-width="3" fill="none"/><path d="M 32 38 L 32 24 M 27 29 L 32 24 L 37 29" stroke="#00ADB5" stroke-width="3" fill="none"/></svg></div>
+        <h3 style="font-size:15px;font-weight:800;color:#0F172A;margin-bottom:8px;">Montaj ve Projelendirme</h3>
+        <p style="color:#64748B;font-size:13px;line-height:1.7;">Mimari yapı analiz edilerek, trafik hesaplarına uygun, sessiz ve yüksek güvenlik standartlarında kurulum.</p>
+      </div>
+      <div style="background:#fff;border:1px solid #E2E8F0;border-radius:14px;padding:28px;transition:box-shadow .2s,transform .2s;" onmouseover="this.style.boxShadow='0 8px 28px rgba(0,0,0,.08)';this.style.transform='translateY(-2px)'" onmouseout="this.style.boxShadow='none';this.style.transform='none'">
+        <div style="width:44px;height:44px;border-radius:10px;background:#F8FAFC;border:1px solid #E2E8F0;display:flex;align-items:center;justify-content:center;margin-bottom:16px;"><svg viewBox="0 0 64 64" style="width:26px;height:26px;"><rect x="16" y="16" width="32" height="32" rx="4" stroke="#0F172A" stroke-width="3" fill="none"/><path d="M 46 18 L 41 23 C 39 21,37 21,35 23 C 33 25,33 28,35 30 L 22 43 C 20 45,20 48,22 50 C 24 52,27 52,29 50 L 42 37 C 44 39,47 39,49 37 C 51 35,51 32,49 30 L 54 25" stroke="#00ADB5" stroke-width="3" fill="none"/></svg></div>
+        <h3 style="font-size:15px;font-weight:800;color:#0F172A;margin-bottom:8px;">Tescilli Periyodik Bakım</h3>
+        <p style="color:#64748B;font-size:13px;line-height:1.7;">Yasal yükümlülüklerin korunması için her ay yapılan tescilli ve belgelenmiş servis hizmetleri.</p>
+      </div>
+      <div style="background:#fff;border:1px solid #E2E8F0;border-radius:14px;padding:28px;transition:box-shadow .2s,transform .2s;" onmouseover="this.style.boxShadow='0 8px 28px rgba(0,0,0,.08)';this.style.transform='translateY(-2px)'" onmouseout="this.style.boxShadow='none';this.style.transform='none'">
+        <div style="width:44px;height:44px;border-radius:10px;background:#F8FAFC;border:1px solid #E2E8F0;display:flex;align-items:center;justify-content:center;margin-bottom:16px;"><svg viewBox="0 0 64 64" style="width:26px;height:26px;"><path d="M 32 12 A 20 20 0 0 1 52 32" stroke="#00ADB5" stroke-width="3" fill="none"/><path d="M 48 28 L 52 32 L 56 28" stroke="#00ADB5" stroke-width="3" fill="none"/><path d="M 32 52 A 20 20 0 0 1 12 32" stroke="#00ADB5" stroke-width="3" fill="none"/><path d="M 16 36 L 12 32 L 8 36" stroke="#00ADB5" stroke-width="3" fill="none"/><line x1="28" y1="22" x2="28" y2="42" stroke="#0F172A" stroke-width="3"/></svg></div>
+        <h3 style="font-size:15px;font-weight:800;color:#0F172A;margin-bottom:8px;">Teknoloji Modernizasyonu</h3>
+        <p style="color:#64748B;font-size:13px;line-height:1.7;">Kontrol kartları, elektrik panoları ve motorların enerji verimli ünitelerle revizyonu.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- İLETİŞİM -->
+<section id="iletisim" style="padding:72px 20px;background:#fff;">
+  <div style="max-width:1200px;margin:0 auto;">
+    <div style="text-align:center;margin-bottom:48px;">
+      <span style="font-size:10px;font-weight:700;color:#00ADB5;text-transform:uppercase;letter-spacing:.12em;">İletişim & Teklif</span>
+      <h2 style="font-size:clamp(24px,3.5vw,38px);font-weight:900;color:#0F172A;margin:10px 0 10px;letter-spacing:-.02em;">Proje Teklifi Alın</h2>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:48px;align-items:start;" class="hero-grid">
+      <div style="display:flex;flex-direction:column;gap:24px;">
+        <div><p style="font-size:11px;font-weight:700;color:#0F172A;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Merkez Ofis</p><p style="color:#64748B;font-size:14px;line-height:1.7;">İncirtepe Mah. 269. Sok. No: 3 Daire: 1<br>Esenyurt / İstanbul</p></div>
+        <div><p style="font-size:11px;font-weight:700;color:#0F172A;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Telefon & WhatsApp</p><p style="font-size:24px;font-weight:900;color:#0F172A;">0533 497 73 17</p>
+          <a href="https://wa.me/905334977317" target="_blank" style="display:inline-flex;align-items:center;gap:8px;margin-top:12px;padding:10px 18px;background:#22C55E;color:#fff;border-radius:8px;font-size:12px;font-weight:700;text-transform:uppercase;text-decoration:none;">WhatsApp Mesaj</a>
+        </div>
+        <div><p style="font-size:11px;font-weight:700;color:#0F172A;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">E-Posta</p><p style="color:#64748B;font-size:14px;">info@as-elasansor.com</p></div>
+      </div>
+      <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:16px;padding:28px;">
+        <div id="contactSuccess" style="display:none;margin-bottom:14px;padding:12px;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;color:#166534;font-size:13px;">✓ Talebiniz iletildi. En kısa sürede sizinle iletişime geçeceğiz.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;" class="hero-grid">
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Ad Soyad</label><input id="c-ad" type="text" placeholder="Adınız" class="site-input"/></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Telefon</label><input id="c-tel" type="tel" placeholder="05XX XXX XX XX" class="site-input"/></div>
+        </div>
+        <div style="margin-bottom:14px;"><label style="display:block;font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Hizmet</label>
+          <select id="c-hizmet" class="site-input"><option>Sıfırdan Proje / Montaj</option><option>Aylık Periyodik Bakım</option><option>Modernizasyon / Yenileme</option></select></div>
+        <div style="margin-bottom:18px;"><label style="display:block;font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Notlar</label><textarea id="c-not" rows="3" class="site-input" style="resize:none;" placeholder="Proje detayları..."></textarea></div>
+        <button onclick="submitContactForm(this)" style="width:100%;padding:13px;background:#0F172A;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;transition:background .2s;" onmouseover="this.style.background='#00ADB5'" onmouseout="this.style.background='#0F172A'">Proje Teklifi Gönder</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer style="background:#0F172A;color:#64748B;padding:36px 20px;">
+  <div style="max-width:1200px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <span style="font-size:13px;">© 2026 AS-EL ASANSÖR. Tüm hakları saklıdır.</span>
+    <button onclick="openLogin()" style="font-size:12px;color:#475569;background:none;border:none;cursor:pointer;padding:4px 8px;" onmouseover="this.style.color='#00ADB5'" onmouseout="this.style.color='#475569'">Panel Girişi</button>
+  </div>
+</footer>
+</div><!-- /siteContent -->
+
+
+<!-- ════════════════════════════════════
+     LOGIN OVERLAY
+════════════════════════════════════ -->
+<div id="loginOverlay" onclick="if(event.target===this)closeLogin()">
+  <div class="login-card" onclick="event.stopPropagation()">
+    <div style="padding:26px 26px 0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:34px;height:34px;border-radius:10px;background:rgba(0,173,181,.1);border:1px solid rgba(0,173,181,.2);display:flex;align-items:center;justify-content:center;">
+            <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:#00ADB5;stroke-width:2;stroke-linecap:round;"><rect x="4" y="8" width="3" height="12" rx="1"/><rect x="8" y="4" width="3" height="16" rx="1"/><rect x="13" y="8" width="3" height="12" rx="1"/></svg>
+          </div>
+          <div><div style="font-size:14px;font-weight:800;color:#E2E8F0;">AS-EL Panel</div><div style="font-size:10px;color:#475569;font-family:monospace;text-transform:uppercase;letter-spacing:.08em;">Yönetim Girişi</div></div>
+        </div>
+        <button onclick="closeLogin()" style="color:#475569;background:none;border:none;cursor:pointer;padding:4px;"><svg viewBox="0 0 24 24" style="width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+      </div>
+
+      <div id="loginErr" style="display:none;margin-bottom:14px;padding:10px 13px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;color:#FCA5A5;font-size:12px;align-items:center;gap:7px;">
+        <svg viewBox="0 0 24 24" style="width:14px;height:14px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>E-posta veya şifre hatalı.</span>
+      </div>
+
+      <div style="margin-bottom:13px;">
+        <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:7px;">Kullanıcı Adı</label>
+        <input id="lu" type="text" placeholder="kullanici_adi" class="l-input" onkeydown="if(event.key==='Enter')document.getElementById('lp').focus()"/>
+      </div>
+      <div style="margin-bottom:18px;">
+        <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:7px;">Şifre</label>
+        <div style="position:relative;">
+          <input id="lp" type="password" placeholder="••••••••" class="l-input" style="padding-right:40px;" onkeydown="if(event.key==='Enter')doLogin()"/>
+          <button onclick="toggleLP()" style="position:absolute;right:11px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#475569;display:flex;"><svg viewBox="0 0 24 24" style="width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </div>
+      </div>
+      <button id="loginBtn" class="btn-login" onclick="doLogin()">Giriş Yap</button>
+    </div>
+    <div style="padding:14px 26px 22px;margin-top:14px;border-top:1px solid rgba(30,41,59,.5);text-align:center;">
+      <p style="font-size:11px;color:#334155;font-family:monospace;">Kullanıcı adı ve şifrenizi girin</p>
+      <p style="font-size:10px;color:#1E293B;margin-top:4px;">Hesabınız yoksa yönetici ile iletişime geçin.</p>
+    </div>
+  </div>
+</div>
+
+
+<!-- ════════════════════════════════════
+     DASHBOARD
+════════════════════════════════════ -->
+<div id="dashboard">
+<div class="db-body">
+  <div id="sidebarOverlay" onclick="closeMobileSidebar()"></div>
+
+  <!-- SIDEBAR -->
+  <aside id="dbSidebar" class="db-sidebar">
+    <div style="padding:14px 10px 12px;border-bottom:1px solid rgba(30,41,59,.6);">
+      <div style="display:flex;align-items:center;gap:9px;padding:0 4px;">
+        <div style="width:32px;height:32px;border-radius:8px;background:rgba(0,173,181,.1);border:1px solid rgba(0,173,181,.2);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:#00ADB5;stroke-width:2;stroke-linecap:round;"><rect x="4" y="8" width="3" height="12" rx="1"/><rect x="8" y="4" width="3" height="16" rx="1"/><rect x="13" y="8" width="3" height="12" rx="1"/></svg>
+        </div>
+        <div><div style="font-size:13px;font-weight:800;color:#E2E8F0;">AS-EL</div><div style="font-size:9px;color:#475569;font-family:monospace;text-transform:uppercase;letter-spacing:.1em;">Asansör Paneli</div></div>
+      </div>
+    </div>
+
+    <!-- Bina banner -->
+    <div id="binaBanner" style="display:none;margin:8px 8px 0;padding:8px 12px;background:rgba(0,173,181,.06);border:1px solid rgba(0,173,181,.15);border-radius:8px;gap:8px;align-items:center;">
+      <svg viewBox="0 0 24 24" style="width:14px;height:14px;flex-shrink:0;fill:none;stroke:#00ADB5;stroke-width:2;stroke-linecap:round;"><path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16"/></svg>
+      <p id="binaBannerText" style="font-size:11px;color:#00ADB5;font-weight:600;"></p>
+    </div>
+
+    <nav id="sidebarNav" style="flex:1;padding:10px 8px;overflow-y:auto;"></nav>
+
+    <div style="padding:6px 8px;border-top:1px solid rgba(30,41,59,.6);">
+      <div style="display:flex;align-items:center;gap:9px;padding:9px 6px;">
+        <div id="userAvatar" style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#00ADB5,#0891B2);display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:800;flex-shrink:0;">?</div>
+        <div style="flex:1;min-width:0;">
+          <div id="userNameSidebar" style="font-size:12px;font-weight:600;color:#E2E8F0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</div>
+          <div id="userRoleSidebar" style="font-size:10px;color:#475569;font-family:monospace;">—</div>
+        </div>
+        <button onclick="doLogout()" title="Çıkış" style="color:#475569;background:none;border:none;cursor:pointer;padding:3px;" onmouseover="this.style.color='#EF4444'" onmouseout="this.style.color='#475569'">
+          <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="db-main">
+    <div class="db-topbar">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button id="mobileMenuBtn" onclick="openMobileSidebar()" style="color:#64748B;background:none;border:none;cursor:pointer;display:none;padding:3px;">
+          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div>
+          <h1 id="pageTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">Genel Bakış</h1>
+          <p id="pageDate" style="font-size:10px;color:#475569;font-family:monospace;"></p>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button id="topbarNewBakim" onclick="openModal('mBakim')" style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:linear-gradient(135deg,#00ADB5,#0891B2);color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;text-transform:uppercase;cursor:pointer;letter-spacing:.05em;">
+          <svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;"><path d="M12 4v16m8-8H4"/></svg>
+          Bakım Planla
+        </button>
+        <button onclick="doLogout()" style="padding:8px 12px;background:rgba(30,41,59,.8);color:#94A3B8;border:none;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;" onmouseover="this.style.color='#EF4444'" onmouseout="this.style.color='#94A3B8'">Çıkış</button>
+      </div>
+    </div>
+
+    <div class="db-content">
+
+      <!-- GENEL BAKIŞ -->
+      <div id="pg-dashboard" class="db-page active">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;">
+          <div class="card" style="padding:16px;">
+            <div style="font-size:11px;color:#475569;margin-bottom:6px;">Toplam Bina</div>
+            <div id="stat-bina" style="font-size:26px;font-weight:900;color:#E2E8F0;">—</div>
+            <div style="font-size:11px;color:#00ADB5;margin-top:3px;">Firebase'den canlı</div>
+          </div>
+          <div class="card" style="padding:16px;">
+            <div style="font-size:11px;color:#475569;margin-bottom:6px;">Bekleyen Bakım</div>
+            <div id="stat-bakim" style="font-size:26px;font-weight:900;color:#F59E0B;">—</div>
+            <div style="font-size:11px;color:#475569;margin-top:3px;">Planlı bakımlar</div>
+          </div>
+          <div class="card" style="padding:16px;">
+            <div style="font-size:11px;color:#475569;margin-bottom:6px;">Açık Arıza</div>
+            <div id="stat-ariza" style="font-size:26px;font-weight:900;color:#EF4444;">—</div>
+            <div style="font-size:11px;color:#475569;margin-top:3px;">Çözüm bekliyor</div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:12px;" class="hero-grid">
+          <div class="card" style="padding:0;overflow:hidden;">
+            <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;align-items:center;justify-content:space-between;">
+              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">Yaklaşan Bakımlar</h3>
+              <button onclick="showPage('bakimlar',null)" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">Tümü →</button>
+            </div>
+            <div id="bakimDashList"></div>
+          </div>
+          <div class="card" style="padding:16px;">
+            <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:4px;">Hızlı İşlem</h3>
+            <p style="font-size:11px;color:#475569;margin-bottom:14px;">Firebase gerçek zamanlı</p>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <button onclick="openModal('mBakim')" class="btn-sm" style="padding:10px;font-size:12px;">+ Bakım Planla</button>
+              <button onclick="openModal('mAriza')" style="padding:10px;font-size:12px;background:rgba(239,68,68,.15);color:#EF4444;border:1px solid rgba(239,68,68,.2);border-radius:8px;cursor:pointer;font-weight:600;">⚠ Arıza Bildir</button>
+              <button onclick="openModal('mBina')" class="btn-ghost admin-only" style="padding:10px;font-size:12px;">+ Bina Ekle</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BİNALAR -->
+      <div id="pg-binalar" class="db-page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <div><h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Bina Yönetimi</h2><p style="font-size:11px;color:#475569;margin-top:2px;">Firebase Firestore — Gerçek zamanlı</p></div>
+          <button onclick="resetBinaForm();openModal('mBina')" class="btn-sm admin-only">+ Bina Ekle</button>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden;">
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;">
+              <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
+                <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Adres</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Asansör</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Sözleşme</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
+                <th style="padding:11px 12px;" class="admin-only"></th>
+              </tr></thead>
+              <tbody id="binaTableBody"><tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- BAKIMLAR -->
+      <div id="pg-bakimlar" class="db-page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <div><h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Bakım Takibi</h2><p style="font-size:11px;color:#475569;margin-top:2px;">Firebase Firestore — Gerçek zamanlı</p></div>
+          <button onclick="openModal('mBakim')" class="btn-sm admin-only">+ Bakım Planla</button>
+        </div>
+        <div id="bakimGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px;"></div>
+      </div>
+
+      <!-- ARIZALAR -->
+      <div id="pg-arizalar" class="db-page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <div><h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Arıza Kayıtları</h2><p style="font-size:11px;color:#475569;margin-top:2px;">Firebase Firestore — Gerçek zamanlı</p></div>
+          <button onclick="openModal('mAriza')" style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:rgba(239,68,68,.15);color:#EF4444;border:1px solid rgba(239,68,68,.2);border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">+ Arıza Bildir</button>
+        </div>
+        <div id="arizaList" style="display:flex;flex-direction:column;gap:10px;"></div>
+      </div>
+
+      <!-- KULLANICILAR -->
+      <div id="pg-kullanicilar" class="db-page">
+        <div style="margin-bottom:16px;">
+          <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Kullanıcı Yönetimi</h2>
+          <p style="font-size:11px;color:#475569;margin-top:2px;">Firebase Authentication + Firestore</p>
+        </div>
+        <div class="card" style="padding:16px;margin-bottom:14px;border-color:rgba(0,173,181,.2);">
+          <p style="font-size:12px;color:#00ADB5;font-weight:600;margin-bottom:6px;">Yeni Kullanıcı Nasıl Eklenir?</p>
+          <p style="font-size:12px;color:#64748B;line-height:1.6;">1. Firebase Console → Authentication → Add user (email & şifre girin)<br>2. Oluşan UID'yi kopyalayın<br>3. Firestore → <code style="background:rgba(0,173,181,.1);padding:1px 5px;border-radius:3px;color:#00ADB5;">kullanicilar</code> → Yeni belge → Document ID: UID<br>4. Fields: <code style="background:rgba(0,173,181,.1);padding:1px 5px;border-radius:3px;color:#00ADB5;">ad, email, rol (admin/teknisyen/bina), initials, rolLabel, bina</code></p>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
+              <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Ad Soyad</th>
+              <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">E-Posta</th>
+              <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Rol</th>
+              <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
+              <th style="padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;"></th>
+            </tr></thead>
+            <tbody id="kullaniciTableBody"><tr><td colspan="4" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /db-content -->
+  </div><!-- /db-main -->
+</div><!-- /db-body -->
+</div><!-- /dashboard -->
+
+
+<!-- ════ MODALS ════ -->
+
+<!-- Bina Modal -->
+<div id="modal-mBina" class="modal-wrap" onclick="if(event.target===this)closeModal('mBina')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 id="mBinaTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">Yeni Bina Ekle</h3>
+      <button onclick="closeModal('mBina')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <input type="hidden" id="f-bina-editId"/>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label><input id="f-bina-ad" type="text" class="db-input" placeholder="Örn: Tuna Apartmanı"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Adres</label><input id="f-bina-adres" type="text" class="db-input" placeholder="Mahalle, İlçe, İstanbul"/></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Asansör Adedi</label><input id="f-bina-asansor" type="number" class="db-input" placeholder="2"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Durum</label>
+          <select id="f-bina-durum" class="db-input"><option value="ok">Normal</option><option value="warn">Bakım Yaklaşıyor</option><option value="err">Arıza Var</option></select></div>
+      </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Sözleşme Tipi</label>
+        <select id="f-bina-sozlesme" class="db-input"><option>Aylık Periyodik Bakım</option><option>Yıllık Bakım Paketi</option><option>Sadece Arıza Hizmeti</option></select></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mBina')" class="btn-ghost">İptal</button>
+      <button onclick="saveBina()" class="btn-sm">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bakım Modal -->
+<div id="modal-mBakim" class="modal-wrap" onclick="if(event.target===this)closeModal('mBakim')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Yeni Bakım Planla</h3>
+      <button onclick="closeModal('mBakim')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label><input id="f-bakim-bina" type="text" class="db-input" placeholder="Tuna Apartmanı"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kabin</label><input id="f-bakim-kabin" type="text" class="db-input" placeholder="Kabin #1"/></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-bakim-tarih" type="date" class="db-input"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bakım Tipi</label>
+          <select id="f-bakim-tip" class="db-input"><option>Aylık Periyodik</option><option>Yıllık Muayene</option><option>Modernizasyon</option><option>Acil Bakım</option></select></div>
+      </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Teknisyen</label><input id="f-bakim-teknik" type="text" class="db-input" placeholder="Ad Soyad"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Notlar</label><textarea id="f-bakim-notlar" rows="3" class="db-input" style="resize:none;" placeholder="Bakım detayları..."></textarea></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mBakim')" class="btn-ghost">İptal</button>
+      <button onclick="saveBakim()" class="btn-sm">Planla</button>
+    </div>
+  </div>
+</div>
+
+<!-- Arıza Modal -->
+<div id="modal-mAriza" class="modal-wrap" onclick="if(event.target===this)closeModal('mAriza')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Arıza Bildir</h3>
+      <button onclick="closeModal('mAriza')" style="color:#475569;background:none;border:none;cursor:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina *</label><input id="f-ariza-bina" type="text" class="db-input" placeholder="Tuna Apartmanı"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kabin</label><input id="f-ariza-kabin" type="text" class="db-input" placeholder="Kabin #1"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Arıza Tipi</label>
+        <select id="f-ariza-tip" class="db-input"><option>Kapı Sensörü</option><option>Motor / Tahrik</option><option>Aydınlatma</option><option>Kumanda Kartı</option><option>Halat / Ray</option><option>Diğer</option></select></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Açıklama</label><textarea id="f-ariza-aciklama" rows="3" class="db-input" style="resize:none;" placeholder="Arıza detayları..."></textarea></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mAriza')" class="btn-ghost">İptal</button>
+      <button onclick="saveAriza()" style="padding:8px 16px;background:#EF4444;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Bildir</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
