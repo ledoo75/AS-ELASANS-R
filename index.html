@@ -8,8 +8,9 @@
 
 <!-- ══ FIREBASE SDK (CDN) ══════════════════════════════════════ -->
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+         signOut, onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc,
          onSnapshot, query, orderBy, serverTimestamp, getDoc, setDoc }
@@ -31,6 +32,17 @@ const firebaseConfig = {
 const app  = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db   = getFirestore(app);
+
+// İKİNCİL (SECONDARY) APP — KareKara yöntemi:
+// Yeni kullanıcı oluştururken bu ayrı app instance'ını kullanıyoruz,
+// böylece admin'in kendi oturumu (auth) etkilenmiyor/kapanmıyor.
+const secondaryApp = initializeApp(firebaseConfig, "Secondary");
+const secondaryAuth = getAuth(secondaryApp);
+
+// Kullanıcı adını sahte email'e çevir (KareKara tekniği)
+function usernameToFakeEmail(username) {
+  return username.replace(/\s+/g, '').toLowerCase() + "@aselasansor.com";
+}
 
 /* ═══════════════════════════════════════════════════════════════
    GLOBAL STATE
@@ -67,29 +79,37 @@ const AUTO_PROFILES = {
 
 onAuthStateChanged(auth, async (user) => {
   if (user) {
-    const userRef = doc(db, 'kullanicilar', user.uid);
-    let snap = await getDoc(userRef);
+    try {
+      const userRef = doc(db, 'kullanicilar', user.uid);
+      let snap = await getDoc(userRef);
 
-    // Firestore'da profil yoksa otomatik oluştur
-    if (!snap.exists()) {
-      const autoProfile = AUTO_PROFILES[user.email];
-      if (autoProfile) {
-        await setDoc(userRef, {
-          ...autoProfile,
-          olusturuldu: serverTimestamp()
-        });
-        snap = await getDoc(userRef);
-      } else {
-        await signOut(auth);
-        showLoginError('Kullanıcı profili bulunamadı. Yönetici ile iletişime geçin.');
-        return;
+      // Firestore'da profil yoksa otomatik oluştur
+      if (!snap.exists()) {
+        const autoProfile = AUTO_PROFILES[user.email];
+        if (autoProfile) {
+          await setDoc(userRef, {
+            ...autoProfile,
+            olusturuldu: serverTimestamp()
+          });
+          snap = await getDoc(userRef);
+        } else {
+          await signOut(auth);
+          showLoginError('Profil yok. USERNAME_MAP/AUTO_PROFILES\'e eklenmemiş: ' + user.email);
+          resetLoginButton();
+          return;
+        }
       }
-    }
 
-    currentUserData = snap.data();
-    currentUser     = user;
-    closeLogin();
-    openDashboard();
+      currentUserData = snap.data();
+      currentUser     = user;
+      closeLogin();
+      openDashboard();
+    } catch (e) {
+      // Firestore okuma/yazma hatası (çoğunlukla Security Rules izin vermiyor)
+      showLoginError('Firestore hatası: ' + (e.code || e.message));
+      resetLoginButton();
+      await signOut(auth).catch(()=>{});
+    }
   } else {
     currentUser     = null;
     currentUserData = null;
@@ -120,14 +140,11 @@ function showLoginError(msg) {
   el.style.display = 'flex';
 }
 
-// Kullanıcı adı → email eşleştirme tablosu
-// Yeni kullanıcı ekledikçe buraya da ekleyin
-const USERNAME_MAP = {
-  'tanju':     'tanju@aselasansor.com',
-  'tayfun':    'tayfun@aselasansor.com',
-  // Yeni kullanıcı ekleyince buraya da ekleyin:
-  // 'yeniad':  'yeniad@aselasansor.com',
-};
+function resetLoginButton() {
+  const btn = document.getElementById('loginBtn');
+  btn.innerHTML = 'Giriş Yap';
+  btn.disabled = false;
+}
 
 window.doLogin = async () => {
   const username = document.getElementById('lu').value.trim().toLowerCase();
@@ -137,22 +154,27 @@ window.doLogin = async () => {
 
   if (!username || !pass) { showLoginError('Kullanıcı adı ve şifre giriniz.'); return; }
 
-  // Kullanıcı adını email'e çevir
-  const email = USERNAME_MAP[username] || (username.includes('@') ? username : null);
-  if (!email) { showLoginError('Kullanıcı adı bulunamadı.'); return; }
+  const email = username.includes('@') ? username : usernameToFakeEmail(username);
 
   err.style.display = 'none';
   btn.innerHTML = '<span class="spinner"></span>';
   btn.disabled = true;
 
+  // 15 saniye sonra hala spinner dönüyorsa zorla durdur ve sebebini göster
+  const timeoutId = setTimeout(() => {
+    showLoginError('Zaman aşımı: Firebase\'e bağlanılamadı. İnternet/domain ayarlarını kontrol edin.');
+    btn.innerHTML = 'Giriş Yap';
+    btn.disabled = false;
+  }, 15000);
+
   try {
     await signInWithEmailAndPassword(auth, email, pass);
-    // onAuthStateChanged devralır
+    clearTimeout(timeoutId);
+    // onAuthStateChanged devralır — ama o da hata verebilir, aşağıda yakalıyoruz
   } catch (e) {
-    let msg = 'Kullanıcı adı veya şifre hatalı.';
-    if (e.code === 'auth/too-many-requests')
-      msg = 'Çok fazla deneme. Lütfen bekleyin.';
-    showLoginError(msg);
+    clearTimeout(timeoutId);
+    // GERÇEK Firebase hata kodunu göster (debug için)
+    showLoginError(`Hata: ${e.code || e.message}`);
     btn.innerHTML = 'Giriş Yap';
     btn.disabled = false;
   }
@@ -297,7 +319,16 @@ function setupUI() {
 /* ═══════════════════════════════════════════════════════════════
    NAVİGASYON
 ═══════════════════════════════════════════════════════════════ */
+// Sayfa bazlı erişim kısıtlaması — UI'da gizli olsa da konsoldan zorlanmaya karşı
+const ADMIN_ONLY_PAGES = ['kullanicilar'];
+
 window.showPage = (name, btn) => {
+  const role = currentUserData?.rol;
+  if (ADMIN_ONLY_PAGES.includes(name) && role !== 'admin') {
+    alert('Bu sayfaya erişim yetkiniz yok.');
+    return;
+  }
+
   document.querySelectorAll('.db-page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
   const pg = document.getElementById('pg-' + name);
@@ -485,7 +516,10 @@ function renderKullanicilar(data) {
     const kurucuBadge = u.kurucu ? '<span style="margin-left:6px;font-size:9px;background:rgba(245,158,11,.15);color:#F59E0B;border:1px solid rgba(245,158,11,.25);padding:1px 6px;border-radius:4px;font-weight:700;">🔒 KURUCU</span>' : '';
     const actionCell = u.kurucu
       ? '<span style="font-size:10px;color:#F59E0B;font-family:monospace;">Korumalı</span>'
-      : `<button onclick="deleteKullanici('${u.id}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>`;
+      : `<div style="display:flex;gap:10px;">
+           <button onclick="resetKullaniciSifre('${u.id}','${u.email}','${(u.ad||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;" class="admin-only">Şifre Sıfırla</button>
+           <button onclick="deleteKullanici('${u.id}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
+         </div>`;
     return `
     <tr class="tbl-row">
       <td style="padding:12px 18px;">
@@ -504,15 +538,8 @@ function renderKullanicilar(data) {
   document.querySelectorAll('.admin-only').forEach(el => { el.style.display = role === 'admin' ? '' : 'none'; });
 }
 
-window.deleteKullanici = async (id) => {
-  const snap = await getDoc(doc(db, 'kullanicilar', id));
-  if (snap.exists() && snap.data().kurucu) {
-    alert('Kurucu hesabı silinemez!');
-    return;
-  }
-  if (!confirm('Bu kullanıcıyı silmek istediğinizden emin misiniz?')) return;
-  await deleteDoc(doc(db, 'kullanicilar', id));
-};
+// Not: deleteKullanici fonksiyonu artık API üzerinden çalışıyor (aşağıda tanımlı).
+// Burada Firestore'dan silmek Auth hesabını silmeyeceği için API versiyonu kullanılıyor.
 
 /* ═══════════════════════════════════════════════════════════════
    FIRESTORE CRUD — BİNA
@@ -636,12 +663,184 @@ window.deleteAriza = async (id) => {
 /* ═══════════════════════════════════════════════════════════════
    KULLANICI OLUŞTUR (Admin paneli üzerinden)
 ═══════════════════════════════════════════════════════════════ */
-window.saveKullanici = async () => {
-  // Not: Firebase Auth üzerinden kullanıcı oluşturmak için
-  // Firebase Admin SDK (sunucu tarafı) gerekir.
-  // Burada sadece Firestore'a profil kaydediyoruz.
-  // Kullanıcıyı Authentication konsolundan ekleyip UID'yi almanız gerekir.
-  alert('Yeni kullanıcı eklemek için:\n1. Firebase Console → Authentication → Add user\n2. Oluşturulan UID ile Firestore → kullanicilar koleksiyonuna profil ekleyin.\n\nBu işlem güvenlik gereği sunucu tarafında yapılmalıdır.');
+/* ═══════════════════════════════════════════════════════════════
+   KULLANICI YÖNETİMİ — Vercel API (Firebase Admin SDK) üzerinden
+═══════════════════════════════════════════════════════════════ */
+window.toggleBinaField = () => {
+  const rol = document.getElementById('f-kul-rol').value;
+  document.getElementById('f-kul-bina-wrap').style.display = rol === 'bina' ? 'block' : 'none';
+};
+
+function showKulFormError(msg) {
+  const el = document.getElementById('kullaniciFormErr');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+// ── KENDİ ŞİFREMİ DEĞİŞTİR (KareKara stili: reauthenticate + updatePassword) ──
+window.changeOwnPassword = async () => {
+  const curPass = document.getElementById('own-cur-pass').value;
+  const newPass = document.getElementById('own-new-pass').value;
+  const errEl = document.getElementById('ownPassErr');
+  const okEl  = document.getElementById('ownPassOk');
+  errEl.style.display = 'none';
+  okEl.style.display = 'none';
+
+  if (!curPass) { errEl.textContent = 'Mevcut şifrenizi girin.'; errEl.style.display = 'block'; return; }
+  if (!newPass || newPass.length < 6) { errEl.textContent = 'Yeni şifre en az 6 karakter olmalı.'; errEl.style.display = 'block'; return; }
+
+  try {
+    const credential = EmailAuthProvider.credential(currentUser.email, curPass);
+    await reauthenticateWithCredential(currentUser, credential);
+    await updatePassword(currentUser, newPass);
+    document.getElementById('own-cur-pass').value = '';
+    document.getElementById('own-new-pass').value = '';
+    okEl.style.display = 'block';
+  } catch (e) {
+    let msg = 'Hata: ' + e.message;
+    if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') msg = 'Mevcut şifre hatalı.';
+    errEl.textContent = msg;
+    errEl.style.display = 'block';
+  }
+};
+
+// ── KULLANICI OLUŞTUR (KareKara tekniği) ─────────────────────
+// Secondary Firebase app kullanılarak yeni kullanıcı Authentication'a eklenir.
+// Bu sırada admin'in kendi oturumu (auth) etkilenmez/kapanmaz, çünkü
+// createUserWithEmailAndPassword(secondaryAuth, ...) ayrı bir app instance'ında çalışır.
+window.createKullanici = async () => {
+  const ad       = document.getElementById('f-kul-ad').value.trim();
+  const username = document.getElementById('f-kul-username').value.trim().toLowerCase();
+  const password = document.getElementById('f-kul-sifre').value;
+  const rol      = document.getElementById('f-kul-rol').value;
+  const bina     = document.getElementById('f-kul-bina').value.trim();
+  const btn      = document.getElementById('kulSaveBtn');
+  const errEl    = document.getElementById('kullaniciFormErr');
+
+  errEl.style.display = 'none';
+
+  if (!ad || !username || !password || !rol) {
+    showKulFormError('Tüm zorunlu alanları doldurun.');
+    return;
+  }
+  if (password.length < 6) {
+    showKulFormError('Şifre en az 6 karakter olmalı.');
+    return;
+  }
+  if (rol === 'bina' && !bina) {
+    showKulFormError('Bina yöneticisi için bina adı zorunludur.');
+    return;
+  }
+  if (/[^a-z0-9.]/.test(username)) {
+    showKulFormError('Kullanıcı adı sadece küçük harf, sayı ve nokta içerebilir.');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+
+  const rolLabelMap = { admin: 'Yönetici', teknisyen: 'Teknisyen', bina: 'Bina Yöneticisi' };
+  const email = usernameToFakeEmail(username);
+
+  try {
+    // 1. Secondary app ile Authentication'a kullanıcı ekle
+    //    (admin'in kendi oturumunu bozmadan)
+    const result = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+    const newUid = result.user.uid;
+
+    // 2. Firestore'a profil yaz
+    await setDoc(doc(db, 'kullanicilar', newUid), {
+      ad,
+      email,
+      rol,
+      rolLabel: rolLabelMap[rol] || rol,
+      initials: ad.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
+      bina: rol === 'bina' ? bina : null,
+      kurucu: false,
+      olusturuldu: serverTimestamp()
+    });
+
+    // 3. Secondary app oturumunu kapat (sadece o app'in oturumu, ana admin oturumu etkilenmez)
+    await signOut(secondaryAuth);
+
+    // Başarılı — formu temizle, modalı kapat
+    document.getElementById('f-kul-ad').value = '';
+    document.getElementById('f-kul-username').value = '';
+    document.getElementById('f-kul-sifre').value = '';
+    document.getElementById('f-kul-rol').value = '';
+    document.getElementById('f-kul-bina').value = '';
+    document.getElementById('f-kul-bina-wrap').style.display = 'none';
+    btn.disabled = false; btn.innerHTML = 'Kullanıcı Oluştur';
+    closeModal('mKullanici');
+    // Firestore onSnapshot zaten otomatik güncelleyecek (renderKullanicilar tetiklenir)
+
+  } catch (e) {
+    let msg = 'Hata: ' + e.message;
+    if (e.code === 'auth/email-already-in-use') msg = 'Bu kullanıcı adı zaten alınmış.';
+    if (e.code === 'auth/weak-password') msg = 'Şifre çok zayıf, en az 6 karakter olmalı.';
+    showKulFormError(msg);
+    btn.disabled = false; btn.innerHTML = 'Kullanıcı Oluştur';
+  }
+};
+
+// ── KULLANICI SİL ──────────────────────────────────────────────
+// Not: Client-side Firebase SDK ile başka bir kullanıcının Authentication
+// hesabını silmek mümkün değildir (güvenlik kısıtı). Bu yüzden:
+// - Firestore'daki profili sileriz (kullanıcı artık panele giriş yapamaz —
+//   çünkü onAuthStateChanged profili bulamayınca otomatik signOut yapar)
+// - Authentication kaydı Firebase Console'da kalır ama işlevsiz olur.
+window.deleteKullanici = async (uid) => {
+  const targetSnap = await getDoc(doc(db, 'kullanicilar', uid));
+  if (targetSnap.exists() && targetSnap.data().kurucu) {
+    alert('Kurucu hesabı silinemez!');
+    return;
+  }
+  if (!confirm('Bu kullanıcıyı silmek istediğinizden emin misiniz?\n\nNot: Kullanıcı artık panele giriş yapamayacak.')) return;
+  try {
+    await deleteDoc(doc(db, 'kullanicilar', uid));
+    // onSnapshot otomatik güncelleyecek
+  } catch (e) {
+    alert('Hata: ' + e.message);
+  }
+};
+
+// ── ADMİN BAŞKA KULLANICININ ŞİFRESİNİ SIFIRLAR ────────────────
+// KareKara'daki adminResetPassword mantığı: Client SDK başkasının şifresini
+// doğrudan değiştiremediği için, eski hesabı silip (Firestore'da) aynı email
+// ile YENİ bir Authentication kaydı oluşturup yeni UID'yi Firestore'a yazıyoruz.
+window.resetKullaniciSifre = async (uid, currentEmail, adName) => {
+  const newPass = prompt(`${adName} için yeni şifre girin:\n(En az 6 karakter)`);
+  if (!newPass) return;
+  if (newPass.length < 6) { alert('Şifre en az 6 karakter olmalı.'); return; }
+  if (!confirm(`${adName} şifresi değiştirilecek. Onaylıyor musunuz?`)) return;
+
+  try {
+    const oldSnap = await getDoc(doc(db, 'kullanicilar', uid));
+    if (!oldSnap.exists()) { alert('Kullanıcı bulunamadı.'); return; }
+    const oldData = oldSnap.data();
+
+    // Yeni email ile (suffix ekleyerek çakışmayı önle) yeni Auth hesabı oluştur
+    let finalEmail = currentEmail;
+    let result;
+    try {
+      result = await createUserWithEmailAndPassword(secondaryAuth, finalEmail, newPass);
+    } catch (err) {
+      if (err.code === 'auth/email-already-in-use') {
+        const suffix = Date.now().toString().slice(-4);
+        finalEmail = currentEmail.replace('@', `_${suffix}@`);
+        result = await createUserWithEmailAndPassword(secondaryAuth, finalEmail, newPass);
+      } else throw err;
+    }
+
+    // Firestore: yeni UID'ye taşı, eski dokümanı sil
+    await setDoc(doc(db, 'kullanicilar', result.user.uid), { ...oldData, email: finalEmail });
+    await deleteDoc(doc(db, 'kullanicilar', uid));
+    await signOut(secondaryAuth);
+
+    alert(`${adName} şifresi güncellendi ✓`);
+  } catch (e) {
+    alert('Hata: ' + e.message);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1187,24 +1386,36 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
 
       <!-- KULLANICILAR -->
       <div id="pg-kullanicilar" class="db-page">
-        <div style="margin-bottom:16px;">
-          <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Kullanıcı Yönetimi</h2>
-          <p style="font-size:11px;color:#475569;margin-top:2px;">Firebase Authentication + Firestore</p>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <div>
+            <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Kullanıcı Yönetimi</h2>
+            <p style="font-size:11px;color:#475569;margin-top:2px;">Firebase Authentication + Firestore — Gerçek zamanlı</p>
+          </div>
+          <button onclick="openModal('mKullanici')" class="btn-sm admin-only">+ Kullanıcı Ekle</button>
         </div>
-        <div class="card" style="padding:16px;margin-bottom:14px;border-color:rgba(0,173,181,.2);">
-          <p style="font-size:12px;color:#00ADB5;font-weight:600;margin-bottom:6px;">Yeni Kullanıcı Nasıl Eklenir?</p>
-          <p style="font-size:12px;color:#64748B;line-height:1.6;">1. Firebase Console → Authentication → Add user (email & şifre girin)<br>2. Oluşan UID'yi kopyalayın<br>3. Firestore → <code style="background:rgba(0,173,181,.1);padding:1px 5px;border-radius:3px;color:#00ADB5;">kullanicilar</code> → Yeni belge → Document ID: UID<br>4. Fields: <code style="background:rgba(0,173,181,.1);padding:1px 5px;border-radius:3px;color:#00ADB5;">ad, email, rol (admin/teknisyen/bina), initials, rolLabel, bina</code></p>
+
+        <!-- Kendi şifremi değiştir -->
+        <div class="card" style="padding:16px;margin-bottom:16px;border-color:rgba(245,158,11,.2);">
+          <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:10px;">🔑 Kendi Şifremi Değiştir</h3>
+          <div id="ownPassErr" style="display:none;margin-bottom:10px;padding:9px 12px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;color:#FCA5A5;font-size:12px;"></div>
+          <div id="ownPassOk" style="display:none;margin-bottom:10px;padding:9px 12px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:8px;color:#6EE7B7;font-size:12px;">Şifre güncellendi ✓</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;" class="hero-grid">
+            <input id="own-cur-pass" type="password" class="db-input" placeholder="Mevcut şifre"/>
+            <input id="own-new-pass" type="password" class="db-input" placeholder="Yeni şifre (en az 6 karakter)"/>
+            <button onclick="changeOwnPassword()" class="btn-sm" style="white-space:nowrap;">Şifreyi Güncelle</button>
+          </div>
         </div>
+
         <div class="card" style="padding:0;overflow:hidden;">
           <table style="width:100%;border-collapse:collapse;">
             <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
               <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Ad Soyad</th>
-              <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">E-Posta</th>
+              <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Kullanıcı Adı</th>
               <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Rol</th>
               <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
               <th style="padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;"></th>
             </tr></thead>
-            <tbody id="kullaniciTableBody"><tr><td colspan="4" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+            <tbody id="kullaniciTableBody"><tr><td colspan="5" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -1213,6 +1424,52 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
   </div><!-- /db-main -->
 </div><!-- /db-body -->
 </div><!-- /dashboard -->
+
+<!-- Kullanıcı Ekle Modal -->
+<div id="modal-mKullanici" class="modal-wrap" onclick="if(event.target===this)closeModal('mKullanici')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Yeni Kullanıcı Ekle</h3>
+      <button onclick="closeModal('mKullanici')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <div id="kullaniciFormErr" style="display:none;margin:14px 20px 0;padding:10px 13px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;color:#FCA5A5;font-size:12px;"></div>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ad Soyad *</label><input id="f-kul-ad" type="text" class="db-input" placeholder="Örn: Ahmet Kaya"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kullanıcı Adı *</label>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input id="f-kul-username" type="text" class="db-input" placeholder="ahmet.kaya" style="flex:1;" oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9.]/g,'')"/>
+          <span style="font-size:11px;color:#475569;font-family:monospace;white-space:nowrap;">@aselasansor.com</span>
+        </div>
+      </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Şifre * (en az 6 karakter)</label><input id="f-kul-sifre" type="text" class="db-input" placeholder="Şifre belirleyin"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Rol *</label>
+        <select id="f-kul-rol" class="db-input" onchange="toggleBinaField()">
+          <option value="">Seçiniz</option>
+          <option value="admin">Yönetici (Tam Yetki)</option>
+          <option value="teknisyen">Teknisyen (Sınırlı Yetki)</option>
+          <option value="bina">Bina Yöneticisi (Sadece Kendi Binası)</option>
+        </select>
+      </div>
+      <div id="f-kul-bina-wrap" style="display:none;">
+        <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Hangi Bina? *</label>
+        <input id="f-kul-bina" type="text" class="db-input" placeholder="Örn: Tuna Apartmanı"/>
+      </div>
+
+      <!-- Rol açıklama kutusu -->
+      <div class="card" style="padding:12px 14px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.15);">
+        <p style="font-size:11px;color:#64748B;line-height:1.6;">
+          <b style="color:#00ADB5;">Yönetici:</b> Tüm modüllere erişir, bina/kullanıcı ekler-siler.<br>
+          <b style="color:#F59E0B;">Teknisyen:</b> Bina, bakım, arıza görür/düzenler. Kullanıcı/silme yetkisi yok.<br>
+          <b style="color:#10B981;">Bina Yöneticisi:</b> Sadece atanan binayı görür, arıza bildirebilir.
+        </p>
+      </div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mKullanici')" class="btn-ghost">İptal</button>
+      <button id="kulSaveBtn" onclick="createKullanici()" class="btn-sm">Kullanıcı Oluştur</button>
+    </div>
+  </div>
+</div>
 
 
 <!-- ════ MODALS ════ -->
