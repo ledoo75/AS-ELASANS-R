@@ -96,6 +96,46 @@ function qrDebugGoster(mesaj) {
 qrDebugGoster(`Sayfa yüklendi. URL'den okunan asansör ID: ${G_QR_ASANSOR_ID || '(yok)'}`);
 
 /* ═══════════════════════════════════════════════════════════════
+   BAĞLANTI DURUMU İZLEYİCİSİ
+   Sahada (asansör kuyusu, bodrum, zayıf sinyal alanları) internet
+   kesintisi sık görülür. Tarayıcının navigator.onLine API'si ve
+   online/offline event'leri ile, bağlantı koptuğunda ekranın
+   üstünde kalıcı, göz ardı edilemeyecek bir uyarı şeridi gösterilir
+   — böylece bir teknisyen "kaydettim" zannedip aslında veri
+   gitmemiş olma riskinin önüne geçilir.
+═══════════════════════════════════════════════════════════════ */
+function baglantiSeridiGuncelle() {
+  let serit = document.getElementById('baglantiUyariSeridi');
+  if (!navigator.onLine) {
+    if (!serit) {
+      serit = document.createElement('div');
+      serit.id = 'baglantiUyariSeridi';
+      serit.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#DC2626;color:#fff;font-size:12px;font-weight:700;text-align:center;padding:9px 16px;box-shadow:0 2px 8px rgba(0,0,0,.3);';
+      serit.innerHTML = '⚠️ İnternet bağlantısı yok — kaydettiğiniz işlemler bağlantı gelene kadar tamamlanmayabilir.';
+      document.body.appendChild(serit);
+    }
+  } else if (serit) {
+    serit.remove();
+  }
+}
+
+window.addEventListener('online', baglantiSeridiGuncelle);
+window.addEventListener('offline', baglantiSeridiGuncelle);
+baglantiSeridiGuncelle(); // sayfa ilk açıldığında da kontrol et
+
+// Kaydetme işlemlerinden önce çağrılabilecek yardımcı: bağlantı yoksa
+// kullanıcıyı engelleyici bir onay/uyarı ile durdurur. Tamamen
+// engellemek yerine "yine de dene" seçeneği bırakır, çünkü tarayıcı
+// navigator.onLine bazen yanlış pozitif/negatif verebilir (örn. yerel
+// ağa bağlı ama internete çıkamıyor gibi ölçemediği durumlar vardır).
+function baglantiKontrolEt() {
+  if (!navigator.onLine) {
+    return confirm('İnternet bağlantınız şu anda yok görünüyor. Bu işlem bağlantı gelene kadar kaydedilmeyebilir.\n\nYine de denemek istiyor musunuz?');
+  }
+  return true;
+}
+
+/* ═══════════════════════════════════════════════════════════════
    AUTH STATE OBSERVER
 ═══════════════════════════════════════════════════════════════ */
 // Kullanıcı adına göre otomatik profil bilgileri
@@ -873,6 +913,7 @@ window.aylikAyShift = (delta, buAy) => {
 };
 
 window.aylikDurumDegistir = async (id, yeniDurum, binaAdi) => {
+  if (!baglantiKontrolEt()) return;
   try {
     await updateDoc(doc(db, 'aylikBakimlar', id), {
       durum: yeniDurum,
@@ -1120,14 +1161,14 @@ window.saveBina = async () => {
   const yetkili         = document.getElementById('f-bina-yetkili').value.trim();
   const telefon         = document.getElementById('f-bina-telefon').value.trim();
   const vergiNo         = document.getElementById('f-bina-vergiNo').value.trim();
-  const asansor         = parseInt(document.getElementById('f-bina-asansor').value) || 0;
+  const asansor         = Math.max(0, parseInt(document.getElementById('f-bina-asansor').value) || 0);
   const sozlesme        = document.getElementById('f-bina-sozlesme').value;
   const durum           = document.getElementById('f-bina-durum').value;
   const sorumluSel      = document.getElementById('f-bina-sorumluTeknisyen');
   const sorumluTeknisyenId = sorumluSel.value;
   const sorumluTeknisyenAd = sorumluSel.selectedOptions[0]?.dataset.ad || '';
   const anlasmaTipi     = document.getElementById('f-bina-anlasmaTipi').value;
-  const anlasmaTutar    = parseFloat(document.getElementById('f-bina-anlasmaTutar').value) || 0;
+  const anlasmaTutar    = Math.max(0, parseFloat(document.getElementById('f-bina-anlasmaTutar').value) || 0);
   const anlasmaPeriyodik= document.getElementById('f-bina-anlasmaPeriyodik').checked;
   const editId          = document.getElementById('f-bina-editId').value;
 
@@ -1520,7 +1561,7 @@ window.sozBitisTarihiGuncelle = () => {
 window.saveSozlesme = async () => {
   const bina       = document.getElementById('f-soz-bina').value.trim();
   const tip        = document.getElementById('f-soz-tip').value;
-  const tutar      = parseFloat(document.getElementById('f-soz-tutar').value) || 0;
+  const tutar      = Math.max(0, parseFloat(document.getElementById('f-soz-tutar').value) || 0);
   const gun        = parseInt(document.getElementById('f-soz-gun').value) || null;
   const baslangic  = document.getElementById('f-soz-baslangic').value;
   const sureAy     = parseInt(document.getElementById('f-soz-sure').value) || 12;
@@ -1906,8 +1947,8 @@ window.saveAsansor = async () => {
   const kabin       = document.getElementById('f-asn-kabin').value.trim();
   const seriNo      = document.getElementById('f-asn-seriNo').value.trim();
   const marka       = document.getElementById('f-asn-marka').value.trim();
-  const kapasite    = parseInt(document.getElementById('f-asn-kapasite').value) || null;
-  const durak       = parseInt(document.getElementById('f-asn-durak').value) || null;
+  const kapasite    = (() => { const v = parseInt(document.getElementById('f-asn-kapasite').value); return v > 0 ? v : null; })();
+  const durak       = (() => { const v = parseInt(document.getElementById('f-asn-durak').value); return v > 0 ? v : null; })();
   const montaj      = document.getElementById('f-asn-montaj').value;
   const sonMuayene  = document.getElementById('f-asn-sonMuayene').value;
   const not         = document.getElementById('f-asn-not').value.trim();
@@ -2092,6 +2133,7 @@ function qrHizliEkraniDoldur(asansor) {
 window.qrHizliBakimIsaretle = async () => {
   const asansor = G_QR_AKTIF_ASANSOR;
   if (!asansor) return;
+  if (!baglantiKontrolEt()) return;
 
   const ayKey = new Date().toISOString().slice(0,7);
   const bugun = new Date();
@@ -2668,7 +2710,7 @@ window.exportBakimlarCSV = () => {
 ═══════════════════════════════════════════════════════════════ */
 window.saveGider = async () => {
   const kategori  = document.getElementById('f-gider-kategori').value;
-  const tutar     = parseFloat(document.getElementById('f-gider-tutar').value) || 0;
+  const tutar     = Math.max(0, parseFloat(document.getElementById('f-gider-tutar').value) || 0);
   const tarih     = document.getElementById('f-gider-tarih').value;
   const aciklama  = document.getElementById('f-gider-aciklama').value.trim();
 
@@ -3012,7 +3054,7 @@ window.yillikRaporPDF = async () => {
 ═══════════════════════════════════════════════════════════════ */
 window.saveOdeme = async () => {
   const bina      = document.getElementById('f-odeme-bina').value.trim();
-  const tutar     = parseFloat(document.getElementById('f-odeme-tutar').value) || 0;
+  const tutar     = Math.max(0, parseFloat(document.getElementById('f-odeme-tutar').value) || 0);
   const tarih     = document.getElementById('f-odeme-tarih').value;
   const tur       = document.getElementById('f-odeme-tur').value;
   const aciklama  = document.getElementById('f-odeme-aciklama').value.trim();
@@ -3153,7 +3195,7 @@ window.saveAvans = async () => {
   const personelSel = document.getElementById('f-avans-personel');
   const personelId  = personelSel.value;
   const personelAd  = personelSel.selectedOptions[0]?.dataset.ad || '';
-  const tutar       = parseFloat(document.getElementById('f-avans-tutar').value) || 0;
+  const tutar       = Math.max(0, parseFloat(document.getElementById('f-avans-tutar').value) || 0);
   const tarih       = document.getElementById('f-avans-tarih').value;
   const not         = document.getElementById('f-avans-not').value.trim();
 
@@ -3188,7 +3230,7 @@ window.openAvansKullanimModal = (personelId, personelAd) => {
 
 window.saveAvansKullanim = async () => {
   const personelId = document.getElementById('f-avk-personel').value;
-  const tutar       = parseFloat(document.getElementById('f-avk-tutar').value) || 0;
+  const tutar       = Math.max(0, parseFloat(document.getElementById('f-avk-tutar').value) || 0);
   const tarih       = document.getElementById('f-avk-tarih').value;
   const aciklama    = document.getElementById('f-avk-aciklama').value.trim();
 
@@ -3288,7 +3330,7 @@ window.saveMaasTanim = async () => {
   const personelSel = document.getElementById('f-maas-personel');
   const personelId  = personelSel.value;
   const personelAd  = personelSel.selectedOptions[0]?.dataset.ad || '';
-  const tutar       = parseFloat(document.getElementById('f-maas-tutar').value) || 0;
+  const tutar       = Math.max(0, parseFloat(document.getElementById('f-maas-tutar').value) || 0);
 
   if (!personelId || !tutar) { alert('Personel ve aylık maaş tutarı zorunludur.'); return; }
 
@@ -3436,6 +3478,8 @@ const MESAI_KATSAYI = 1.5;
 const HAFTAICI_VARDIYA_BASLA = '08:30';
 const HAFTAICI_VARDIYA_BITIS = '18:00';
 const CUMARTESI_VARDIYA_BITIS = '13:00'; // bu saatten sonrası fazla mesai
+const OGLE_ARASI_BASLA = '12:00'; // hafta içi vardiyadan düşülen 1 saatlik öğle arası
+const OGLE_ARASI_BITIS = '13:00';
 
 function saateCevir(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
@@ -3461,7 +3505,7 @@ function gunlukFazlaMesaiHesapla(tarihStr, giris, cikis) {
     // PAZAR: çalışılan her dakika tamamen fazla mesai
     fazlaDakika = cikisDk - girisDk;
   } else if (gun === 6) {
-    // CUMARTESİ: 13:00'e kadar normal, sonrası fazla mesai
+    // CUMARTESİ: 13:00'e kadar normal, sonrası fazla mesai (öğle arası yok)
     const esikDk = saateCevir(CUMARTESI_VARDIYA_BITIS);
     if (cikisDk <= esikDk) {
       normalDakika = cikisDk - girisDk;
@@ -3489,6 +3533,19 @@ function gunlukFazlaMesaiHesapla(tarihStr, giris, cikis) {
     // Vardiya sonrası geç çıkış (fazla mesai)
     if (cikisDk > vardiyaBitisDk) {
       fazlaDakika += cikisDk - Math.max(girisDk, vardiyaBitisDk);
+    }
+
+    // Öğle arası (12:00-13:00) düşülür — SADECE çalışılan saatlerin
+    // gerçekten bu aralığı kapsadığı kadarıyla, ve sadece normal mesai
+    // dakikasından düşülür (fazla mesaiden değil, çünkü öğle arası
+    // normal vardiyanın bir parçasıdır).
+    const ogleBaslaDk = saateCevir(OGLE_ARASI_BASLA);
+    const ogleBitisDk = saateCevir(OGLE_ARASI_BITIS);
+    const ogleKesisimBasla = Math.max(girisDk, ogleBaslaDk);
+    const ogleKesisimBitis = Math.min(cikisDk, ogleBitisDk);
+    if (ogleKesisimBitis > ogleKesisimBasla) {
+      const dusulecekDakika = Math.min(ogleKesisimBitis - ogleKesisimBasla, normalDakika);
+      normalDakika -= dusulecekDakika;
     }
   }
 
@@ -3720,7 +3777,7 @@ window.editMesai = async (id) => {
   document.getElementById('f-mesai-personel').value = m.personelId;
   document.getElementById('f-mesai-tarih').value     = m.tarih;
   document.getElementById('f-mesai-durum').value     = m.durum;
-  document.getElementById('f-mesai-giris').value     = m.giris || '08:00';
+  document.getElementById('f-mesai-giris').value     = m.giris || '08:30';
   document.getElementById('f-mesai-cikis').value     = m.cikis || '18:00';
   document.getElementById('f-mesai-not').value       = m.not || '';
   document.getElementById('f-mesai-editId').value    = id;
@@ -3740,7 +3797,7 @@ function resetMesaiForm() {
   document.getElementById('f-mesai-personel').value = '';
   document.getElementById('f-mesai-tarih').value = mesaiSeciliTarih.toISOString().slice(0,10);
   document.getElementById('f-mesai-durum').value = 'calisti';
-  document.getElementById('f-mesai-giris').value = '08:00';
+  document.getElementById('f-mesai-giris').value = '08:30';
   document.getElementById('f-mesai-cikis').value = '18:00';
   document.getElementById('f-mesai-not').value = '';
   toggleMesaiSaatAlanlari();
@@ -4152,6 +4209,7 @@ window.saveBakim = async () => {
 };
 
 window.completeBakim = async (id) => {
+  if (!baglantiKontrolEt()) return;
   await updateDoc(doc(db, 'bakimlar', id), { durum: 'tamamlandi', tamamlanmaTarihi: serverTimestamp() });
 };
 
@@ -4188,12 +4246,19 @@ window.sendBakimReminder = (bakimId) => {
    FIRESTORE CRUD — ARIZA
 ═══════════════════════════════════════════════════════════════ */
 window.saveAriza = async () => {
-  const bina     = document.getElementById('f-ariza-bina').value.trim();
+  // Bina rolündeki kullanıcı her ne yazarsa yazsın, gönderilecek bina adı
+  // kendi profilindeki bina ile zorlanır (HTML readonly client-side bir
+  // önlemdir, asıl garanti budur — yine de gerçek güvenlik Firestore
+  // Rules'daki "create" kuralının da kontrol etmesiyle sağlanmalıdır).
+  const bina = currentUserData?.rol === 'bina'
+    ? (currentUserData.bina || '')
+    : document.getElementById('f-ariza-bina').value.trim();
   const kabin    = document.getElementById('f-ariza-kabin').value.trim();
   const tip      = document.getElementById('f-ariza-tip').value;
   const aciklama = document.getElementById('f-ariza-aciklama').value.trim();
 
   if (!bina) { alert('Bina zorunludur.'); return; }
+  if (!baglantiKontrolEt()) return;
 
   try {
     await addDoc(collection(db, 'arizalar'), {
@@ -4231,6 +4296,10 @@ window.deleteAriza = async (id) => {
 window.toggleBinaField = () => {
   const rol = document.getElementById('f-kul-rol').value;
   document.getElementById('f-kul-bina-wrap').style.display = rol === 'bina' ? 'block' : 'none';
+  if (rol === 'bina') {
+    const binaList = document.getElementById('kulBinaListesi');
+    if (binaList) binaList.innerHTML = G_BINALAR.map(b => `<option value="${b.ad}">`).join('');
+  }
 };
 
 function showKulFormError(msg) {
@@ -4408,7 +4477,27 @@ window.resetKullaniciSifre = async (uid, currentEmail, adName) => {
 /* ═══════════════════════════════════════════════════════════════
    MODAL & SIDEBAR HELPERS
 ═══════════════════════════════════════════════════════════════ */
-window.openModal  = (id) => { document.getElementById('modal-'+id).classList.add('open'); };
+window.openModal  = (id) => {
+  document.getElementById('modal-'+id).classList.add('open');
+  // Arıza modalı açılırken, bina rolündeki kullanıcı için "Bina" alanı
+  // otomatik kendi binasıyla doldurulup salt-okunur yapılır — başka bir
+  // binanın adına yanlışlıkla (veya kasıtlı) arıza açılması önlenir.
+  if (id === 'mAriza') {
+    const binaInput = document.getElementById('f-ariza-bina');
+    if (currentUserData?.rol === 'bina' && currentUserData?.bina) {
+      binaInput.value = currentUserData.bina;
+      binaInput.readOnly = true;
+      binaInput.style.background = 'rgba(71,85,105,.15)';
+      binaInput.style.cursor = 'not-allowed';
+    } else {
+      binaInput.readOnly = false;
+      binaInput.style.background = '';
+      binaInput.style.cursor = '';
+      const binaList = document.getElementById('arizaBinaListesi');
+      if (binaList) binaList.innerHTML = G_BINALAR.map(b => `<option value="${b.ad}">`).join('');
+    }
+  }
+};
 window.closeModal = (id) => { document.getElementById('modal-'+id).classList.remove('open'); };
 window.openMobileSidebar  = () => { document.getElementById('dbSidebar').classList.add('open'); document.getElementById('sidebarOverlay').style.display='block'; };
 window.closeMobileSidebar = () => { document.getElementById('dbSidebar').classList.remove('open'); document.getElementById('sidebarOverlay').style.display='none'; };
@@ -4869,7 +4958,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
     <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:48px;align-items:start;" class="hero-grid">
       <div style="display:flex;flex-direction:column;gap:24px;">
-        <div><p style="font-size:11px;font-weight:700;color:#0F172A;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Merkez Ofis</p><p style="color:#64748B;font-size:14px;line-height:1.7;">İncirtepe Mah. 269. Sok. No: 3 Daire: 1<br>Esenyurt / İstanbul</p></div>
+        <div><p style="font-size:11px;font-weight:700;color:#0F172A;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Merkez Ofis</p><p style="color:#64748B;font-size:14px;line-height:1.7;">Esenyurt / İstanbul</p></div>
         <div><p style="font-size:11px;font-weight:700;color:#0F172A;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Telefon & WhatsApp</p><p style="font-size:24px;font-weight:900;color:#0F172A;">0533 497 73 17</p>
           <a href="https://wa.me/905334977317" target="_blank" style="display:inline-flex;align-items:center;gap:8px;margin-top:12px;padding:10px 18px;background:#22C55E;color:#fff;border-radius:8px;font-size:12px;font-weight:700;text-transform:uppercase;text-decoration:none;">WhatsApp Mesaj</a>
         </div>
@@ -5648,7 +5737,9 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       </div>
       <div id="f-kul-bina-wrap" style="display:none;">
         <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Hangi Bina? *</label>
-        <input id="f-kul-bina" type="text" class="db-input" placeholder="Örn: Tuna Apartmanı"/>
+        <input id="f-kul-bina" type="text" class="db-input" placeholder="Cari listesinden seçin veya yazın" list="kulBinaListesi"/>
+        <datalist id="kulBinaListesi"></datalist>
+        <p style="font-size:10px;color:#64748B;margin-top:5px;">ℹ️ Cari Yönetimi'ndeki binalar otomatik listelenir, dilerseniz farklı bir isim de yazabilirsiniz.</p>
       </div>
 
       <!-- Rol açıklama kutusu -->
@@ -5690,7 +5781,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Vergi No / TC Kimlik No</label><input id="f-bina-vergiNo" type="text" class="db-input" placeholder="Fatura kesimi için (opsiyonel)"/></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Asansör Adedi</label><input id="f-bina-asansor" type="number" class="db-input" placeholder="2"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Asansör Adedi</label><input id="f-bina-asansor" type="number" class="db-input" min="0" placeholder="2"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Durum</label>
           <select id="f-bina-durum" class="db-input"><option value="ok">Normal</option><option value="warn">Bakım Yaklaşıyor</option><option value="err">Arıza Var</option></select></div>
       </div>
@@ -5706,7 +5797,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
           <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Anlaşma Tipi</label>
             <select id="f-bina-anlasmaTipi" class="db-input"><option value="">— Yok —</option><option value="Bakım">Bakım</option><option value="Montaj">Montaj</option><option value="Revizyon">Revizyon</option></select></div>
-          <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Anlaşma Tutarı (₺)</label><input id="f-bina-anlasmaTutar" type="number" class="db-input" placeholder="1500"/></div>
+          <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Anlaşma Tutarı (₺)</label><input id="f-bina-anlasmaTutar" type="number" class="db-input" min="0" placeholder="1500"/></div>
         </div>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
           <input type="checkbox" id="f-bina-anlasmaPeriyodik" style="width:16px;height:16px;accent-color:#00ADB5;cursor:pointer;">
@@ -5755,7 +5846,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <button onclick="closeModal('mAriza')" style="color:#475569;background:none;border:none;cursor:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
     </div>
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
-      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina *</label><input id="f-ariza-bina" type="text" class="db-input" placeholder="Tuna Apartmanı"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina *</label>
+        <input id="f-ariza-bina" type="text" class="db-input" placeholder="Tuna Apartmanı" list="arizaBinaListesi"/>
+        <datalist id="arizaBinaListesi"></datalist>
+      </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kabin</label><input id="f-ariza-kabin" type="text" class="db-input" placeholder="Kabin #1"/></div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Arıza Tipi</label>
         <select id="f-ariza-tip" class="db-input"><option>Kapı Sensörü</option><option>Motor / Tahrik</option><option>Aydınlatma</option><option>Kumanda Kartı</option><option>Halat / Ray</option><option>Diğer</option></select></div>
@@ -5788,7 +5882,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           <option value="Revizyon">Revizyon</option>
         </select></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Anlaşma Tutarı (₺) *</label><input id="f-soz-tutar" type="number" class="db-input" placeholder="1500"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Anlaşma Tutarı (₺) *</label><input id="f-soz-tutar" type="number" class="db-input" min="0" placeholder="1500"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Günü (Ayın)</label><input id="f-soz-gun" type="number" min="1" max="31" class="db-input" placeholder="5"/></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
@@ -5841,7 +5935,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <datalist id="odemeBinaListesi"></datalist>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-odeme-tutar" type="number" class="db-input" placeholder="1500"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-odeme-tutar" type="number" class="db-input" min="0" placeholder="1500"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-odeme-tarih" type="date" class="db-input"/></div>
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Türü</label>
@@ -5875,7 +5969,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         </select>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-gider-tutar" type="number" class="db-input" placeholder="850"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-gider-tutar" type="number" class="db-input" min="0" placeholder="850"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-gider-tarih" type="date" class="db-input"/></div>
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Açıklama</label><input id="f-gider-aciklama" type="text" class="db-input" placeholder="Örn: Servis aracı yakıt dolumu"/></div>
@@ -5899,7 +5993,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <select id="f-avans-personel" class="db-input"><option value="">— Seçiniz —</option></select>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-avans-tutar" type="number" class="db-input" placeholder="2000"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-avans-tutar" type="number" class="db-input" min="0" placeholder="2000"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-avans-tarih" type="date" class="db-input"/></div>
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not</label><input id="f-avans-not" type="text" class="db-input" placeholder="Örn: Haziran ayı yol/yakıt avansı"/></div>
@@ -5922,9 +6016,9 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Personel *</label>
         <select id="f-maas-personel" class="db-input"><option value="">— Seçiniz —</option></select>
       </div>
-      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Aylık Sabit Maaş (₺) *</label><input id="f-maas-tutar" type="number" class="db-input" placeholder="18000"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Aylık Sabit Maaş (₺) *</label><input id="f-maas-tutar" type="number" class="db-input" min="0" placeholder="18000"/></div>
       <div class="card" style="padding:10px 12px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.15);">
-        <p style="font-size:11px;color:#64748B;">ℹ️ Bu tutar her ay için sabit kalır. Fazla mesai şu kurala göre otomatik hesaplanır: <b style="color:#00ADB5;">hafta içi 08:30-18:00 dışı</b>, <b style="color:#00ADB5;">Cumartesi 13:00 sonrası</b>, ve <b style="color:#00ADB5;">Pazar tamamı</b> 1.5 katı ücretle maaşa eklenir. Personele o ay verilen avanslar, ödeme işaretlenirken otomatik olarak bu tutardan düşülür.</p>
+        <p style="font-size:11px;color:#64748B;">ℹ️ Bu tutar her ay için sabit kalır. Fazla mesai şu kurala göre otomatik hesaplanır: <b style="color:#00ADB5;">hafta içi 08:30-18:00 dışı</b> (12:00-13:00 öğle arası hariç tutulur), <b style="color:#00ADB5;">Cumartesi 13:00 sonrası</b>, ve <b style="color:#00ADB5;">Pazar tamamı</b> 1.5 katı ücretle maaşa eklenir. Personele o ay verilen avanslar, ödeme işaretlenirken otomatik olarak bu tutardan düşülür.</p>
       </div>
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
@@ -5956,7 +6050,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         </select>
       </div>
       <div id="f-mesai-saat-wrap" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Giriş Saati</label><input id="f-mesai-giris" type="time" class="db-input" value="08:00" oninput="mesaiOnizlemeGuncelle()"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Giriş Saati</label><input id="f-mesai-giris" type="time" class="db-input" value="08:30" oninput="mesaiOnizlemeGuncelle()"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Çıkış Saati</label><input id="f-mesai-cikis" type="time" class="db-input" value="18:00" oninput="mesaiOnizlemeGuncelle()"/></div>
       </div>
 
@@ -5989,7 +6083,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
     <input type="hidden" id="f-avk-personel"/>
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
-      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kullanılan Tutar (₺) *</label><input id="f-avk-tutar" type="number" class="db-input" placeholder="350"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kullanılan Tutar (₺) *</label><input id="f-avk-tutar" type="number" class="db-input" min="0" placeholder="350"/></div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-avk-tarih" type="date" class="db-input"/></div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Açıklama</label><input id="f-avk-aciklama" type="text" class="db-input" placeholder="Örn: Yakıt, malzeme, yol masrafı..."/></div>
     </div>
@@ -6019,8 +6113,8 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Marka</label><input id="f-asn-marka" type="text" class="db-input" placeholder="Otis / Kone / Schindler..."/></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kapasite (kg)</label><input id="f-asn-kapasite" type="number" class="db-input" placeholder="630"/></div>
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Durak Sayısı</label><input id="f-asn-durak" type="number" class="db-input" placeholder="8"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kapasite (kg)</label><input id="f-asn-kapasite" type="number" class="db-input" min="0" placeholder="630"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Durak Sayısı</label><input id="f-asn-durak" type="number" class="db-input" min="0" placeholder="8"/></div>
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Montaj Tarihi</label><input id="f-asn-montaj" type="date" class="db-input"/></div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Son Periyodik Muayene Tarihi</label><input id="f-asn-sonMuayene" type="date" class="db-input"/></div>
@@ -6203,7 +6297,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
     <!-- Alt bilgi -->
     <div style="background:#F8FAFC; padding:16px 40px; border-top:1px solid #E2E8F0; text-align:center;">
-      <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
+      <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17</div>
     </div>
   </div>
 
@@ -6283,7 +6377,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
     <!-- Alt bilgi -->
     <div style="background:#F8FAFC; padding:16px 40px; border-top:1px solid #E2E8F0; text-align:center;">
-      <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
+      <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17</div>
     </div>
   </div>
 
@@ -6364,7 +6458,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
 
     <div style="background:#F8FAFC; padding:16px 40px; border-top:1px solid #E2E8F0; text-align:center;">
-      <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
+      <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17</div>
     </div>
   </div>
 
@@ -6406,7 +6500,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:14px; padding:20px;">
           <div style="font-size:10px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:10px;">Hizmet Veren (Yüklenici)</div>
           <div style="font-size:15px; font-weight:800; color:#0F172A; margin-bottom:6px;">AS-EL ASANSÖR</div>
-          <div style="font-size:12px; color:#64748B; line-height:1.6;">İncirtepe Mah. 269. Sok. No: 3 Daire: 1<br>Esenyurt / İstanbul<br>Tel: 0533 497 73 17</div>
+          <div style="font-size:12px; color:#64748B; line-height:1.6;">Esenyurt / İstanbul<br>Tel: 0533 497 73 17</div>
         </div>
         <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:14px; padding:20px;">
           <div style="font-size:10px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:10px;">Hizmet Alan (Müşteri)</div>
@@ -6475,7 +6569,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
     <!-- Alt bilgi -->
     <div style="background:#F8FAFC; padding:16px 40px; border-top:1px solid #E2E8F0; text-align:center;">
-      <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
+      <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17</div>
     </div>
   </div>
 
@@ -6521,7 +6615,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px;">
           <div style="font-size:9.5px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.7px; font-weight:700; margin-bottom:8px;">Yüklenici ("AS-EL")</div>
           <div style="font-size:13px; font-weight:800; color:#0F172A; margin-bottom:4px;">AS-EL ASANSÖR</div>
-          <div style="font-size:10.5px; color:#64748B; line-height:1.6;">İncirtepe Mah. 269. Sok. No: 3 Daire: 1<br>Esenyurt / İstanbul · 0533 497 73 17</div>
+          <div style="font-size:10.5px; color:#64748B; line-height:1.6;">Esenyurt / İstanbul · 0533 497 73 17</div>
         </div>
         <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px;">
           <div style="font-size:9.5px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.7px; font-weight:700; margin-bottom:8px;">Hizmet Alan ("Müşteri")</div>
@@ -6636,7 +6730,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
     <!-- Alt bilgi -->
     <div style="background:#F8FAFC; padding:14px 40px; border-top:1px solid #E2E8F0; text-align:center;">
-      <div style="font-size:9.5px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
+      <div style="font-size:9.5px; color:#94A3B8; font-weight:500;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17</div>
     </div>
   </div>
 
@@ -6754,7 +6848,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
     <!-- Alt bilgi -->
     <div style="background:#F8FAFC; padding:14px 40px; border-top:1px solid #E2E8F0; text-align:center;">
-      <div style="font-size:9.5px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
+      <div style="font-size:9.5px; color:#94A3B8; font-weight:500;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17</div>
     </div>
   </div>
 
@@ -6830,7 +6924,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
     <!-- Alt bilgi -->
     <div style="background:#F8FAFC; padding:14px 40px; border-top:1px solid #E2E8F0; text-align:center;">
-      <div style="font-size:9.5px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
+      <div style="font-size:9.5px; color:#94A3B8; font-weight:500;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17</div>
     </div>
   </div>
 
