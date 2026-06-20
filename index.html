@@ -26,6 +26,7 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
 <!-- ══ FIREBASE SDK (CDN) ══════════════════════════════════════ -->
 <script type="module">
@@ -270,6 +271,27 @@ function openDashboard() {
     setTimeout(otomatikAylikBakimOlustur, 1500); // binalar verisinin gelmesi için kısa bekleme
     setTimeout(otomatikPeriyodikBorcOlustur, 1700);
   }
+
+  // QR kod ile gelindiyse (?asansor=ID), asansör verisi gerçekten
+  // yüklenene kadar bekleyip otomatik olarak Asansör Dosyası sayfasına
+  // ve ilgili karta götür. Sabit bir süre beklemek yerine veri varlığı
+  // kontrol edilir (yavaş bağlantılarda hatalı "bulunamadı" mesajını önler).
+  const qrAsansorId = new URLSearchParams(window.location.search).get('asansor');
+  if (qrAsansorId) {
+    qrVeriBeklerekYonlendir(qrAsansorId);
+  }
+}
+
+function qrVeriBeklerekYonlendir(asansorId, gecenSure) {
+  gecenSure = gecenSure || 0;
+  const MAKSIMUM_BEKLEME = 8000; // 8 saniye sonra veri gelmediyse de yönlendir (kayıt gerçekten yok diyebiliriz)
+  const KONTROL_ARALIGI = 250;
+
+  if (G_ASANSORLER.length > 0 || gecenSure >= MAKSIMUM_BEKLEME) {
+    qrAsansoreYonlendir(asansorId);
+    return;
+  }
+  setTimeout(() => qrVeriBeklerekYonlendir(asansorId, gecenSure + KONTROL_ARALIGI), KONTROL_ARALIGI);
 }
 
 function closeDashboard() {
@@ -298,6 +320,41 @@ let G_KULLANICILAR = [];      // personel listesi (avans dropdown'u için)
 let G_AYLIK_BAKIMLAR = [];     // her bina için aylık bakım yapıldı/yapılmadı kaydı
 let G_BORCLAR = [];            // cari borç kayıtları (anlaşma bedeli üzerinden otomatik/manuel)
 let G_GIDERLER = [];            // firma giderleri (yakıt, malzeme, kira vb.)
+let G_MAASLAR = [];             // personel sabit aylık maaş tanımları
+let G_MAAS_ODEMELERI = [];      // her ay için "maaş ödendi" kayıtları
+let G_MESAI = [];               // günlük mesai/puantaj kayıtları
+
+// ── ARAMA FİLTRESİ STATE'İ ─────────────────────────────────────
+// Her sayfa için ayrı arama terimi saklanır, render fonksiyonları
+// G_BINALAR/G_BAKIMLAR gibi ham veriyi bu terime göre filtreler.
+const G_ARAMA = {
+  binalar: '', bakimlar: '', arizalar: '', sozlesmeler: '',
+  asansorler: '', odemeler: '', musteriCari: ''
+};
+
+// Genel amaçlı arama yardımcı fonksiyonu: bir nesnenin seçilen
+// alanlarında (case-insensitive, Türkçe karakter toleranslı) arama yapar.
+function aramaEslesir(terim, ...degerler) {
+  if (!terim) return true;
+  const normalize = s => String(s||'').toLocaleLowerCase('tr-TR')
+    .replace(/ı/g,'i').replace(/ğ/g,'g').replace(/ü/g,'u').replace(/ş/g,'s').replace(/ö/g,'o').replace(/ç/g,'c');
+  const t = normalize(terim);
+  return degerler.some(d => normalize(d).includes(t));
+}
+
+window.aramaGuncelle = (sayfa, terim) => {
+  G_ARAMA[sayfa] = terim;
+  const renderMap = {
+    binalar: () => renderBinalar(G_BINALAR),
+    bakimlar: () => renderBakimlar(G_BAKIMLAR),
+    arizalar: () => renderArizalar(G_ARIZALAR),
+    sozlesmeler: () => renderSozlesmeler(G_SOZLESMELER),
+    asansorler: () => renderAsansorler(),
+    odemeler: () => renderMuhasebe(),
+    musteriCari: () => renderMusteriCariListesi(),
+  };
+  renderMap[sayfa]?.();
+};
 
 function subscribeAll() {
   const role = currentUserData?.rol;
@@ -323,6 +380,7 @@ function subscribeAll() {
     renderBekleyenSayac(data.filter(b => b.durum === 'bekliyor').length);
     if (document.getElementById('pg-takvim')?.classList.contains('active')) renderCalendar();
     if (document.getElementById('pg-performans')?.classList.contains('active')) renderPerformans();
+    if (document.getElementById('pg-gorevler')?.classList.contains('active')) renderGunlukGorevler();
   }));
 
   // Arızalar
@@ -345,6 +403,7 @@ function subscribeAll() {
     if (role === 'bina' && bina) data = data.filter(s => s.bina === bina);
     G_SOZLESMELER = data;
     renderSozlesmeler(data);
+    rebuildBildirimler();
   }));
 
   // Ödemeler (Muhasebe)
@@ -386,8 +445,8 @@ function subscribeAll() {
     if (document.getElementById('muhTab-musteri')?.style.display !== 'none') renderMusteriCariListesi();
   }));
 
-  // Giderler (firma masrafları — sadece admin/teknisyen, bina rolüne gösterilmez)
-  if (role !== 'bina') {
+  // Giderler (firma masrafları — HASSAS, sadece admin)
+  if (role === 'admin') {
     const giderQ = query(collection(db, 'giderler'), orderBy('tarih', 'desc'));
     unsubscribers.push(onSnapshot(giderQ, snap => {
       G_GIDERLER = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -396,8 +455,31 @@ function subscribeAll() {
     }));
   }
 
-  // Avanslar (Personel Cari — sadece admin/teknisyen erişimi olan veri, bina rolüne gösterilmez)
-  if (role !== 'bina') {
+  // Maaşlar (personel sabit aylık maaş tanımları — HASSAS BORDRO VERİSİ, sadece admin)
+  if (role === 'admin') {
+    const maasQ = query(collection(db, 'maaslar'));
+    unsubscribers.push(onSnapshot(maasQ, snap => {
+      G_MAASLAR = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (document.getElementById('muhTab-maas')?.style.display !== 'none') renderMaaslar();
+    }));
+
+    const maasOdemeQ = query(collection(db, 'maasOdemeleri'), orderBy('ayKey', 'desc'));
+    unsubscribers.push(onSnapshot(maasOdemeQ, snap => {
+      G_MAAS_ODEMELERI = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (document.getElementById('muhTab-maas')?.style.display !== 'none') renderMaaslar();
+    }));
+
+    // Mesai/Puantaj kayıtları
+    const mesaiQ = query(collection(db, 'mesaiKayitlari'), orderBy('tarih', 'desc'));
+    unsubscribers.push(onSnapshot(mesaiQ, snap => {
+      G_MESAI = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (document.getElementById('muhTab-mesai')?.style.display !== 'none') { renderMesai(); renderMesaiOzet(); }
+      if (document.getElementById('muhTab-maas')?.style.display !== 'none') renderMaaslar();
+    }));
+  }
+
+  // Avanslar (Personel Cari — HASSAS BORDRO VERİSİ, sadece admin)
+  if (role === 'admin') {
     const avansQ = query(collection(db, 'avanslar'), orderBy('tarih', 'desc'));
     unsubscribers.push(onSnapshot(avansQ, snap => {
       G_AVANSLAR = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -439,6 +521,7 @@ function setupUI() {
   const navDefs = {
     admin: [
       { id:'dashboard',   icon:'grid',     label:'Genel Bakış' },
+      { id:'gorevler',    icon:'route',    label:'Bugünün Görevleri' },
       { id:'takvim',      icon:'calendar', label:'Bakım Takvimi' },
       { id:'aylik',       icon:'checklist',label:'Aylık Bakım Takibi' },
       { id:'binalar',     icon:'building', label:'Cari Yönetimi' },
@@ -452,6 +535,7 @@ function setupUI() {
     ],
     teknisyen: [
       { id:'dashboard', icon:'grid',     label:'Genel Bakış' },
+      { id:'gorevler',  icon:'route',    label:'Bugünün Görevleri' },
       { id:'takvim',    icon:'calendar', label:'Bakım Takvimi' },
       { id:'aylik',     icon:'checklist',label:'Aylık Bakım Takibi' },
       { id:'binalar',   icon:'building', label:'Cariler' },
@@ -483,6 +567,7 @@ function setupUI() {
     elevator: `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>`,
     bell:     `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>`,
     checklist:`<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>`,
+    route:    `<circle cx="6" cy="19" r="2.5" stroke-width="2"/><circle cx="18" cy="5" r="2.5" stroke-width="2"/><path stroke-linecap="round" stroke-width="2" d="M8.3 17.5L13 9M15.5 7.3L18 5M8 19h6a3 3 0 003-3v-1a3 3 0 013-3"/>`,
   };
 
   const items  = navDefs[role] || navDefs.bina;
@@ -533,7 +618,8 @@ window.showPage = (name, btn) => {
     arizalar:'Arıza Kayıtları', kullanicilar:'Kullanıcı Yönetimi',
     takvim:'Bakım Takvimi', sozlesmeler:'Sözleşme & Fatura Takibi',
     performans:'Teknisyen Performansı', muhasebe:'Muhasebe',
-    asansorler:'Asansör Teknik Dosyası', aylik:'Aylık Bakım Takibi'
+    asansorler:'Asansör Teknik Dosyası', aylik:'Aylık Bakım Takibi',
+    gorevler:'Bugünün Görevleri'
   };
   document.getElementById('pageTitle').textContent = titles[name] || name;
   if (name === 'takvim') renderCalendar();
@@ -541,6 +627,7 @@ window.showPage = (name, btn) => {
   if (name === 'muhasebe') renderMuhasebe();
   if (name === 'asansorler') renderAsansorler();
   if (name === 'aylik') renderAylikTakip();
+  if (name === 'gorevler') renderGunlukGorevler();
   closeMobileSidebar();
 };
 
@@ -549,8 +636,9 @@ window.showPage = (name, btn) => {
 ═══════════════════════════════════════════════════════════════ */
 function renderBinalar(data) {
   const tbody = document.getElementById('binaTableBody');
+  data = data.filter(b => aramaEslesir(G_ARAMA.binalar, b.ad, b.adres, b.yetkili, b.cariKodu, b.telefon));
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz cari eklenmemiş.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">${G_ARAMA.binalar ? 'Aramayla eşleşen cari bulunamadı.' : 'Henüz cari eklenmemiş.'}</td></tr>`;
     return;
   }
   const durumBadge = d => d==='ok'
@@ -570,9 +658,15 @@ function renderBinalar(data) {
       <td style="padding:12px;font-size:12px;color:#CBD5E1;">${b.asansorSayisi || 0} adet</td>
       <td style="padding:12px;font-size:11px;color:#64748B;font-family:monospace;">${b.sozlesme || '—'}</td>
       <td style="padding:12px;">${durumBadge(b.durum || 'ok')}</td>
-      <td style="padding:12px;display:flex;gap:6px;">
-        <button onclick="editBina('${b.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;" class="admin-only">Düzenle</button>
-        <button onclick="deleteBina('${b.id}','${b.ad}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
+      <td style="padding:12px;">
+        <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+          <button onclick="hizliBakimEkle('${b.ad.replace(/'/g,"\\'")}')" title="Bakım Ekle" class="admin-only" style="font-size:13px;background:rgba(16,185,129,.12);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🔧</button>
+          <button onclick="hizliArizaEkle('${b.ad.replace(/'/g,"\\'")}')" title="Arıza Bildir" style="font-size:13px;background:rgba(239,68,68,.12);color:#EF4444;border:1px solid rgba(239,68,68,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">⚠️</button>
+          <button onclick="hizliOdemeEkle('${b.ad.replace(/'/g,"\\'")}')" title="Ödeme Kaydet" class="admin-only" style="font-size:13px;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">💰</button>
+          <span style="width:1px;height:18px;background:rgba(71,85,105,.4);margin:0 2px;"></span>
+          <button onclick="editBina('${b.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;" class="admin-only">Düzenle</button>
+          <button onclick="deleteBina('${b.id}','${b.ad}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
+        </div>
       </td>
     </tr>`).join('');
 
@@ -594,8 +688,12 @@ function renderBakimlar(data) {
   const grid = document.getElementById('bakimGrid');
   const list = document.getElementById('bakimDashList');
 
+  const gridData = data.filter(b => aramaEslesir(G_ARAMA.bakimlar, b.bina, b.kabin, b.tip, b.teknisyen));
+
+  if (!gridData.length) {
+    grid.innerHTML = `<div style="padding:28px;text-align:center;color:#475569;font-size:13px;grid-column:1/-1;">${G_ARAMA.bakimlar ? 'Aramayla eşleşen bakım bulunamadı.' : 'Henüz bakım kaydı yok.'}</div>`;
+  }
   if (!data.length) {
-    grid.innerHTML = `<div style="padding:28px;text-align:center;color:#475569;font-size:13px;grid-column:1/-1;">Henüz bakım kaydı yok.</div>`;
     list.innerHTML = `<div style="padding:16px 18px;font-size:12px;color:#475569;">Yaklaşan bakım yok.</div>`;
     return;
   }
@@ -610,7 +708,7 @@ function renderBakimlar(data) {
     return ts;
   };
 
-  grid.innerHTML = data.map(b => `
+  if (gridData.length) grid.innerHTML = gridData.map(b => `
     <div class="card" style="padding:16px;border-left:3px solid ${colorMap[b.durum]||'#475569'};">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
         <span class="sbadge ${badgeMap[b.durum]||''}">${labelMap[b.durum]||b.durum}</span>
@@ -848,8 +946,9 @@ function renderAylikTakip() {
 ═══════════════════════════════════════════════════════════════ */
 function renderArizalar(data) {
   const list = document.getElementById('arizaList');
+  data = data.filter(a => aramaEslesir(G_ARAMA.arizalar, a.bina, a.kabin, a.tip, a.aciklama, a.teknisyen));
   if (!data.length) {
-    list.innerHTML = `<div style="padding:28px;text-align:center;color:#475569;font-size:13px;">Kayıtlı arıza yok.</div>`;
+    list.innerHTML = `<div style="padding:28px;text-align:center;color:#475569;font-size:13px;">${G_ARAMA.arizalar ? 'Aramayla eşleşen arıza bulunamadı.' : 'Kayıtlı arıza yok.'}</div>`;
     return;
   }
   const tarihStr = ts => {
@@ -1062,6 +1161,28 @@ window.resetBinaForm = function() {
   document.getElementById('mBinaTitle').textContent = 'Yeni Cari Ekle';
 }
 
+// ── CARİ LİSTESİNDEN HIZLI İŞLEM KISAYOLLARI ──────────────────
+// Cari satırındaki 🔧/⚠️/💰 butonları tıklanınca ilgili modali,
+// bina adı önceden doldurulmuş şekilde açar.
+window.hizliBakimEkle = (binaAdi) => {
+  resetBakimForm?.();
+  document.getElementById('f-bakim-bina').value = binaAdi;
+  openModal('mBakim');
+};
+
+window.hizliArizaEkle = (binaAdi) => {
+  document.getElementById('f-ariza-bina').value = binaAdi;
+  document.getElementById('f-ariza-aciklama').value = '';
+  openModal('mAriza');
+};
+
+window.hizliOdemeEkle = (binaAdi) => {
+  document.getElementById('f-odeme-bina').value = binaAdi;
+  document.getElementById('f-odeme-tutar').value = '';
+  document.getElementById('f-odeme-tarih').value = new Date().toISOString().slice(0,10);
+  openModal('mOdeme');
+};
+
 /* ═══════════════════════════════════════════════════════════════
    BAKIM TAKVİMİ
 ═══════════════════════════════════════════════════════════════ */
@@ -1078,6 +1199,117 @@ function tarihToDate(ts) {
   if (ts.toDate) return ts.toDate();
   if (typeof ts === 'string') return new Date(ts);
   return null;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   BUGÜNÜN GÖREVLERİ — Teknisyen Bazlı Görev Listesi
+   Seçili güne planlanmış bakımlar, teknisyene göre gruplanır.
+   Harita yok — sıralı, sade bir liste (bakım kaydındaki sıraya göre).
+═══════════════════════════════════════════════════════════════ */
+let gorevSeciliTarih = new Date();
+
+window.gorevGunShift = (delta, buGun) => {
+  if (buGun) gorevSeciliTarih = new Date();
+  else gorevSeciliTarih.setDate(gorevSeciliTarih.getDate() + delta);
+  renderGunlukGorevler();
+};
+
+function renderGunlukGorevler() {
+  const ozetEl = document.getElementById('gorevOzet');
+  const listeEl = document.getElementById('gorevListesi');
+  const etiketEl = document.getElementById('gorevTarihEtiket');
+  if (!listeEl) return;
+
+  const secili = gorevSeciliTarih;
+  const bugun = new Date();
+  const isToday = secili.toDateString() === bugun.toDateString();
+
+  etiketEl.textContent = secili.toLocaleDateString('tr-TR', { weekday:'long', year:'numeric', month:'long', day:'numeric' })
+    + (isToday ? ' (Bugün)' : '');
+
+  // Seçili güne ait bakımları filtrele
+  const gununBakimlari = G_BAKIMLAR.filter(b => {
+    const d = tarihToDate(b.tarih);
+    return d && d.toDateString() === secili.toDateString();
+  });
+
+  // Teknisyene göre grupla (teknisyen atanmamışsa "Atanmamış" grubuna)
+  const gruplar = {};
+  gununBakimlari.forEach(b => {
+    const teknisyen = b.teknisyen || 'Atanmamış';
+    if (!gruplar[teknisyen]) gruplar[teknisyen] = [];
+    gruplar[teknisyen].push(b);
+  });
+
+  // Özet kartları
+  const toplam = gununBakimlari.length;
+  const tamamlanan = gununBakimlari.filter(b => b.durum === 'tamamlandi').length;
+  const bekleyen = gununBakimlari.filter(b => b.durum === 'bekliyor').length;
+  const teknisyenSayisi = Object.keys(gruplar).filter(t => t !== 'Atanmamış').length;
+
+  if (ozetEl) {
+    ozetEl.innerHTML = `
+      <div class="card" style="padding:14px;text-align:center;">
+        <div style="font-size:20px;font-weight:900;color:#E2E8F0;">${toplam}</div>
+        <div style="font-size:10px;color:#475569;margin-top:3px;">Toplam Görev</div>
+      </div>
+      <div class="card" style="padding:14px;text-align:center;border-color:rgba(16,185,129,.25);">
+        <div style="font-size:20px;font-weight:900;color:#10B981;">${tamamlanan}</div>
+        <div style="font-size:10px;color:#475569;margin-top:3px;">Tamamlandı</div>
+      </div>
+      <div class="card" style="padding:14px;text-align:center;border-color:rgba(245,158,11,.25);">
+        <div style="font-size:20px;font-weight:900;color:#F59E0B;">${bekleyen}</div>
+        <div style="font-size:10px;color:#475569;margin-top:3px;">Bekliyor</div>
+      </div>
+      <div class="card" style="padding:14px;text-align:center;">
+        <div style="font-size:20px;font-weight:900;color:#00ADB5;">${teknisyenSayisi}</div>
+        <div style="font-size:10px;color:#475569;margin-top:3px;">Görevli Teknisyen</div>
+      </div>`;
+  }
+
+  if (!toplam) {
+    listeEl.innerHTML = `<div class="card" style="padding:32px;text-align:center;color:#475569;font-size:13px;">${isToday ? 'Bugün için planlanmış bakım yok.' : 'Bu tarihte planlanmış bakım yok.'}</div>`;
+    return;
+  }
+
+  // Teknisyen isimlerini sırala — "Atanmamış" her zaman en sona
+  const teknisyenler = Object.keys(gruplar).sort((a,b) => {
+    if (a === 'Atanmamış') return 1;
+    if (b === 'Atanmamış') return -1;
+    return a.localeCompare(b, 'tr');
+  });
+
+  const renkMap = { bekliyor:'#F59E0B', tamamlandi:'#10B981', iptal:'#EF4444' };
+  const labelMap = { bekliyor:'Bekliyor', tamamlandi:'Tamamlandı', iptal:'İptal' };
+
+  listeEl.innerHTML = teknisyenler.map(teknisyen => {
+    const gorevler = gruplar[teknisyen];
+    const tamamlananSayi = gorevler.filter(g => g.durum === 'tamamlandi').length;
+    const initials = teknisyen === 'Atanmamış' ? '?' : teknisyen.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+
+    return `
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:14px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;align-items:center;gap:12px;background:rgba(15,23,42,.4);">
+        <div style="width:34px;height:34px;border-radius:10px;background:${teknisyen==='Atanmamış'?'rgba(71,85,105,.3)':'linear-gradient(135deg,#00ADB5,#0891B2)'};display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:800;flex-shrink:0;">${initials}</div>
+        <div style="flex:1;">
+          <div style="font-size:13px;font-weight:700;color:#E2E8F0;">${teknisyen}</div>
+          <div style="font-size:11px;color:#475569;margin-top:1px;">${gorevler.length} görev · ${tamamlananSayi} tamamlandı</div>
+        </div>
+      </div>
+      <div>
+        ${gorevler.map((g, i) => `
+          <div style="padding:12px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.3);">
+            <div style="width:22px;height:22px;border-radius:50%;background:rgba(0,173,181,.12);color:#00ADB5;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${i+1}</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${g.bina}</div>
+              <div style="font-size:11px;color:#475569;margin-top:1px;">${g.kabin||''} ${g.tip?'· '+g.tip:''}</div>
+            </div>
+            <span class="sbadge" style="background:${renkMap[g.durum]}22;color:${renkMap[g.durum]};border:1px solid ${renkMap[g.durum]}44;flex-shrink:0;">${labelMap[g.durum]||g.durum}</span>
+            ${g.durum==='bekliyor' ? `<button onclick="completeBakim('${g.id}')" style="flex-shrink:0;padding:7px 12px;font-size:11px;font-weight:700;background:linear-gradient(135deg,#10B981,#059669);color:#fff;border:none;border-radius:8px;cursor:pointer;">✓ Yapıldı</button>` : ''}
+          </div>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function renderCalendar() {
@@ -1176,24 +1408,47 @@ window.showCalDay = (year, month, day) => {
 /* ═══════════════════════════════════════════════════════════════
    FIRESTORE CRUD — SÖZLEŞME & FATURA
 ═══════════════════════════════════════════════════════════════ */
+// Başlangıç tarihi + süre (ay) verilince bitiş tarihini hesaplar ve modalda gösterir.
+window.sozBitisTarihiGuncelle = () => {
+  const baslangic = document.getElementById('f-soz-baslangic').value;
+  const sureAy = parseInt(document.getElementById('f-soz-sure').value) || 12;
+  const goster = document.getElementById('sozBitisTarihiGoster');
+
+  if (!baslangic) { goster.textContent = '—'; return; }
+
+  const bitis = new Date(baslangic);
+  bitis.setMonth(bitis.getMonth() + sureAy);
+  goster.textContent = bitis.toLocaleDateString('tr-TR');
+};
+
 window.saveSozlesme = async () => {
   const bina       = document.getElementById('f-soz-bina').value.trim();
   const tip        = document.getElementById('f-soz-tip').value;
   const tutar      = parseFloat(document.getElementById('f-soz-tutar').value) || 0;
   const gun        = parseInt(document.getElementById('f-soz-gun').value) || null;
   const baslangic  = document.getElementById('f-soz-baslangic').value;
+  const sureAy     = parseInt(document.getElementById('f-soz-sure').value) || 12;
   const sonOdeme   = document.getElementById('f-soz-sonodeme').value;
   const durum      = document.getElementById('f-soz-durum').value;
   const not        = document.getElementById('f-soz-not').value.trim();
   const pdfOlustur = document.getElementById('f-soz-pdfOlustur').checked;
+  const anaSozlesmeOlustur = document.getElementById('f-soz-anaSozlesmeOlustur').checked;
   const editId     = document.getElementById('f-soz-editId').value;
 
   if (!bina) { alert('Bina adı zorunludur.'); return; }
   if (!tutar) { alert('Anlaşma tutarı zorunludur.'); return; }
 
+  // Bitiş/yenileme tarihini başlangıç + süreden hesapla
+  let bitisTarihi = null;
+  if (baslangic) {
+    const bitis = new Date(baslangic);
+    bitis.setMonth(bitis.getMonth() + sureAy);
+    bitisTarihi = bitis.toISOString().slice(0,10);
+  }
+
   const data = {
     bina, tip, tutar, odemeGunu: gun,
-    baslangicTarihi: baslangic, sonOdemeTarihi: sonOdeme,
+    baslangicTarihi: baslangic, sureAy, bitisTarihi, sonOdemeTarihi: sonOdeme,
     durum, not, guncellendi: serverTimestamp()
   };
 
@@ -1212,6 +1467,9 @@ window.saveSozlesme = async () => {
     if (pdfOlustur) {
       await downloadSozlesmePDF({ id: sozlesmeId, ...data });
     }
+    if (anaSozlesmeOlustur) {
+      await downloadAnaSozlesmePDF({ id: sozlesmeId, ...data });
+    }
 
     resetSozlesmeForm();
   } catch(e) { alert('Hata: ' + e.message); }
@@ -1226,10 +1484,12 @@ window.editSozlesme = async (id) => {
   document.getElementById('f-soz-tutar').value       = s.tutar || '';
   document.getElementById('f-soz-gun').value         = s.odemeGunu || '';
   document.getElementById('f-soz-baslangic').value   = s.baslangicTarihi || '';
+  document.getElementById('f-soz-sure').value        = s.sureAy || 12;
   document.getElementById('f-soz-sonodeme').value    = s.sonOdemeTarihi || '';
   document.getElementById('f-soz-durum').value       = s.durum || 'bekliyor';
   document.getElementById('f-soz-not').value         = s.not || '';
   document.getElementById('f-soz-editId').value      = id;
+  sozBitisTarihiGuncelle();
   document.getElementById('mSozlesmeTitle').textContent = 'Sözleşme Düzenle';
   openModal('mSozlesme');
 };
@@ -1241,8 +1501,11 @@ window.deleteSozlesme = async (id, bina) => {
 
 window.resetSozlesmeForm = function() {
   ['f-soz-bina','f-soz-tutar','f-soz-gun','f-soz-baslangic','f-soz-sonodeme','f-soz-not'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-soz-sure').value = '12';
+  document.getElementById('sozBitisTarihiGoster').textContent = '—';
   document.getElementById('f-soz-editId').value = '';
   document.getElementById('f-soz-pdfOlustur').checked = true;
+  document.getElementById('f-soz-anaSozlesmeOlustur').checked = false;
   document.getElementById('mSozlesmeTitle').textContent = 'Yeni Sözleşme Ekle';
 }
 
@@ -1265,6 +1528,9 @@ async function downloadSozlesmePDF(s) {
   document.getElementById('ps-baslangic').textContent = s.baslangicTarihi
     ? new Date(s.baslangicTarihi).toLocaleDateString('tr-TR')
     : new Date().toLocaleDateString('tr-TR');
+  document.getElementById('ps-bitis').textContent = s.bitisTarihi
+    ? new Date(s.bitisTarihi).toLocaleDateString('tr-TR')
+    : '—';
   document.getElementById('ps-odemeGunu').textContent = s.odemeGunu ? `Her ayın ${s.odemeGunu}. günü` : 'Belirtilmedi';
   document.getElementById('ps-not').textContent = s.not || 'Standart periyodik bakım/hizmet kapsamı geçerlidir.';
   document.getElementById('ps-tutar').textContent = `${(s.tutar||0).toLocaleString('tr-TR')} ₺`;
@@ -1279,6 +1545,44 @@ window.yenidenSozlesmePDFIndir = async (id) => {
   await downloadSozlesmePDF(s);
 };
 
+// ── ANA SÖZLEŞME PDF OLUŞTUR ──────────────────────────────────
+// Detaylı hukuki "Genel Hizmet Sözleşmesi" — tek sayfalık basit
+// sözleşmeden farklı olarak sorumluluk, fesih, ödeme gecikmesi,
+// mücbir sebep gibi maddeleri içerir. Bu BİR HUKUKİ BELGEDİR;
+// fiilen kullanılmadan önce bir avukata onaylatılması önerilir.
+async function downloadAnaSozlesmePDF(s) {
+  if (typeof window.html2canvas === 'undefined') {
+    alert('PDF kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.');
+    return;
+  }
+
+  const bina = G_BINALAR.find(b => b.ad === s.bina);
+  const bugunStr = new Date().toLocaleDateString('tr-TR');
+  const baslangicStr = s.baslangicTarihi ? new Date(s.baslangicTarihi).toLocaleDateString('tr-TR') : bugunStr;
+
+  document.getElementById('as-sozNo').textContent = 'AS-SOZ-' + (s.id || Date.now().toString()).slice(0,8).toUpperCase();
+  document.getElementById('as-tarih').textContent = bugunStr;
+  document.getElementById('as-binaAdi').textContent = s.bina || '—';
+  document.getElementById('as-binaAdi2').textContent = s.bina || 'Müşteri';
+  document.getElementById('as-binaAdres').textContent = bina?.adres || '—';
+  document.getElementById('as-binaYetkili').textContent = bina?.yetkili || '—';
+  document.getElementById('as-binaVergiNo').textContent = bina?.vergiNo || '—';
+  document.getElementById('as-binaTel').textContent = bina?.telefon || '—';
+  document.getElementById('as-tip').textContent = s.tip || '—';
+  document.getElementById('as-baslangic').textContent = baslangicStr;
+  document.getElementById('as-tutar').textContent = `${(s.tutar||0).toLocaleString('tr-TR')} ₺`;
+  document.getElementById('as-odemeGunu').textContent = s.odemeGunu ? `her ayın ${s.odemeGunu}. günü` : 'taraflarca mutabık kalınan tarihte';
+  document.getElementById('as-kapsam').textContent = s.not || 'Periyodik bakım, kontrol ve gerekli ayar/onarım hizmetleri.';
+
+  await renderHtmlToPdf('pdfAnaSozlesmeSablon', `Ana_Sozlesme_${(s.bina||'').replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.pdf`);
+}
+
+window.yenidenAnaSozlesmePDFIndir = async (id) => {
+  const s = G_SOZLESMELER.find(x => x.id === id);
+  if (!s) { alert('Sözleşme bulunamadı.'); return; }
+  await downloadAnaSozlesmePDF(s);
+};
+
 function renderSozlesmeler(data) {
   const tbody = document.getElementById('sozlesmeTableBody');
   const statsEl = document.getElementById('sozlesmeStats');
@@ -1288,8 +1592,10 @@ function renderSozlesmeler(data) {
   const binaList = document.getElementById('sozBinaListesi');
   if (binaList) binaList.innerHTML = G_BINALAR.map(b => `<option value="${b.ad}">`).join('');
 
+  data = data.filter(s => aramaEslesir(G_ARAMA.sozlesmeler, s.bina, s.tip, s.not));
+
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz sözleşme eklenmemiş.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">${G_ARAMA.sozlesmeler ? 'Aramayla eşleşen sözleşme bulunamadı.' : 'Henüz sözleşme eklenmemiş.'}</td></tr>`;
     if (statsEl) statsEl.innerHTML = '';
     return;
   }
@@ -1300,19 +1606,29 @@ function renderSozlesmeler(data) {
     ? `<span class="sbadge badge-err-sm">Gecikti</span>`
     : `<span class="sbadge badge-warn-sm">Bekliyor</span>`;
 
-  tbody.innerHTML = data.map(s => `
+  tbody.innerHTML = data.map(s => {
+    const yenileme = sozlesmeYenilemeDurumu(s.bitisTarihi);
+    const yenilemeRenk = { gecmis:'#EF4444', yaklasti:'#F59E0B', normal:'#94A3B8', bilinmiyor:'#475569' }[yenileme.durum];
+    return `
     <tr class="tbl-row">
       <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${s.bina}</td>
       <td style="padding:12px;font-size:12px;color:#64748B;">${s.tip || '—'}</td>
       <td style="padding:12px;font-size:12px;color:#CBD5E1;font-family:monospace;">${s.tutar ? s.tutar.toLocaleString('tr-TR') + ' ₺' : '—'}</td>
       <td style="padding:12px;font-size:12px;color:#64748B;">${s.odemeGunu ? 'Ayın ' + s.odemeGunu + '\'i' : (s.sonOdemeTarihi || '—')}</td>
+      <td style="padding:12px;font-size:12px;color:${yenilemeRenk};">
+        ${s.bitisTarihi ? new Date(s.bitisTarihi).toLocaleDateString('tr-TR') : '—'}
+        ${yenileme.durum==='gecmis' ? `<div style="font-size:9px;color:${yenilemeRenk};margin-top:1px;">⚠️ ${Math.abs(yenileme.kalanGun)} gün gecikti</div>` : ''}
+        ${yenileme.durum==='yaklasti' ? `<div style="font-size:9px;color:${yenilemeRenk};margin-top:1px;">${yenileme.kalanGun} gün kaldı</div>` : ''}
+      </td>
       <td style="padding:12px;">${durumBadge(s.durum || 'bekliyor')}</td>
       <td style="padding:12px;display:flex;gap:6px;">
         <button onclick="yenidenSozlesmePDFIndir('${s.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">📄 PDF</button>
+        <button onclick="yenidenAnaSozlesmePDFIndir('${s.id}')" style="font-size:11px;color:#F59E0B;background:none;border:none;cursor:pointer;" class="admin-only" title="Detaylı hukuki Ana Sözleşme">⚖️ Ana Söz.</button>
         <button onclick="editSozlesme('${s.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;" class="admin-only">Düzenle</button>
         <button onclick="deleteSozlesme('${s.id}','${(s.bina||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   // İstatistikler
   if (statsEl) {
@@ -1471,6 +1787,24 @@ function muayeneDurumu(sonMuayeneStr) {
   return { durum, kalanGun, sonrakiTarih };
 }
 
+// Sözleşmenin bitiş/yenileme tarihine göre durumunu hesaplar — 30 gün
+// kala "yaklaşıyor", tarih geçmişse "geçmiş" durumuna düşer.
+function sozlesmeYenilemeDurumu(bitisTarihiStr) {
+  if (!bitisTarihiStr) return { durum: 'bilinmiyor', kalanGun: null };
+  const bitis = new Date(bitisTarihiStr);
+  if (isNaN(bitis.getTime())) return { durum: 'bilinmiyor', kalanGun: null };
+
+  const bugun = new Date();
+  const kalanGun = Math.ceil((bitis - bugun) / (1000 * 60 * 60 * 24));
+
+  let durum;
+  if (kalanGun < 0) durum = 'gecmis';
+  else if (kalanGun <= 30) durum = 'yaklasti';
+  else durum = 'normal';
+
+  return { durum, kalanGun };
+}
+
 window.saveAsansor = async () => {
   const bina        = document.getElementById('f-asn-bina').value.trim();
   const kabin       = document.getElementById('f-asn-kabin').value.trim();
@@ -1533,6 +1867,208 @@ window.muayeneGuncelle = async (id) => {
   await updateDoc(doc(db, 'asansorler', id), { sonMuayeneTarihi: bugunStr, guncellendi: serverTimestamp() });
 };
 
+/* ═══════════════════════════════════════════════════════════════
+   QR KOD İLE ASANSÖR ERİŞİMİ
+   Her asansöre özel bir QR kod üretilir. Kod, panelin URL'sine
+   ?asansor=ID parametresi ekler. QR okutulduğunda önce giriş ekranı
+   açılır (panel zaten şifre korumalı); giriş yapıldıktan sonra
+   openDashboard otomatik olarak o asansörün sayfasına yönlendirir.
+═══════════════════════════════════════════════════════════════ */
+window.qrKoduGoster = (asansorId, etiket) => {
+  const alan = document.getElementById('qrKoduAlani');
+  alan.innerHTML = ''; // önceki QR'ı temizle
+
+  // file:// protokolünden açılmışsa (yerel dosya), QR linki hiçbir
+  // başka cihazda çalışmaz — kullanıcıyı uyar, ama yine de göster.
+  if (window.location.protocol === 'file:') {
+    document.getElementById('qrKoduUyari').style.display = 'block';
+  } else {
+    document.getElementById('qrKoduUyari').style.display = 'none';
+  }
+
+  // Panelin kendi URL'sine asansör ID'sini parametre olarak ekle
+  const baseUrl = window.location.origin + window.location.pathname;
+  const qrUrl = `${baseUrl}?asansor=${asansorId}`;
+
+  if (typeof QRCode === 'undefined') {
+    alan.innerHTML = `<div style="color:#475569;font-size:12px;padding:20px;">QR kütüphanesi yüklenemedi.<br>Lütfen internet bağlantınızı kontrol edin.</div>`;
+    return;
+  }
+
+  // Boyut büyütüldü (200→280) ve hata düzeltme seviyesi yükseltildi (M→H)
+  // — bu, telefon kameralarının ekrandan okumasını çok daha kolaylaştırır.
+  new QRCode(alan, {
+    text: qrUrl,
+    width: 280,
+    height: 280,
+    colorDark: '#0F172A',
+    colorLight: '#ffffff',
+    correctLevel: QRCode.CorrectLevel.H
+  });
+
+  document.getElementById('qrKoduBinaAdi').textContent = etiket;
+  document.getElementById('qrKoduUrlGoster').textContent = qrUrl;
+  openModal('mQrKod');
+};
+
+window.qrKoduYazdir = () => {
+  const alan = document.getElementById('qrKoduAlani');
+  const baslik = document.getElementById('qrKoduBinaAdi').textContent;
+  const img = alan.querySelector('img, canvas');
+  if (!img) return;
+
+  const imgSrc = img.tagName === 'CANVAS' ? img.toDataURL() : img.src;
+
+  const yeniPencere = window.open('', '_blank');
+  yeniPencere.document.write(`
+    <html>
+    <head><title>QR Kod - ${baslik}</title></head>
+    <body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;">
+      <img src="${imgSrc}" style="width:280px;height:280px;"/>
+      <div style="font-size:18px;font-weight:700;margin-top:16px;">${baslik}</div>
+      <div style="font-size:12px;color:#666;margin-top:6px;">AS-EL Asansör — Teknik Bilgi ve Bakım Geçmişi</div>
+      <scri` + `pt>window.onload = () => { window.print(); };</scri` + `pt>
+    </body>
+    </html>
+  `);
+  yeniPencere.document.close();
+};
+
+// QR koddan gelindiğinde (?asansor=ID), giriş yapıldıktan sonra
+// kullanıcıyı doğrudan Asansör Teknik Dosyası sayfasına götürür.
+let G_QR_AKTIF_ASANSOR = null; // QR ile açılan hızlı ekranın hangi asansöre ait olduğunu tutar
+
+function qrAsansoreYonlendir(asansorId) {
+  const asansor = G_ASANSORLER.find(a => a.id === asansorId);
+
+  // URL'i hemen temizle (parametre tekrar tetiklenmesin, sayfa yenilenince karışmasın)
+  const temizUrl = window.location.origin + window.location.pathname;
+  window.history.replaceState({}, document.title, temizUrl);
+
+  if (!asansor) {
+    if (G_ASANSORLER.length === 0) {
+      alert('Asansör verileri yüklenemedi. Lütfen internet bağlantınızı kontrol edip sayfayı yenileyin.');
+    } else {
+      alert('QR kodun işaret ettiği asansör kaydı bulunamadı. Silinmiş olabilir.');
+    }
+    return;
+  }
+
+  G_QR_AKTIF_ASANSOR = asansor;
+  qrHizliEkraniDoldur(asansor);
+  openModal('mQrHizliBakim');
+}
+
+// QR ile açılan hızlı ekranı, o asansörün bu ayki bakım durumuna göre doldurur.
+function qrHizliEkraniDoldur(asansor) {
+  document.getElementById('qrHizliBinaAdi').textContent = asansor.bina;
+  document.getElementById('qrHizliKabinAdi').textContent = asansor.kabin || '';
+
+  const ayKey = new Date().toISOString().slice(0,7);
+  const buAyinKaydi = G_AYLIK_BAKIMLAR.find(a => a.bina === asansor.bina && a.ayKey === ayKey);
+
+  const durumKutu = document.getElementById('qrHizliDurumKutu');
+  const durumMetin = document.getElementById('qrHizliDurumMetin');
+  const btn = document.getElementById('qrHizliBakimBtn');
+
+  if (buAyinKaydi?.durum === 'yapildi') {
+    durumKutu.style.borderColor = 'rgba(16,185,129,.3)';
+    durumKutu.style.background = 'rgba(16,185,129,.06)';
+    durumMetin.style.color = '#10B981';
+    durumMetin.textContent = `✓ Bu ayın bakımı zaten yapıldı${buAyinKaydi.yapanKisi ? ' — '+buAyinKaydi.yapanKisi : ''}`;
+    btn.style.opacity = '0.5';
+    btn.querySelector('svg').outerHTML = '';
+    btn.innerHTML = '✓ Tekrar İşaretle (Zaten Tamamlandı)';
+  } else {
+    durumKutu.style.borderColor = 'rgba(245,158,11,.3)';
+    durumKutu.style.background = 'rgba(245,158,11,.06)';
+    durumMetin.style.color = '#F59E0B';
+    durumMetin.textContent = '⏳ Bu ayın bakımı henüz yapılmadı';
+    btn.style.opacity = '1';
+  }
+}
+
+// Büyük "Bu Ayın Bakımını Yaptım" butonu — tek tıkla aylık bakım kaydını
+// oluşturur (yoksa) veya günceller (varsa) ve "yapildi" olarak işaretler.
+window.qrHizliBakimIsaretle = async () => {
+  const asansor = G_QR_AKTIF_ASANSOR;
+  if (!asansor) return;
+
+  const ayKey = new Date().toISOString().slice(0,7);
+  const bugun = new Date();
+
+  try {
+    const mevcutKayit = G_AYLIK_BAKIMLAR.find(a => a.bina === asansor.bina && a.ayKey === ayKey);
+
+    if (mevcutKayit) {
+      await updateDoc(doc(db, 'aylikBakimlar', mevcutKayit.id), {
+        durum: 'yapildi',
+        yapilmaTarihi: serverTimestamp(),
+        yapanKisi: currentUserData?.ad || '—'
+      });
+    } else {
+      await addDoc(collection(db, 'aylikBakimlar'), {
+        bina: asansor.bina,
+        ayKey,
+        yil: bugun.getFullYear(),
+        ay: bugun.getMonth() + 1,
+        durum: 'yapildi',
+        yapilmaTarihi: serverTimestamp(),
+        yapanKisi: currentUserData?.ad || '—',
+        olusturuldu: serverTimestamp()
+      });
+    }
+
+    // Ayrıca somut bir bakım kaydı da oluştur (Bakım Takibi geçmişinde görünsün)
+    await addDoc(collection(db, 'bakimlar'), {
+      bina: asansor.bina, kabin: asansor.kabin || '', tip: 'Aylık Periyodik',
+      tarih: bugun.toISOString().slice(0,10),
+      teknisyen: currentUserData?.ad || '—',
+      notlar: 'QR kod ile sahadan hızlı işaretleme.',
+      durum: 'tamamlandi', tamamlanmaTarihi: serverTimestamp(),
+      olusturuldu: serverTimestamp()
+    });
+
+    document.getElementById('qrHizliDurumKutu').style.borderColor = 'rgba(16,185,129,.3)';
+    document.getElementById('qrHizliDurumKutu').style.background = 'rgba(16,185,129,.06)';
+    document.getElementById('qrHizliDurumMetin').style.color = '#10B981';
+    document.getElementById('qrHizliDurumMetin').textContent = `✓ Bakım kaydedildi — ${currentUserData?.ad || ''}`;
+    document.getElementById('qrHizliBakimBtn').innerHTML = '✓ Kaydedildi';
+    document.getElementById('qrHizliBakimBtn').style.opacity = '0.6';
+    document.getElementById('qrHizliBakimBtn').disabled = true;
+
+  } catch(e) {
+    alert('Hata: ' + e.message);
+  }
+};
+
+window.qrHizliArizaBildir = () => {
+  const asansor = G_QR_AKTIF_ASANSOR;
+  closeModal('mQrHizliBakim');
+  if (!asansor) return;
+  document.getElementById('f-ariza-bina').value = asansor.bina;
+  document.getElementById('f-ariza-kabin').value = asansor.kabin || '';
+  document.getElementById('f-ariza-aciklama').value = '';
+  openModal('mAriza');
+};
+
+window.qrHizliDetayGor = () => {
+  const asansor = G_QR_AKTIF_ASANSOR;
+  closeModal('mQrHizliBakim');
+  if (!asansor) return;
+
+  const aylikNavItem = document.querySelector('.nav-item[data-page="asansorler"]');
+  showPage('asansorler', aylikNavItem);
+
+  setTimeout(() => {
+    const aramaKutusu = document.querySelector('#pg-asansorler .search-box-wrap input');
+    if (aramaKutusu) {
+      aramaKutusu.value = asansor.kabin || asansor.bina;
+      aramaGuncelle('asansorler', aramaKutusu.value);
+    }
+  }, 300);
+};
+
 function renderAsansorler() {
   const grid = document.getElementById('asansorGrid');
   const uyariEl = document.getElementById('asansorMuayeneUyari');
@@ -1548,7 +2084,9 @@ function renderAsansorler() {
     return;
   }
 
-  // Muayenesi yaklaşan/geçmiş olanları üst uyarı bandında göster
+  const aramaliListe = G_ASANSORLER.filter(a => aramaEslesir(G_ARAMA.asansorler, a.bina, a.kabin, a.seriNo, a.marka));
+
+  // Muayenesi yaklaşan/geçmiş olanları üst uyarı bandında göster (arama filtresinden bağımsız — her zaman tüm asansörler)
   const sorunlu = G_ASANSORLER.map(a => ({ ...a, _muayene: muayeneDurumu(a.sonMuayeneTarihi) }))
                                .filter(a => a._muayene.durum === 'gecmis' || a._muayene.durum === 'yaklasti');
   if (uyariEl) {
@@ -1575,7 +2113,12 @@ function renderAsansorler() {
     }
   }
 
-  grid.innerHTML = G_ASANSORLER.map(a => {
+  if (!aramaliListe.length) {
+    grid.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:#475569;font-size:13px;grid-column:1/-1;">Aramayla eşleşen asansör bulunamadı.</div>`;
+    return;
+  }
+
+  grid.innerHTML = aramaliListe.map(a => {
     const m = muayeneDurumu(a.sonMuayeneTarihi);
     const renkMap = { gecmis:'#EF4444', yaklasti:'#F59E0B', normal:'#10B981', bilinmiyor:'#475569' };
     const labelMap = { gecmis:'Muayene Gecikti!', yaklasti:'Muayene Yaklaşıyor', normal:'Muayene Güncel', bilinmiyor:'Muayene Tarihi Yok' };
@@ -1608,6 +2151,10 @@ function renderAsansorler() {
       </div>
       <div style="font-size:11px;color:#64748B;margin-bottom:3px;">🔧 Montaj: ${a.montajTarihi||'—'}</div>
       <div style="font-size:11px;color:#64748B;margin-bottom:12px;">📋 Son Muayene: ${a.sonMuayeneTarihi||'—'} ${m.sonrakiTarih?`(Sonraki: ${m.sonrakiTarih.toLocaleDateString('tr-TR')})`:''}</div>
+      <button onclick="qrKoduGoster('${a.id}','${(a.bina+' - '+a.kabin).replace(/'/g,"\\'")}')" style="width:100%;padding:8px;font-size:11px;font-weight:700;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:8px;cursor:pointer;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:6px;">
+        <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3m4 0h0M14 17h7M14 21h7"/></svg>
+        QR Kod
+      </button>
       <div style="display:flex;gap:8px;">
         <button onclick="muayeneGuncelle('${a.id}')" class="btn-sm admin-only" style="flex:1;padding:7px;font-size:11px;">✓ Muayene Yapıldı</button>
         <button onclick="editAsansor('${a.id}')" class="btn-ghost admin-only" style="flex:1;padding:7px;font-size:11px;">Düzenle</button>
@@ -1678,6 +2225,24 @@ function rebuildBildirimler() {
         mesaj: `${a.bina} — ${a.kabin}`,
         zaman: null,
         id: 'muayene-' + a.id
+      });
+    }
+  });
+
+  // Yenileme tarihi yaklaşan/geçmiş sözleşmeler
+  G_SOZLESMELER.forEach(s => {
+    const y = sozlesmeYenilemeDurumu(s.bitisTarihi);
+    if (y.durum === 'gecmis' || y.durum === 'yaklasti') {
+      bildirimler.push({
+        tip: 'sozlesmeYenileme',
+        ikon: '📝',
+        renk: y.durum === 'gecmis' ? '#EF4444' : '#F59E0B',
+        baslik: y.durum === 'gecmis' ? 'Sözleşme Süresi Doldu!' : 'Sözleşme Yenileme Yaklaşıyor',
+        mesaj: y.durum === 'gecmis'
+          ? `${s.bina} — ${Math.abs(y.kalanGun)} gün önce doldu`
+          : `${s.bina} — ${y.kalanGun} gün kaldı`,
+        zaman: null,
+        id: 'sozyenile-' + s.id
       });
     }
   });
@@ -1772,6 +2337,114 @@ window.exportBinalarCSV = () => {
   csvIndir(satirlar, `cari_listesi_${new Date().toISOString().slice(0,10)}.csv`);
 };
 
+/* ═══════════════════════════════════════════════════════════════
+   TAM SİSTEM YEDEKLEMESİ
+   Tüm Firestore koleksiyonlarının (zaten gerçek-zamanlı senkronize
+   edilmiş global cache'lerden) tek seferde dışa aktarılması.
+═══════════════════════════════════════════════════════════════ */
+function yedekVeriHaritasi() {
+  return {
+    cariler: G_BINALAR,
+    bakimlar: G_BAKIMLAR,
+    arizalar: G_ARIZALAR,
+    sozlesmeler: G_SOZLESMELER,
+    odemeler: G_ODEMELER,
+    borclar: G_BORCLAR,
+    asansorler: G_ASANSORLER,
+    aylikBakimlar: G_AYLIK_BAKIMLAR,
+    avanslar: G_AVANSLAR,
+    avansKullanimlar: G_AVANS_KULLANIM,
+    giderler: G_GIDERLER,
+    kullanicilar: G_KULLANICILAR,
+  };
+}
+
+function yedekDurumGoster(mesaj) {
+  const el = document.getElementById('yedekDurum');
+  if (!el) return;
+  el.style.display = 'block';
+  el.textContent = mesaj;
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+// Firestore Timestamp nesnelerini JSON.stringify edilebilir hale çevirir
+function timestampTemizle(obj) {
+  if (Array.isArray(obj)) return obj.map(timestampTemizle);
+  if (obj && typeof obj === 'object') {
+    if (typeof obj.toDate === 'function') return obj.toDate().toISOString();
+    const yeni = {};
+    for (const k in obj) yeni[k] = timestampTemizle(obj[k]);
+    return yeni;
+  }
+  return obj;
+}
+
+window.tamYedekJSON = () => {
+  const veri = timestampTemizle(yedekVeriHaritasi());
+  const meta = {
+    olusturulmaTarihi: new Date().toISOString(),
+    olusturanKullanici: currentUserData?.ad || '—',
+    kayitSayilari: Object.fromEntries(Object.entries(veri).map(([k,v]) => [k, v.length]))
+  };
+  const tamYedek = { meta, ...veri };
+
+  const blob = new Blob([JSON.stringify(tamYedek, null, 2)], { type: 'application/json;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `AS-EL_Yedek_${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  const toplamKayit = Object.values(veri).reduce((s,v) => s + v.length, 0);
+  yedekDurumGoster(`✓ JSON yedek indirildi — ${toplamKayit} kayıt, ${Object.keys(veri).length} tablo.`);
+};
+
+window.tamYedekExcel = () => {
+  const veri = yedekVeriHaritasi();
+  const tabloBasliklari = {
+    cariler: ['Cari Kodu','Ad','Adres','Yetkili','Telefon','Vergi No','Asansör Sayısı','Sözleşme','Durum'],
+    bakimlar: ['Bina','Kabin','Tip','Tarih','Teknisyen','Durum'],
+    arizalar: ['Bina','Kabin','Tip','Tarih','Durum','Açıklama'],
+    sozlesmeler: ['Bina','Tip','Tutar','Ödeme Günü','Durum'],
+    odemeler: ['Bina','Tarih','Tutar','Tür','Açıklama','Kaydeden'],
+    borclar: ['Bina','Tip','Tutar','Tarih','Açıklama'],
+    asansorler: ['Bina','Kabin','Seri No','Marka','Kapasite','Durak','Son Muayene'],
+    avanslar: ['Personel','Tutar','Tarih','Not'],
+    giderler: ['Kategori','Tutar','Tarih','Açıklama','Kaydeden'],
+  };
+  const tabloDegerCikar = {
+    cariler: b => [b.cariKodu||'', b.ad||'', b.adres||'', b.yetkili||'', b.telefon||'', b.vergiNo||'', b.asansorSayisi||'', b.sozlesme||'', b.durum||''],
+    bakimlar: b => [b.bina||'', b.kabin||'', b.tip||'', b.tarih||'', b.teknisyen||'', b.durum||''],
+    arizalar: a => [a.bina||'', a.kabin||'', a.tip||'', a.tarih||'', a.durum||'', a.aciklama||''],
+    sozlesmeler: s => [s.bina||'', s.tip||'', s.tutar||'', s.odemeGunu||'', s.durum||''],
+    odemeler: o => [o.bina||'', o.tarih||'', o.tutar||'', o.tur||'', o.aciklama||'', o.kaydeden||''],
+    borclar: b => [b.bina||'', b.tip||'', b.tutar||'', b.tarih||'', b.aciklama||''],
+    asansorler: a => [a.bina||'', a.kabin||'', a.seriNo||'', a.marka||'', a.kapasite||'', a.durak||'', a.sonMuayeneTarihi||''],
+    avanslar: a => [a.personelAd||'', a.tutar||'', a.tarih||'', a.not||''],
+    giderler: g => [g.kategori||'', g.tutar||'', g.tarih||'', g.aciklama||'', g.kaydeden||''],
+  };
+
+  // Tek CSV içinde her tabloyu başlıkla ayırarak art arda yazıyoruz
+  // (ek kütüphane gerektirmeden, Excel'de açılınca sekme/bölüm gibi görünür)
+  const satirlar = [];
+  let toplamKayit = 0;
+  Object.keys(tabloBasliklari).forEach(tabloAdi => {
+    const kayitlar = veri[tabloAdi] || [];
+    if (!kayitlar.length) return;
+    satirlar.push([`═══ ${tabloAdi.toUpperCase()} (${kayitlar.length} kayıt) ═══`]);
+    satirlar.push(tabloBasliklari[tabloAdi]);
+    kayitlar.forEach(k => satirlar.push(tabloDegerCikar[tabloAdi](k)));
+    satirlar.push([]); // boş satır ile ayır
+    toplamKayit += kayitlar.length;
+  });
+
+  csvIndir(satirlar, `AS-EL_Tam_Yedek_${new Date().toISOString().slice(0,10)}.csv`);
+  yedekDurumGoster(`✓ Excel/CSV yedek indirildi — ${toplamKayit} kayıt, ${Object.keys(tabloBasliklari).filter(t=>(veri[t]||[]).length).length} tablo.`);
+};
+
 window.exportOdemelerCSV = () => {
   const satirlar = [['Bina', 'Tarih', 'Tutar (TL)', 'Ödeme Türü', 'Açıklama', 'Kaydeden']];
   G_ODEMELER.forEach(o => satirlar.push([o.bina, o.tarih, o.tutar||0, o.tur||'', o.aciklama||'', o.kaydeden||'']));
@@ -1818,7 +2491,7 @@ window.deleteGider = async (id, kategori) => {
 
 const GIDER_IKON = { 'Yakıt':'⛽', 'Malzeme':'🔧', 'Kira':'🏢', 'Maaş':'💼', 'Fatura':'📄', 'Araç':'🚗', 'Diğer':'📦' };
 
-function renderGiderler() {
+window.renderGiderler = function() {
   const tbody = document.getElementById('giderTableBody');
   const ozetEl = document.getElementById('giderKategoriOzet');
   if (!tbody) return;
@@ -1903,8 +2576,9 @@ function maliOzetVerisiHesapla() {
   return { toplamGelir, toplamGider, toplamGiderFirma, toplamAvans, netKar, gelirKirilim, giderKirilim, ayFiltre, bekleyenTahsilat, borcluCariSayisi };
 }
 
-function renderMaliOzet() {
+window.renderMaliOzet = function() {
   const veri = maliOzetVerisiHesapla();
+  yillikRaporYilSeciciDoldur();
 
   document.getElementById('ozet-gelir').textContent = `${veri.toplamGelir.toLocaleString('tr-TR')} ₺`;
   document.getElementById('ozet-gider').textContent = `${veri.toplamGider.toLocaleString('tr-TR')} ₺`;
@@ -2005,6 +2679,132 @@ window.exportMaliOzetPDF = async () => {
 };
 
 /* ═══════════════════════════════════════════════════════════════
+   YILLIK MALİ RAPOR — Toplu Dışa Aktarma (Excel + PDF)
+   Seçili yılın tüm ödeme, gider, maaş verisini önce 12 aylık özet,
+   ardından detaylı döküm halinde tek dosyada (CSV/Excel veya PDF)
+   dışa aktarır. Avanslar "gider" tarafına dahil edilir (maaş
+   ödemesinden düşüldüğü için ayrıca saymak çift sayım olur).
+═══════════════════════════════════════════════════════════════ */
+const AY_ADLARI = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+
+function yillikRaporYilSeciciDoldur() {
+  const sel = document.getElementById('yillikRaporYil');
+  if (!sel || sel.options.length) return; // zaten dolu, tekrar doldurma
+
+  const buYil = new Date().getFullYear();
+  const yillar = new Set([buYil]);
+  [...G_ODEMELER, ...G_GIDERLER].forEach(k => { if (k.tarih) yillar.add(parseInt(k.tarih.slice(0,4))); });
+  G_MAAS_ODEMELERI.forEach(m => { if (m.ayKey) yillar.add(parseInt(m.ayKey.slice(0,4))); });
+
+  const siraliYillar = [...yillar].sort((a,b) => b-a);
+  sel.innerHTML = siraliYillar.map(y => `<option value="${y}">${y}</option>`).join('');
+  sel.value = buYil;
+}
+
+// Seçili yıl için aylık özet (12 satır) + ham detay kayıtlarını hazırlar.
+function yillikRaporVerisiHesapla(yil) {
+  const aylikOzet = AY_ADLARI.map((adi, i) => {
+    const ayKey = `${yil}-${String(i+1).padStart(2,'0')}`;
+    const ayinOdemeleri = G_ODEMELER.filter(o => (o.tarih||'').startsWith(ayKey));
+    const ayinGiderleri = G_GIDERLER.filter(g => (g.tarih||'').startsWith(ayKey));
+    const ayinMaaslari = G_MAAS_ODEMELERI.filter(m => m.ayKey === ayKey);
+
+    const gelir = ayinOdemeleri.reduce((s,o) => s + (o.tutar||0), 0);
+    const gider = ayinGiderleri.reduce((s,g) => s + (g.tutar||0), 0);
+    const maas = ayinMaaslari.reduce((s,m) => s + (m.netOdenen||0), 0);
+    const kar = gelir - gider - maas;
+
+    return { ay: adi, ayKey, gelir, gider, maas, kar, odemeSayisi: ayinOdemeleri.length, giderSayisi: ayinGiderleri.length };
+  });
+
+  const yilGenelToplam = aylikOzet.reduce((acc, a) => ({
+    gelir: acc.gelir + a.gelir, gider: acc.gider + a.gider, maas: acc.maas + a.maas, kar: acc.kar + a.kar
+  }), { gelir: 0, gider: 0, maas: 0, kar: 0 });
+
+  const detayOdemeler = G_ODEMELER.filter(o => (o.tarih||'').startsWith(String(yil))).sort((a,b) => (a.tarih||'').localeCompare(b.tarih||''));
+  const detayGiderler = G_GIDERLER.filter(g => (g.tarih||'').startsWith(String(yil))).sort((a,b) => (a.tarih||'').localeCompare(b.tarih||''));
+  const detayMaaslar = G_MAAS_ODEMELERI.filter(m => (m.ayKey||'').startsWith(String(yil))).sort((a,b) => (a.ayKey||'').localeCompare(b.ayKey||''));
+
+  return { aylikOzet, yilGenelToplam, detayOdemeler, detayGiderler, detayMaaslar };
+}
+
+window.yillikRaporExcel = () => {
+  const yil = document.getElementById('yillikRaporYil')?.value || new Date().getFullYear();
+  const veri = yillikRaporVerisiHesapla(yil);
+
+  const satirlar = [];
+
+  satirlar.push([`═══ ${yil} YILI AYLIK ÖZET ═══`]);
+  satirlar.push(['Ay', 'Gelir (₺)', 'Gider (₺)', 'Maaş Ödemesi (₺)', 'Net Kar/Zarar (₺)']);
+  veri.aylikOzet.forEach(a => satirlar.push([a.ay, a.gelir, a.gider, a.maas, a.kar]));
+  satirlar.push(['TOPLAM', veri.yilGenelToplam.gelir, veri.yilGenelToplam.gider, veri.yilGenelToplam.maas, veri.yilGenelToplam.kar]);
+  satirlar.push([]);
+
+  satirlar.push([`═══ ÖDEMELER DETAYI (${veri.detayOdemeler.length} kayıt) ═══`]);
+  satirlar.push(['Tarih', 'Bina', 'Tutar (₺)', 'Tür', 'Açıklama', 'Kaydeden']);
+  veri.detayOdemeler.forEach(o => satirlar.push([o.tarih, o.bina||'', o.tutar||0, o.tur||'', o.aciklama||'', o.kaydeden||'']));
+  satirlar.push([]);
+
+  satirlar.push([`═══ GİDERLER DETAYI (${veri.detayGiderler.length} kayıt) ═══`]);
+  satirlar.push(['Tarih', 'Kategori', 'Tutar (₺)', 'Açıklama', 'Kaydeden']);
+  veri.detayGiderler.forEach(g => satirlar.push([g.tarih, g.kategori||'', g.tutar||0, g.aciklama||'', g.kaydeden||'']));
+  satirlar.push([]);
+
+  satirlar.push([`═══ MAAŞ ÖDEMELERİ DETAYI (${veri.detayMaaslar.length} kayıt) ═══`]);
+  satirlar.push(['Dönem', 'Personel', 'Aylık Maaş (₺)', 'Fazla Mesai (₺)', 'Avans Kesintisi (₺)', 'Net Ödenen (₺)', 'Ödeme Tarihi']);
+  veri.detayMaaslar.forEach(m => satirlar.push([m.ayKey, m.personelAd||'', m.aylikMaas||0, m.fazlaMesaiUcreti||0, m.avansToplam||0, m.netOdenen||0, m.odemeTarihi||'']));
+
+  csvIndir(satirlar, `AS-EL_Yillik_Mali_Rapor_${yil}.csv`);
+};
+
+window.yillikRaporPDF = async () => {
+  if (typeof window.html2canvas === 'undefined') {
+    alert('PDF kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.');
+    return;
+  }
+
+  const yil = document.getElementById('yillikRaporYil')?.value || new Date().getFullYear();
+  const veri = yillikRaporVerisiHesapla(yil);
+
+  document.getElementById('pyr-yil').textContent = yil;
+  document.getElementById('pyr-tarih').textContent = new Date().toLocaleDateString('tr-TR');
+  document.getElementById('pyr-toplamGelir').textContent = `${veri.yilGenelToplam.gelir.toLocaleString('tr-TR')} ₺`;
+  document.getElementById('pyr-toplamGider').textContent = `${(veri.yilGenelToplam.gider + veri.yilGenelToplam.maas).toLocaleString('tr-TR')} ₺`;
+  document.getElementById('pyr-netKar').textContent = `${veri.yilGenelToplam.kar.toLocaleString('tr-TR')} ₺`;
+  const karKutu = document.getElementById('pyr-kar-kutu');
+  karKutu.style.background = veri.yilGenelToplam.kar < 0
+    ? 'linear-gradient(135deg,#EF4444,#DC2626)'
+    : 'linear-gradient(135deg,#10B981,#059669)';
+
+  // Aylık özet tablosu (12 satır)
+  document.getElementById('pyr-aylikTablo').innerHTML = veri.aylikOzet.map((a,i) => `
+    <tr style="background:${i%2===0?'#fff':'#F8FAFC'};border-bottom:1px solid #F1F5F9;">
+      <td style="padding:8px 14px;color:#334155;font-size:11px;">${a.ay}</td>
+      <td style="padding:8px 14px;text-align:right;color:#059669;font-size:11px;font-weight:600;">${a.gelir.toLocaleString('tr-TR')}</td>
+      <td style="padding:8px 14px;text-align:right;color:#DC2626;font-size:11px;font-weight:600;">${(a.gider+a.maas).toLocaleString('tr-TR')}</td>
+      <td style="padding:8px 14px;text-align:right;color:${a.kar<0?'#DC2626':'#0F172A'};font-size:11px;font-weight:700;">${a.kar.toLocaleString('tr-TR')}</td>
+    </tr>`).join('');
+
+  // Detay özet — sayı bazında (PDF'in çok uzamaması için detaylı satır listesi yerine özet sayılar gösterilir,
+  // tam detay için Excel önerilir)
+  document.getElementById('pyr-detayOzet').innerHTML = `
+    <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:14px;">
+      <div style="font-size:9px; color:#94A3B8; text-transform:uppercase; font-weight:700; margin-bottom:4px;">Ödeme Kaydı</div>
+      <div style="font-size:16px; font-weight:800; color:#0F172A;">${veri.detayOdemeler.length} adet</div>
+    </div>
+    <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:14px;">
+      <div style="font-size:9px; color:#94A3B8; text-transform:uppercase; font-weight:700; margin-bottom:4px;">Gider Kaydı</div>
+      <div style="font-size:16px; font-weight:800; color:#0F172A;">${veri.detayGiderler.length} adet</div>
+    </div>
+    <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:14px;">
+      <div style="font-size:9px; color:#94A3B8; text-transform:uppercase; font-weight:700; margin-bottom:4px;">Maaş Ödemesi</div>
+      <div style="font-size:16px; font-weight:800; color:#0F172A;">${veri.detayMaaslar.length} adet</div>
+    </div>`;
+
+  await renderHtmlToPdf('pdfYillikRaporSablon', `AS-EL_Yillik_Mali_Rapor_${yil}.pdf`);
+};
+
+/* ═══════════════════════════════════════════════════════════════
    MUHASEBE — ÖDEME KAYITLARI
 ═══════════════════════════════════════════════════════════════ */
 window.saveOdeme = async () => {
@@ -2035,7 +2835,7 @@ window.deleteOdeme = async (id, bina) => {
   await deleteDoc(doc(db, 'odemeler', id));
 };
 
-function renderMuhasebe() {
+window.renderMuhasebe = function() {
   const tbody    = document.getElementById('odemeTableBody');
   const statsEl  = document.getElementById('muhasebeStats');
   const binaList = document.getElementById('odemeBinaListesi');
@@ -2051,9 +2851,10 @@ function renderMuhasebe() {
   if (ayFiltre) {
     data = data.filter(o => (o.tarih || '').startsWith(ayFiltre));
   }
+  data = data.filter(o => aramaEslesir(G_ARAMA.odemeler, o.bina, o.tur, o.aciklama, o.kaydeden));
 
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Bu dönemde ödeme kaydı yok.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">${G_ARAMA.odemeler ? 'Aramayla eşleşen ödeme bulunamadı.' : 'Bu dönemde ödeme kaydı yok.'}</td></tr>`;
   } else {
     tbody.innerHTML = data.map(o => `
       <tr class="tbl-row">
@@ -2104,7 +2905,16 @@ function renderMuhasebe() {
 /* ═══════════════════════════════════════════════════════════════
    MUHASEBE SEKME GEÇİŞİ
 ═══════════════════════════════════════════════════════════════ */
+// Sadece admin'in erişebileceği hassas muhasebe sekmeleri (bordro, gider, kar/zarar)
+const ADMIN_ONLY_MUHASEBE_TABS = ['giderler', 'ozet', 'maas', 'mesai', 'personel'];
+
 window.switchMuhasebeTab = (tab, btn) => {
+  const role = currentUserData?.rol;
+  if (ADMIN_ONLY_MUHASEBE_TABS.includes(tab) && role !== 'admin') {
+    alert('Bu bölüme erişim yetkiniz yok.');
+    return;
+  }
+
   document.querySelectorAll('.muh-tab-content').forEach(el => el.style.display = 'none');
   document.querySelectorAll('.muh-tab-btn').forEach(el => el.classList.remove('muh-tab-active'));
   document.getElementById('muhTab-' + tab).style.display = 'block';
@@ -2114,6 +2924,8 @@ window.switchMuhasebeTab = (tab, btn) => {
   if (tab === 'musteri') { doldurMusteriSecimi(); renderMusteriCariListesi(); }
   if (tab === 'giderler') renderGiderler();
   if (tab === 'ozet') renderMaliOzet();
+  if (tab === 'maas') renderMaaslar();
+  if (tab === 'mesai') renderMesai();
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2121,13 +2933,17 @@ window.switchMuhasebeTab = (tab, btn) => {
    (Personele avans verilir, kullanım düşülür, net bakiye gösterilir)
 ═══════════════════════════════════════════════════════════════ */
 function doldurPersonelSecimi() {
-  const sel = document.getElementById('f-avans-personel');
-  if (!sel) return;
-  const mevcut = sel.value;
   const personeller = G_KULLANICILAR.filter(u => u.rol === 'admin' || u.rol === 'teknisyen');
-  sel.innerHTML = '<option value="">— Seçiniz —</option>' +
+  const secenekHtml = '<option value="">— Seçiniz —</option>' +
     personeller.map(p => `<option value="${p.id}" data-ad="${(p.ad||'').replace(/"/g,'')}">${p.ad}</option>`).join('');
-  if (mevcut) sel.value = mevcut;
+
+  ['f-avans-personel', 'f-maas-personel', 'f-mesai-personel'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const mevcut = sel.value;
+    sel.innerHTML = secenekHtml;
+    if (mevcut) sel.value = mevcut;
+  });
 }
 
 window.saveAvans = async () => {
@@ -2259,6 +3075,590 @@ function renderPersonelCari() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   PERSONEL MAAŞ SİSTEMİ
+   Her personel için sabit aylık maaş tanımlanır (maaslar koleksiyonu,
+   personelId başına tek kayıt). Her ay için "ödendi" işaretlenirken
+   o aya ait avanslar otomatik toplanıp net ödenecek tutardan düşülür.
+   Ödeme kaydı maasOdemeleri koleksiyonunda personelId+ayKey ile saklanır.
+═══════════════════════════════════════════════════════════════ */
+window.saveMaasTanim = async () => {
+  const personelSel = document.getElementById('f-maas-personel');
+  const personelId  = personelSel.value;
+  const personelAd  = personelSel.selectedOptions[0]?.dataset.ad || '';
+  const tutar       = parseFloat(document.getElementById('f-maas-tutar').value) || 0;
+
+  if (!personelId || !tutar) { alert('Personel ve aylık maaş tutarı zorunludur.'); return; }
+
+  try {
+    const mevcutTanim = G_MAASLAR.find(m => m.personelId === personelId);
+    if (mevcutTanim) {
+      await updateDoc(doc(db, 'maaslar', mevcutTanim.id), { aylikMaas: tutar, guncellendi: serverTimestamp() });
+    } else {
+      await addDoc(collection(db, 'maaslar'), {
+        personelId, personelAd, aylikMaas: tutar, olusturuldu: serverTimestamp()
+      });
+    }
+    closeModal('mMaasTanim');
+    document.getElementById('f-maas-tutar').value = '';
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.deleteMaasTanim = async (id, ad) => {
+  if (!confirm(`"${ad}" için maaş tanımını silmek istediğinizden emin misiniz?`)) return;
+  await deleteDoc(doc(db, 'maaslar', id));
+};
+
+// Çekirdek fonksiyon: onay istemeden direkt bir personelin maaşını kaydeder.
+// Tek tek işaretleme (onaylı) ve toplu işaretleme (tek onaylı) ikisi de bunu kullanır.
+async function maasOdemeKaydet(personelId, personelAd, aylikMaas, ayKey) {
+  const buAyAvanslari = G_AVANSLAR.filter(a => a.personelId === personelId && (a.tarih||'').startsWith(ayKey))
+                                   .reduce((s,a) => s + (a.tutar||0), 0);
+  const mesai = fazlaMesaiHesapla(personelId, aylikMaas, ayKey);
+  const netOdenecek = aylikMaas + mesai.fazlaMesaiUcreti - buAyAvanslari;
+
+  const mevcutOdeme = G_MAAS_ODEMELERI.find(o => o.personelId === personelId && o.ayKey === ayKey);
+  const data = {
+    personelId, personelAd, ayKey, aylikMaas,
+    fazlaMesaiSaat: mesai.fazlaSaat, fazlaMesaiUcreti: mesai.fazlaMesaiUcreti,
+    avansToplam: buAyAvanslari, netOdenen: netOdenecek,
+    odendi: true, odemeTarihi: new Date().toISOString().slice(0,10), olusturuldu: serverTimestamp()
+  };
+  if (mevcutOdeme) {
+    await updateDoc(doc(db, 'maasOdemeleri', mevcutOdeme.id), data);
+  } else {
+    await addDoc(collection(db, 'maasOdemeleri'), data);
+  }
+  return { ...mesai, buAyAvanslari, netOdenecek };
+}
+
+window.maasOdendiIsaretle = async (personelId, personelAd, aylikMaas, ayKey) => {
+  const buAyAvanslari = G_AVANSLAR.filter(a => a.personelId === personelId && (a.tarih||'').startsWith(ayKey))
+                                   .reduce((s,a) => s + (a.tutar||0), 0);
+  const mesai = fazlaMesaiHesapla(personelId, aylikMaas, ayKey);
+  const netOdenecek = aylikMaas + mesai.fazlaMesaiUcreti - buAyAvanslari;
+
+  const mesaiSatir = mesai.fazlaSaat > 0
+    ? `Fazla mesai: ${mesai.fazlaSaat.toFixed(1)} saat × 1.5 = +${mesai.fazlaMesaiUcreti.toLocaleString('tr-TR')} ₺\n`
+    : `Fazla mesai: yok (toplam ${mesai.toplamCalisilanSaat.toFixed(1)} saat çalıştı)\n`;
+
+  if (!confirm(`${personelAd} için ${ayKey} dönemi maaşı ödendi olarak işaretlenecek.\n\nMaaş: ${aylikMaas.toLocaleString('tr-TR')} ₺\n${mesaiSatir}Bu ay avans: ${buAyAvanslari.toLocaleString('tr-TR')} ₺\nNet ödenecek: ${netOdenecek.toLocaleString('tr-TR')} ₺\n\nOnaylıyor musunuz?`)) return;
+
+  try {
+    await maasOdemeKaydet(personelId, personelAd, aylikMaas, ayKey);
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+// Toplu Maaş Ödeme — seçili aydaki, henüz ödenmemiş TÜM personeli tek
+// onayla "ödendi" olarak işaretler. Zaten ödenmiş olanlara dokunmaz.
+window.topluMaasOdemeYap = async () => {
+  const ayKey = document.getElementById('maasAySecim')?.value || new Date().toISOString().slice(0,7);
+
+  const odenmemisler = G_MAASLAR.filter(m => !G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey));
+
+  if (!odenmemisler.length) {
+    alert(`${ayKey} dönemi için ödenmemiş personel yok — zaten herkes ödenmiş.`);
+    return;
+  }
+
+  let toplamNet = 0;
+  const ozetSatirlari = odenmemisler.map(m => {
+    const buAyAvans = G_AVANSLAR.filter(a => a.personelId === m.personelId && (a.tarih||'').startsWith(ayKey))
+                                 .reduce((s,a) => s + (a.tutar||0), 0);
+    const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
+    const net = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans;
+    toplamNet += net;
+    return `  • ${m.personelAd}: ${net.toLocaleString('tr-TR')} ₺`;
+  }).join('\n');
+
+  if (!confirm(`${ayKey} dönemi için ${odenmemisler.length} personelin maaşı toplu olarak ödendi işaretlenecek:\n\n${ozetSatirlari}\n\nToplam: ${toplamNet.toLocaleString('tr-TR')} ₺\n\nOnaylıyor musunuz?`)) return;
+
+  try {
+    for (const m of odenmemisler) {
+      await maasOdemeKaydet(m.personelId, m.personelAd, m.aylikMaas, ayKey);
+    }
+    alert(`✓ ${odenmemisler.length} personelin maaşı başarıyla işaretlendi.`);
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.maasOdemeGeriAl = async (id) => {
+  if (!confirm('Bu maaş ödemesini geri almak istediğinizden emin misiniz?')) return;
+  await deleteDoc(doc(db, 'maasOdemeleri', id));
+};
+
+// ── MAAŞ BORDROSU PDF OLUŞTUR (logo + kazanç/kesinti dökümü) ──
+window.downloadBordroPDF = async (personelId, personelAd, aylikMaas, ayKey) => {
+  if (typeof window.html2canvas === 'undefined') {
+    alert('PDF kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.');
+    return;
+  }
+
+  const buAyAvans = G_AVANSLAR.filter(a => a.personelId === personelId && (a.tarih||'').startsWith(ayKey))
+                               .reduce((s,a) => s + (a.tutar||0), 0);
+  const mesai = fazlaMesaiHesapla(personelId, aylikMaas, ayKey);
+  const brutToplam = aylikMaas + mesai.fazlaMesaiUcreti;
+  const netOdenecek = brutToplam - buAyAvans;
+
+  const ayAdlari = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+  const [yil, ay] = ayKey.split('-');
+  const donemEtiket = `${ayAdlari[parseInt(ay)-1]} ${yil}`;
+
+  document.getElementById('pb-donem').textContent = donemEtiket;
+  document.getElementById('pb-tarih').textContent = new Date().toLocaleDateString('tr-TR');
+  document.getElementById('pb-personelAd').textContent = personelAd;
+  document.getElementById('pb-bordroNo').textContent = 'BRD-' + (personelId+ayKey).replace(/[^a-zA-Z0-9]/g,'').slice(0,8).toUpperCase();
+  document.getElementById('pb-aylikMaas').textContent = `${aylikMaas.toLocaleString('tr-TR')} ₺`;
+  document.getElementById('pb-fazlaMesaiDetay').textContent = `(${mesai.fazlaSaat.toFixed(1)} saat × 1.5)`;
+  document.getElementById('pb-fazlaMesaiUcreti').textContent = mesai.fazlaMesaiUcreti > 0 ? `+${mesai.fazlaMesaiUcreti.toLocaleString('tr-TR')} ₺` : '0 ₺';
+  document.getElementById('pb-brutToplam').textContent = `${brutToplam.toLocaleString('tr-TR')} ₺`;
+  document.getElementById('pb-avansKesinti').textContent = buAyAvans > 0 ? `-${buAyAvans.toLocaleString('tr-TR')} ₺` : '0 ₺';
+  document.getElementById('pb-netOdenecek').textContent = `${netOdenecek.toLocaleString('tr-TR')} ₺`;
+  document.getElementById('pb-toplamSaat').textContent = `${mesai.toplamCalisilanSaat.toFixed(1)} saat`;
+  document.getElementById('pb-fazlaSaat').textContent = `${mesai.fazlaSaat.toFixed(1)} saat`;
+  document.getElementById('pb-saatlikUcret').textContent = `${mesai.saatlikUcret.toFixed(0)} ₺`;
+
+  await renderHtmlToPdf('pdfBordroSablon', `Bordro_${personelAd.replace(/\s+/g,'_')}_${ayKey}.pdf`);
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   VARDİYA KURALLARI VE FAZLA MESAİ HESABI
+   - Hafta içi (Pzt-Cuma): normal vardiya 08:30-18:00. Bu aralığın
+     DIŞINDA kalan her dakika (erken giriş veya geç çıkış) fazla mesai.
+   - Cumartesi: normal vardiya yok. 13:00'ten SONRAKİ çalışma tamamen
+     fazla mesai sayılır (13:00 öncesi varsa normal kabul edilir).
+   - Pazar: çalışılan her dakika tamamen fazla mesai sayılır.
+   Fazla mesai ücreti: saatlik ücret (aylık maaş / 225) × 1.5.
+═══════════════════════════════════════════════════════════════ */
+const MESAI_REFERANS_SAAT = 225; // saatlik ücret hesaplamak için referans (sadece ücret birimi içindir)
+const MESAI_KATSAYI = 1.5;
+const HAFTAICI_VARDIYA_BASLA = '08:30';
+const HAFTAICI_VARDIYA_BITIS = '18:00';
+const CUMARTESI_VARDIYA_BITIS = '13:00'; // bu saatten sonrası fazla mesai
+
+function saateCevir(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
+
+// Bir mesai kaydının (tarih + giriş + çıkış) kaç saatinin normal,
+// kaç saatinin fazla mesai olduğunu gün tipine göre hesaplar.
+function gunlukFazlaMesaiHesapla(tarihStr, giris, cikis) {
+  if (!giris || !cikis) return { normalDakika: 0, fazlaDakika: 0 };
+
+  const tarih = new Date(tarihStr + 'T00:00:00');
+  const gun = tarih.getDay(); // 0=Pazar, 6=Cumartesi
+
+  let girisDk = saateCevir(giris);
+  let cikisDk = saateCevir(cikis);
+  if (cikisDk < girisDk) cikisDk += 24 * 60; // gece yarısını geçen mesai
+
+  let normalDakika = 0;
+  let fazlaDakika = 0;
+
+  if (gun === 0) {
+    // PAZAR: çalışılan her dakika tamamen fazla mesai
+    fazlaDakika = cikisDk - girisDk;
+  } else if (gun === 6) {
+    // CUMARTESİ: 13:00'e kadar normal, sonrası fazla mesai
+    const esikDk = saateCevir(CUMARTESI_VARDIYA_BITIS);
+    if (cikisDk <= esikDk) {
+      normalDakika = cikisDk - girisDk;
+    } else if (girisDk >= esikDk) {
+      fazlaDakika = cikisDk - girisDk;
+    } else {
+      normalDakika = esikDk - girisDk;
+      fazlaDakika = cikisDk - esikDk;
+    }
+  } else {
+    // HAFTA İÇİ (Pzt-Cuma): 08:30-18:00 normal, dışı fazla mesai
+    const vardiyaBaslaDk = saateCevir(HAFTAICI_VARDIYA_BASLA);
+    const vardiyaBitisDk = saateCevir(HAFTAICI_VARDIYA_BITIS);
+
+    // Vardiya öncesi erken giriş (fazla mesai)
+    if (girisDk < vardiyaBaslaDk) {
+      fazlaDakika += Math.min(cikisDk, vardiyaBaslaDk) - girisDk;
+    }
+    // Vardiya içi kesişim (normal mesai)
+    const kesisimBasla = Math.max(girisDk, vardiyaBaslaDk);
+    const kesisimBitis = Math.min(cikisDk, vardiyaBitisDk);
+    if (kesisimBitis > kesisimBasla) {
+      normalDakika += kesisimBitis - kesisimBasla;
+    }
+    // Vardiya sonrası geç çıkış (fazla mesai)
+    if (cikisDk > vardiyaBitisDk) {
+      fazlaDakika += cikisDk - Math.max(girisDk, vardiyaBitisDk);
+    }
+  }
+
+  return { normalDakika: Math.max(0, normalDakika), fazlaDakika: Math.max(0, fazlaDakika) };
+}
+
+// Bir personelin seçili ay için toplam normal + fazla mesai saatini,
+// ve fazla mesai ücretini hesaplar. Mesai kayıtlarındaki her gün için
+// vardiya kuralına göre ayrı ayrı değerlendirme yapılır.
+function fazlaMesaiHesapla(personelId, aylikMaas, ayKey) {
+  const ayinKayitlari = G_MESAI.filter(m => m.personelId === personelId && m.durum === 'calisti' && (m.tarih||'').startsWith(ayKey));
+
+  let toplamNormalDakika = 0;
+  let toplamFazlaDakika = 0;
+
+  ayinKayitlari.forEach(m => {
+    const { normalDakika, fazlaDakika } = gunlukFazlaMesaiHesapla(m.tarih, m.giris, m.cikis);
+    toplamNormalDakika += normalDakika;
+    toplamFazlaDakika += fazlaDakika;
+  });
+
+  const toplamCalisilanSaat = Math.round(((toplamNormalDakika + toplamFazlaDakika) / 60) * 10) / 10;
+  const fazlaSaat = Math.round((toplamFazlaDakika / 60) * 10) / 10;
+  const saatlikUcret = aylikMaas / MESAI_REFERANS_SAAT;
+  const fazlaMesaiUcreti = Math.round(fazlaSaat * saatlikUcret * MESAI_KATSAYI);
+
+  return { toplamCalisilanSaat, fazlaSaat, saatlikUcret, fazlaMesaiUcreti };
+}
+
+window.renderMaaslar = function() {
+  const tbody = document.getElementById('maasTableBody');
+  const ozetEl = document.getElementById('maasOzet');
+  if (!tbody) return;
+
+  doldurPersonelSecimi();
+
+  const ayKey = document.getElementById('maasAySecim')?.value || new Date().toISOString().slice(0,7);
+  if (!document.getElementById('maasAySecim').value) document.getElementById('maasAySecim').value = ayKey;
+
+  if (!G_MAASLAR.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz maaş tanımı yapılmamış. "+ Maaş Tanımla" ile başlayın.</td></tr>`;
+    if (ozetEl) ozetEl.innerHTML = '';
+    return;
+  }
+
+  let toplamMaas = 0, toplamOdenen = 0, odenenSayisi = 0, toplamFazlaMesai = 0;
+
+  tbody.innerHTML = G_MAASLAR.map(m => {
+    const buAyAvans = G_AVANSLAR.filter(a => a.personelId === m.personelId && (a.tarih||'').startsWith(ayKey))
+                                 .reduce((s,a) => s + (a.tutar||0), 0);
+    const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
+    const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans;
+    const odemeKaydi = G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey);
+
+    toplamMaas += m.aylikMaas;
+    toplamFazlaMesai += mesai.fazlaMesaiUcreti;
+    if (odemeKaydi) { toplamOdenen += odemeKaydi.netOdenen; odenenSayisi++; }
+
+    return `
+    <tr class="tbl-row">
+      <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${m.personelAd}</td>
+      <td style="padding:12px;text-align:right;font-size:12px;color:#94A3B8;">${m.aylikMaas.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:12px;text-align:right;font-size:12px;">
+        ${mesai.fazlaSaat > 0
+          ? `<span style="color:#00ADB5;font-weight:700;">+${mesai.fazlaMesaiUcreti.toLocaleString('tr-TR')} ₺</span><div style="font-size:9px;color:#475569;margin-top:1px;">${mesai.fazlaSaat.toFixed(1)} saat × 1.5</div>`
+          : `<span style="color:#475569;">—</span><div style="font-size:9px;color:#475569;margin-top:1px;">${mesai.toplamCalisilanSaat.toFixed(1)} saat çalıştı</div>`}
+      </td>
+      <td style="padding:12px;text-align:right;font-size:12px;color:#F59E0B;">${buAyAvans.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:12px;text-align:right;font-size:13px;font-weight:800;color:#10B981;">${netOdenecek.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:12px;text-align:right;">
+        ${odemeKaydi
+          ? `<span class="sbadge badge-ok-sm">✓ Ödendi (${odemeKaydi.odemeTarihi})</span>`
+          : `<span class="sbadge badge-warn-sm">Bekliyor</span>`}
+      </td>
+      <td style="padding:12px;text-align:right;display:flex;gap:8px;justify-content:flex-end;">
+        <button onclick="downloadBordroPDF('${m.personelId}','${m.personelAd.replace(/'/g,"\\'")}',${m.aylikMaas},'${ayKey}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">📄 Bordro</button>
+        ${odemeKaydi
+          ? `<button onclick="maasOdemeGeriAl('${odemeKaydi.id}')" class="admin-only" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;">Geri Al</button>`
+          : `<button onclick="maasOdendiIsaretle('${m.personelId}','${m.personelAd.replace(/'/g,"\\'")}',${m.aylikMaas},'${ayKey}')" class="admin-only" style="font-size:11px;color:#10B981;background:none;border:none;cursor:pointer;font-weight:700;">✓ Ödendi İşaretle</button>`}
+        <button onclick="deleteMaasTanim('${m.id}','${m.personelAd.replace(/'/g,"\\'")}')" class="admin-only" style="font-size:11px;color:#475569;background:none;border:none;cursor:pointer;">Sil</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  if (ozetEl) {
+    ozetEl.innerHTML = `
+      <div class="card" style="padding:16px;text-align:center;">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Toplam Maaş Bordrosu</div>
+        <div style="font-size:20px;font-weight:900;color:#E2E8F0;">${toplamMaas.toLocaleString('tr-TR')} ₺</div>
+      </div>
+      <div class="card" style="padding:16px;text-align:center;border-color:rgba(0,173,181,.25);">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Toplam Fazla Mesai</div>
+        <div style="font-size:20px;font-weight:900;color:#00ADB5;">${toplamFazlaMesai.toLocaleString('tr-TR')} ₺</div>
+      </div>
+      <div class="card" style="padding:16px;text-align:center;border-color:rgba(16,185,129,.25);">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Ödenen (Net)</div>
+        <div style="font-size:20px;font-weight:900;color:#10B981;">${toplamOdenen.toLocaleString('tr-TR')} ₺</div>
+      </div>
+      <div class="card" style="padding:16px;text-align:center;border-color:rgba(245,158,11,.25);">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">Ödeme Durumu</div>
+        <div style="font-size:20px;font-weight:900;color:#F59E0B;">${odenenSayisi} / ${G_MAASLAR.length}</div>
+      </div>`;
+  }
+
+  const role2 = currentUserData?.rol;
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = role2 === 'admin' ? '' : 'none';
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MESAİ / PUANTAJ SİSTEMİ
+   Günlük bazda her personelin çalışma durumu (çalıştı/izinli/raporlu/
+   gelmedi) ve giriş-çıkış saatleri kaydedilir. Aylık özet ile toplam
+   çalışılan gün ve saat görülebilir.
+═══════════════════════════════════════════════════════════════ */
+let mesaiSeciliTarih = new Date();
+
+window.mesaiGunShift = (delta, buGun) => {
+  if (buGun) mesaiSeciliTarih = new Date();
+  else mesaiSeciliTarih.setDate(mesaiSeciliTarih.getDate() + delta);
+  renderMesai();
+};
+
+window.toggleMesaiSaatAlanlari = () => {
+  const durum = document.getElementById('f-mesai-durum').value;
+  document.getElementById('f-mesai-saat-wrap').style.display = durum === 'calisti' ? 'grid' : 'none';
+};
+
+function saatFarkiHesapla(giris, cikis) {
+  if (!giris || !cikis) return 0;
+  const [gh, gm] = giris.split(':').map(Number);
+  const [ch, cm] = cikis.split(':').map(Number);
+  let dakika = (ch*60+cm) - (gh*60+gm);
+  if (dakika < 0) dakika += 24*60;
+  return Math.round((dakika/60)*10)/10;
+}
+
+// Mesai modalında, personel/tarih/saat girilirken canlı olarak bu kaydın
+// personelin maaşına göre getireceği ek ücreti (varsa) gösterir.
+// Mantık: bu kayıt hariç o ayki mevcut saat + bu kaydın saati = yeni toplam.
+// Yeni toplam 225'i aşıyorsa, aşan kısım (veya kaydın tamamı, hangisi
+// küçükse) 1.5 katıyla "bu kayıt sayesinde kazanılan" tutar olarak gösterilir.
+window.mesaiOnizlemeGuncelle = () => {
+  const kutu = document.getElementById('mesaiOnizlemeKutusu');
+  const personelSel = document.getElementById('f-mesai-personel');
+  const personelId = personelSel.value;
+  const durum = document.getElementById('f-mesai-durum').value;
+  const tarih = document.getElementById('f-mesai-tarih').value;
+
+  if (!personelId || durum !== 'calisti' || !tarih) { kutu.style.display = 'none'; return; }
+
+  const maasTanim = G_MAASLAR.find(m => m.personelId === personelId);
+  if (!maasTanim) {
+    kutu.style.display = 'block';
+    document.getElementById('mesaiOnizlemeBaslik').textContent = 'Maaş tanımı bulunamadı';
+    document.getElementById('mesaiOnizlemeDetay').textContent = 'Önce "Maaşlar" sekmesinden bu personele aylık maaş tanımlayın.';
+    document.getElementById('mesaiOnizlemeTutar').textContent = '—';
+    return;
+  }
+
+  const giris = document.getElementById('f-mesai-giris').value;
+  const cikis = document.getElementById('f-mesai-cikis').value;
+  if (!giris || !cikis) { kutu.style.display = 'none'; return; }
+
+  const { normalDakika, fazlaDakika } = gunlukFazlaMesaiHesapla(tarih, giris, cikis);
+  const fazlaSaat = Math.round((fazlaDakika/60)*10)/10;
+  const normalSaat = Math.round((normalDakika/60)*10)/10;
+  const saatlikUcret = maasTanim.aylikMaas / MESAI_REFERANS_SAAT;
+  const buKaydinUcreti = Math.round(fazlaSaat * saatlikUcret * MESAI_KATSAYI);
+
+  const gun = new Date(tarih + 'T00:00:00').getDay();
+  const gunAdi = ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][gun];
+  let kuralAciklama;
+  if (gun === 0) kuralAciklama = 'Pazar — çalışılan tüm saat fazla mesai';
+  else if (gun === 6) kuralAciklama = `Cumartesi — ${CUMARTESI_VARDIYA_BITIS} sonrası fazla mesai`;
+  else kuralAciklama = `Hafta içi — ${HAFTAICI_VARDIYA_BASLA}-${HAFTAICI_VARDIYA_BITIS} dışı fazla mesai`;
+
+  kutu.style.display = 'block';
+  if (fazlaSaat > 0) {
+    document.getElementById('mesaiOnizlemeBaslik').textContent = `${gunAdi}: ${fazlaSaat.toFixed(1)} saat fazla mesai`;
+    document.getElementById('mesaiOnizlemeDetay').textContent = `${kuralAciklama}${normalSaat > 0 ? ' · '+normalSaat.toFixed(1)+' saat normal mesai' : ''} · ${saatlikUcret.toFixed(0)} ₺/saat × 1.5`;
+    document.getElementById('mesaiOnizlemeTutar').textContent = `+${buKaydinUcreti.toLocaleString('tr-TR')} ₺`;
+    document.getElementById('mesaiOnizlemeTutar').style.color = '#00ADB5';
+  } else {
+    document.getElementById('mesaiOnizlemeBaslik').textContent = `${gunAdi}: ${normalSaat.toFixed(1)} saat normal mesai`;
+    document.getElementById('mesaiOnizlemeDetay').textContent = `${kuralAciklama} — bu kayıt fazla mesaiye girmiyor`;
+    document.getElementById('mesaiOnizlemeTutar').textContent = `0 ₺`;
+    document.getElementById('mesaiOnizlemeTutar').style.color = '#475569';
+  }
+};
+
+window.saveMesai = async () => {
+  const personelSel = document.getElementById('f-mesai-personel');
+  const personelId  = personelSel.value;
+  const personelAd  = personelSel.selectedOptions[0]?.dataset.ad || '';
+  const tarih       = document.getElementById('f-mesai-tarih').value;
+  const durum       = document.getElementById('f-mesai-durum').value;
+  const giris       = document.getElementById('f-mesai-giris').value;
+  const cikis       = document.getElementById('f-mesai-cikis').value;
+  const not         = document.getElementById('f-mesai-not').value.trim();
+  const editId      = document.getElementById('f-mesai-editId').value;
+
+  if (!personelId || !tarih) { alert('Personel ve tarih zorunludur.'); return; }
+
+  const calisilanSaat = durum === 'calisti' ? saatFarkiHesapla(giris, cikis) : 0;
+  const data = {
+    personelId, personelAd, tarih, durum,
+    giris: durum==='calisti' ? giris : null,
+    cikis: durum==='calisti' ? cikis : null,
+    calisilanSaat, not, guncellendi: serverTimestamp()
+  };
+
+  try {
+    if (editId) {
+      await updateDoc(doc(db, 'mesaiKayitlari', editId), data);
+    } else {
+      data.olusturuldu = serverTimestamp();
+      await addDoc(collection(db, 'mesaiKayitlari'), data);
+    }
+    closeModal('mMesai');
+    resetMesaiForm();
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.editMesai = async (id) => {
+  const m = G_MESAI.find(x => x.id === id);
+  if (!m) return;
+  document.getElementById('f-mesai-personel').value = m.personelId;
+  document.getElementById('f-mesai-tarih').value     = m.tarih;
+  document.getElementById('f-mesai-durum').value     = m.durum;
+  document.getElementById('f-mesai-giris').value     = m.giris || '08:00';
+  document.getElementById('f-mesai-cikis').value     = m.cikis || '18:00';
+  document.getElementById('f-mesai-not').value       = m.not || '';
+  document.getElementById('f-mesai-editId').value    = id;
+  toggleMesaiSaatAlanlari();
+  mesaiOnizlemeGuncelle();
+  document.getElementById('mMesaiTitle').textContent = 'Mesai Kaydını Düzenle';
+  openModal('mMesai');
+};
+
+window.deleteMesai = async (id) => {
+  if (!confirm('Bu mesai kaydını silmek istediğinizden emin misiniz?')) return;
+  await deleteDoc(doc(db, 'mesaiKayitlari', id));
+};
+
+function resetMesaiForm() {
+  document.getElementById('f-mesai-editId').value = '';
+  document.getElementById('f-mesai-personel').value = '';
+  document.getElementById('f-mesai-tarih').value = mesaiSeciliTarih.toISOString().slice(0,10);
+  document.getElementById('f-mesai-durum').value = 'calisti';
+  document.getElementById('f-mesai-giris').value = '08:00';
+  document.getElementById('f-mesai-cikis').value = '18:00';
+  document.getElementById('f-mesai-not').value = '';
+  toggleMesaiSaatAlanlari();
+  document.getElementById('mesaiOnizlemeKutusu').style.display = 'none';
+  document.getElementById('mMesaiTitle').textContent = 'Mesai Kaydı';
+}
+
+window.hizliMesaiEkle = (personelId, personelAd) => {
+  resetMesaiForm();
+  document.getElementById('f-mesai-personel').value = personelId;
+  mesaiOnizlemeGuncelle();
+  openModal('mMesai');
+};
+
+const MESAI_DURUM_BILGI = {
+  calisti:  { etiket: 'Çalıştı',  renk: '#10B981', ikon: '✓' },
+  izinli:   { etiket: 'İzinli',   renk: '#3B82F6', ikon: '🏖️' },
+  raporlu:  { etiket: 'Raporlu',  renk: '#F59E0B', ikon: '🏥' },
+  gelmedi:  { etiket: 'Gelmedi',  renk: '#EF4444', ikon: '✗' },
+};
+
+function renderMesai() {
+  const listeEl = document.getElementById('mesaiListesi');
+  const etiketEl = document.getElementById('mesaiTarihEtiket');
+  if (!listeEl) return;
+
+  doldurPersonelSecimi();
+
+  const secili = mesaiSeciliTarih;
+  const bugun = new Date();
+  const isToday = secili.toDateString() === bugun.toDateString();
+  const tarihStr = secili.toISOString().slice(0,10);
+
+  etiketEl.textContent = secili.toLocaleDateString('tr-TR', { weekday:'long', year:'numeric', month:'long', day:'numeric' })
+    + (isToday ? ' (Bugün)' : '');
+
+  const personeller = G_KULLANICILAR.filter(u => u.rol === 'admin' || u.rol === 'teknisyen');
+  const gununKayitlari = G_MESAI.filter(m => m.tarih === tarihStr);
+
+  if (!personeller.length) {
+    listeEl.innerHTML = `<div class="card" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz personel kaydı yok.</div>`;
+    return;
+  }
+
+  listeEl.innerHTML = personeller.map(p => {
+    const kayit = gununKayitlari.find(m => m.personelId === p.id);
+    const initials = p.ad.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+
+    if (!kayit) {
+      return `
+      <div class="card" style="padding:14px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div style="width:36px;height:36px;border-radius:10px;background:rgba(71,85,105,.3);display:flex;align-items:center;justify-content:center;color:#94A3B8;font-size:12px;font-weight:800;flex-shrink:0;">${initials}</div>
+        <div style="flex:1;min-width:140px;">
+          <div style="font-size:13px;font-weight:700;color:#E2E8F0;">${p.ad}</div>
+          <div style="font-size:11px;color:#475569;margin-top:1px;">Henüz kayıt girilmedi</div>
+        </div>
+        <button onclick="hizliMesaiEkle('${p.id}','${p.ad.replace(/'/g,"\\'")}')" class="btn-sm" style="padding:8px 14px;font-size:11px;flex-shrink:0;">+ Kayıt Gir</button>
+      </div>`;
+    }
+
+    const bilgi = MESAI_DURUM_BILGI[kayit.durum] || MESAI_DURUM_BILGI.calisti;
+    return `
+    <div class="card" style="padding:14px 16px;border-left:3px solid ${bilgi.renk};display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+      <div style="width:36px;height:36px;border-radius:10px;background:${bilgi.renk}22;display:flex;align-items:center;justify-content:center;color:${bilgi.renk};font-size:12px;font-weight:800;flex-shrink:0;">${initials}</div>
+      <div style="flex:1;min-width:140px;">
+        <div style="font-size:13px;font-weight:700;color:#E2E8F0;">${p.ad}</div>
+        <div style="font-size:11px;color:#475569;margin-top:1px;">
+          ${kayit.durum === 'calisti' ? `${kayit.giris||'—'} - ${kayit.cikis||'—'} (${kayit.calisilanSaat||0} saat)` : (kayit.not || bilgi.etiket)}
+        </div>
+      </div>
+      <span class="sbadge" style="background:${bilgi.renk}22;color:${bilgi.renk};border:1px solid ${bilgi.renk}44;flex-shrink:0;">${bilgi.ikon} ${bilgi.etiket}</span>
+      <div style="display:flex;gap:6px;flex-shrink:0;">
+        <button onclick="editMesai('${kayit.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">Düzenle</button>
+        <button onclick="deleteMesai('${kayit.id}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;">Sil</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+window.renderMesaiOzet = () => {
+  const ozetEl = document.getElementById('mesaiAylikOzet');
+  if (!ozetEl) return;
+
+  const ayKey = document.getElementById('mesaiOzetAy')?.value || new Date().toISOString().slice(0,7);
+  if (document.getElementById('mesaiOzetAy') && !document.getElementById('mesaiOzetAy').value) {
+    document.getElementById('mesaiOzetAy').value = ayKey;
+  }
+
+  const personeller = G_KULLANICILAR.filter(u => u.rol === 'admin' || u.rol === 'teknisyen');
+  const ayKayitlari = G_MESAI.filter(m => (m.tarih||'').startsWith(ayKey));
+
+  if (!personeller.length) {
+    ozetEl.innerHTML = `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Personel kaydı yok.</div>`;
+    return;
+  }
+
+  ozetEl.innerHTML = personeller.map(p => {
+    const kayitlar = ayKayitlari.filter(m => m.personelId === p.id);
+    const calisilanGun = kayitlar.filter(m => m.durum === 'calisti').length;
+    const izinliGun = kayitlar.filter(m => m.durum === 'izinli').length;
+    const rapoluGun = kayitlar.filter(m => m.durum === 'raporlu').length;
+    const gelmediGun = kayitlar.filter(m => m.durum === 'gelmedi').length;
+    const toplamSaat = kayitlar.reduce((s,m) => s + (m.calisilanSaat||0), 0);
+
+    return `
+      <div style="padding:12px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-bottom:1px solid rgba(30,41,59,.4);">
+        <div style="flex:1;min-width:140px;">
+          <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${p.ad}</div>
+          <div style="font-size:11px;color:#475569;margin-top:1px;">${toplamSaat.toLocaleString('tr-TR')} saat toplam</div>
+        </div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;">
+          <div style="text-align:center;"><div style="font-size:14px;font-weight:800;color:#10B981;">${calisilanGun}</div><div style="font-size:9px;color:#475569;">Çalıştı</div></div>
+          <div style="text-align:center;"><div style="font-size:14px;font-weight:800;color:#3B82F6;">${izinliGun}</div><div style="font-size:9px;color:#475569;">İzinli</div></div>
+          <div style="text-align:center;"><div style="font-size:14px;font-weight:800;color:#F59E0B;">${rapoluGun}</div><div style="font-size:9px;color:#475569;">Raporlu</div></div>
+          <div style="text-align:center;"><div style="font-size:14px;font-weight:800;color:#EF4444;">${gelmediGun}</div><div style="font-size:9px;color:#475569;">Gelmedi</div></div>
+        </div>
+      </div>`;
+  }).join('');
+};
+
+/* ═══════════════════════════════════════════════════════════════
    MÜŞTERİ CARİ — Bina bazlı tahsilat / borç-alacak ekstresi
 ═══════════════════════════════════════════════════════════════ */
 function doldurMusteriSecimi() {
@@ -2279,7 +3679,13 @@ function renderMusteriCariListesi() {
     return;
   }
 
-  tbody.innerHTML = G_BINALAR.map(b => {
+  const binalarFiltreli = G_BINALAR.filter(b => aramaEslesir(G_ARAMA.musteriCari, b.ad, b.cariKodu));
+  if (!binalarFiltreli.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Aramayla eşleşen cari bulunamadı.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = binalarFiltreli.map(b => {
     const borclar = G_BORCLAR.filter(x => x.bina === b.ad);
     const toplamBorc = borclar.reduce((s,x) => s + (x.tutar||0), 0);
     const tahsilatlar = G_ODEMELER.filter(o => o.bina === b.ad);
@@ -2981,6 +4387,12 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
 .db-input:focus { outline:none; border-color:#00ADB5; box-shadow:0 0 0 3px rgba(0,173,181,.1); }
 .db-input::placeholder { color: #475569; }
 
+/* Sayfa içi arama kutusu */
+.search-box-wrap { position: relative; max-width: 280px; flex: 1; min-width: 180px; }
+.search-box-wrap input { padding-left: 34px !important; }
+.search-box-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: #475569; pointer-events: none; }
+body.light-mode .search-box-icon { color: #94A3B8; }
+
 /* SITE */
 .site-input { width:100%;padding:11px 14px;border:1px solid #E2E8F0;border-radius:8px;font-size:14px;color:#0F172A;background:#fff;transition:border-color .2s;font-family:'Inter',sans-serif; }
 .site-input:focus { outline:none; border-color:#00ADB5; }
@@ -3254,7 +4666,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
     <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:48px;align-items:start;" class="hero-grid">
       <div style="display:flex;flex-direction:column;gap:24px;">
-        <div><p style="font-size:11px;font-weight:700;color:#0F172A;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Merkez Ofis</p><p style="color:#64748B;font-size:14px;line-height:1.7;"> <br>Esenyurt / İstanbul</p></div>
+        <div><p style="font-size:11px;font-weight:700;color:#0F172A;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Merkez Ofis</p><p style="color:#64748B;font-size:14px;line-height:1.7;">İncirtepe Mah. 269. Sok. No: 3 Daire: 1<br>Esenyurt / İstanbul</p></div>
         <div><p style="font-size:11px;font-weight:700;color:#0F172A;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Telefon & WhatsApp</p><p style="font-size:24px;font-weight:900;color:#0F172A;">0533 497 73 17</p>
           <a href="https://wa.me/905334977317" target="_blank" style="display:inline-flex;align-items:center;gap:8px;margin-top:12px;padding:10px 18px;background:#22C55E;color:#fff;border-radius:8px;font-size:12px;font-weight:700;text-transform:uppercase;text-decoration:none;">WhatsApp Mesaj</a>
         </div>
@@ -3461,11 +4873,34 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         </div>
       </div>
 
+      <!-- BUGÜNÜN GÖREVLERİ -->
+      <div id="pg-gorevler" class="db-page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+          <div>
+            <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Bugünün Görevleri</h2>
+            <p id="gorevTarihEtiket" style="font-size:11px;color:#475569;margin-top:2px;">—</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button onclick="gorevGunShift(-1)" class="btn-ghost" style="padding:8px 12px;">←</button>
+            <button onclick="gorevGunShift(0,true)" class="btn-sm" style="padding:8px 14px;">Bugün</button>
+            <button onclick="gorevGunShift(1)" class="btn-ghost" style="padding:8px 12px;">→</button>
+          </div>
+        </div>
+
+        <div id="gorevOzet" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;"></div>
+
+        <div id="gorevListesi" style="display:flex;flex-direction:column;gap:16px;"></div>
+      </div>
+
       <!-- BİNALAR -->
       <div id="pg-binalar" class="db-page">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
           <div><h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Cari Yönetimi</h2><p style="font-size:11px;color:#475569;margin-top:2px;">Bina/Müşteri cari kartları — sistemin ana kaydı</p></div>
-          <div style="display:flex;gap:8px;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <div class="search-box-wrap">
+              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" class="db-input" placeholder="Cari ara... (ad, kod, adres)" oninput="aramaGuncelle('binalar', this.value)"/>
+            </div>
             <button onclick="exportBinalarCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
             <button onclick="resetBinaForm();openModal('mBina')" class="btn-sm admin-only">+ Cari Ekle</button>
           </div>
@@ -3512,9 +4947,13 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
       <!-- BAKIMLAR -->
       <div id="pg-bakimlar" class="db-page">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
           <div><h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Bakım Takibi</h2><p style="font-size:11px;color:#475569;margin-top:2px;">Firebase Firestore — Gerçek zamanlı</p></div>
-          <div style="display:flex;gap:8px;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <div class="search-box-wrap">
+              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" class="db-input" placeholder="Bina, kabin, teknisyen ara..." oninput="aramaGuncelle('bakimlar', this.value)"/>
+            </div>
             <button onclick="exportBakimlarCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
             <button onclick="openModal('mBakim')" class="btn-sm admin-only">+ Bakım Planla</button>
           </div>
@@ -3524,9 +4963,15 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
       <!-- ARIZALAR -->
       <div id="pg-arizalar" class="db-page">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
           <div><h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Arıza Kayıtları</h2><p style="font-size:11px;color:#475569;margin-top:2px;">Firebase Firestore — Gerçek zamanlı</p></div>
-          <button onclick="openModal('mAriza')" style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:rgba(239,68,68,.15);color:#EF4444;border:1px solid rgba(239,68,68,.2);border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">+ Arıza Bildir</button>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <div class="search-box-wrap">
+              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" class="db-input" placeholder="Bina, açıklama ara..." oninput="aramaGuncelle('arizalar', this.value)"/>
+            </div>
+            <button onclick="openModal('mAriza')" style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:rgba(239,68,68,.15);color:#EF4444;border:1px solid rgba(239,68,68,.2);border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">+ Arıza Bildir</button>
+          </div>
         </div>
         <div id="arizaList" style="display:flex;flex-direction:column;gap:10px;"></div>
       </div>
@@ -3565,6 +5010,21 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <tbody id="kullaniciTableBody"><tr><td colspan="5" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
           </table>
         </div>
+
+        <!-- Tam Yedekleme -->
+        <div class="card admin-only" style="padding:18px;margin-top:16px;border-color:rgba(0,173,181,.2);">
+          <div style="display:flex;align-items:start;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+            <div>
+              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:4px;">💾 Tam Sistem Yedeklemesi</h3>
+              <p style="font-size:11px;color:#475569;max-width:480px;">Tüm cari, bakım, arıza, sözleşme, ödeme ve diğer kayıtların tek seferde dışa aktarılması. Felaket senaryosuna karşı düzenli yedek almanız önerilir.</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-shrink:0;">
+              <button onclick="tamYedekJSON()" class="btn-ghost" style="padding:9px 16px;font-size:12px;">⬇ JSON İndir</button>
+              <button onclick="tamYedekExcel()" class="btn-sm" style="padding:9px 16px;font-size:12px;">⬇ Excel İndir (Tüm Tablolar)</button>
+            </div>
+          </div>
+          <div id="yedekDurum" style="display:none;margin-top:12px;padding:10px 14px;background:rgba(0,173,181,.06);border:1px solid rgba(0,173,181,.2);border-radius:8px;font-size:11px;color:#00ADB5;"></div>
+        </div>
       </div>
 
       <!-- BAKIM TAKVİMİ -->
@@ -3589,12 +5049,18 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
       <!-- SÖZLEŞME & FATURA -->
       <div id="pg-sozlesmeler" class="db-page">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
           <div>
             <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Sözleşme & Fatura Takibi</h2>
             <p style="font-size:11px;color:#475569;margin-top:2px;">Ödeme tarihleri ve borç durumu</p>
           </div>
-          <button onclick="openModal('mSozlesme')" class="btn-sm admin-only">+ Sözleşme Ekle</button>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <div class="search-box-wrap">
+              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" class="db-input" placeholder="Bina, tip ara..." oninput="aramaGuncelle('sozlesmeler', this.value)"/>
+            </div>
+            <button onclick="openModal('mSozlesme')" class="btn-sm admin-only">+ Sözleşme Ekle</button>
+          </div>
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;" id="sozlesmeStats"></div>
@@ -3607,10 +5073,11 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
                 <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Sözleşme Tipi</th>
                 <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tutar</th>
                 <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Ödeme Günü</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Yenileme Tarihi</th>
                 <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
                 <th style="padding:11px 12px;" class="admin-only"></th>
               </tr></thead>
-              <tbody id="sozlesmeTableBody"><tr><td colspan="6" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+              <tbody id="sozlesmeTableBody"><tr><td colspan="7" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -3645,15 +5112,23 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           <button onclick="switchMuhasebeTab('odemeler',this)" class="muh-tab-btn muh-tab-active" data-tab="odemeler">💰 Ödemeler</button>
           <button onclick="switchMuhasebeTab('giderler',this)" class="muh-tab-btn admin-only" data-tab="giderler">📤 Giderler</button>
           <button onclick="switchMuhasebeTab('ozet',this)" class="muh-tab-btn admin-only" data-tab="ozet">📊 Mali Özet</button>
+          <button onclick="switchMuhasebeTab('maas',this)" class="muh-tab-btn admin-only" data-tab="maas">💼 Maaşlar</button>
+          <button onclick="switchMuhasebeTab('mesai',this)" class="muh-tab-btn admin-only" data-tab="mesai">🕐 Mesai/Puantaj</button>
           <button onclick="switchMuhasebeTab('personel',this)" class="muh-tab-btn admin-only" data-tab="personel">👤 Personel Cari</button>
           <button onclick="switchMuhasebeTab('musteri',this)" class="muh-tab-btn" data-tab="musteri">🏢 Müşteri Cari</button>
         </div>
 
         <!-- ═══ SEKME: ÖDEMELER (mevcut) ═══ -->
         <div id="muhTab-odemeler" class="muh-tab-content">
-          <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px;">
-            <button onclick="exportOdemelerCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
-            <button onclick="openModal('mOdeme')" class="btn-sm admin-only">+ Ödeme Kaydet</button>
+          <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+            <div class="search-box-wrap">
+              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" class="db-input" placeholder="Bina, açıklama ara..." oninput="aramaGuncelle('odemeler', this.value)"/>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button onclick="exportOdemelerCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
+              <button onclick="openModal('mOdeme')" class="btn-sm admin-only">+ Ödeme Kaydet</button>
+            </div>
           </div>
 
           <!-- Özet kartları -->
@@ -3679,6 +5154,59 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
                 <tbody id="odemeTableBody"><tr><td colspan="6" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        <!-- ═══ SEKME: MAAŞLAR ═══ -->
+        <div id="muhTab-maas" class="muh-tab-content" style="display:none;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+            <p style="font-size:11px;color:#475569;">Sabit aylık maaş tanımı, ay bazlı ödeme işaretleme — avans otomatik düşülür</p>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <input id="maasAySecim" type="month" class="db-input" style="max-width:160px;" onchange="renderMaaslar()"/>
+              <button onclick="topluMaasOdemeYap()" class="btn-sm admin-only" style="background:linear-gradient(135deg,#10B981,#059669);">✓ Tümünü Ödendi İşaretle</button>
+              <button onclick="openModal('mMaasTanim')" class="btn-sm admin-only">+ Maaş Tanımla</button>
+            </div>
+          </div>
+
+          <div id="maasOzet" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;"></div>
+
+          <div class="card" style="padding:0;overflow:hidden;">
+            <div style="overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;">
+                <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
+                  <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Personel</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Aylık Maaş</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Fazla Mesai (×1.5)</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bu Ay Avans</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Net Ödenecek</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
+                  <th style="padding:11px 12px;"></th>
+                </tr></thead>
+                <tbody id="maasTableBody"><tr><td colspan="7" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ SEKME: MESAİ / PUANTAJ ═══ -->
+        <div id="muhTab-mesai" class="muh-tab-content" style="display:none;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <button onclick="mesaiGunShift(-1)" class="btn-ghost" style="padding:8px 12px;">←</button>
+              <span id="mesaiTarihEtiket" style="font-size:13px;font-weight:700;color:#E2E8F0;min-width:160px;text-align:center;">—</span>
+              <button onclick="mesaiGunShift(1)" class="btn-ghost" style="padding:8px 12px;">→</button>
+              <button onclick="mesaiGunShift(0,true)" class="btn-sm" style="padding:8px 14px;">Bugün</button>
+            </div>
+          </div>
+
+          <div id="mesaiListesi" style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;"></div>
+
+          <div class="card" style="padding:0;overflow:hidden;">
+            <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">Aylık Mesai Özeti</h3>
+              <input id="mesaiOzetAy" type="month" class="db-input" style="max-width:160px;" onchange="renderMesaiOzet()"/>
+            </div>
+            <div id="mesaiAylikOzet"></div>
           </div>
         </div>
 
@@ -3715,7 +5243,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <!-- ═══ SEKME: MÜŞTERİ CARİ (bina ekstresi) ═══ -->
         <div id="muhTab-musteri" class="muh-tab-content" style="display:none;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-            <p style="font-size:11px;color:#475569;">Bina bazlı tahsilat ve borç/alacak durumu</p>
+            <div class="search-box-wrap">
+              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" class="db-input" placeholder="Cari ara..." oninput="aramaGuncelle('musteriCari', this.value)"/>
+            </div>
             <select id="musteriCariSecim" class="db-input" style="max-width:240px;" onchange="renderMusteriCariDetay()">
               <option value="">— Bina Seçin —</option>
             </select>
@@ -3823,6 +5354,21 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
               <div id="ozet-giderDetay"></div>
             </div>
           </div>
+
+          <!-- Yıllık Mali Rapor — toplu dışa aktarma -->
+          <div class="card" style="padding:18px;margin-top:16px;border-color:rgba(0,173,181,.2);">
+            <div style="display:flex;align-items:start;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+              <div>
+                <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:4px;">📅 Yıllık Mali Rapor</h3>
+                <p style="font-size:11px;color:#475569;max-width:460px;">Seçili yılın tüm ödeme, gider ve maaş verisini önce aylık özet, ardından detaylı döküm halinde tek dosyada dışa aktarır.</p>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap;">
+                <select id="yillikRaporYil" class="db-input" style="max-width:110px;"></select>
+                <button onclick="yillikRaporExcel()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
+                <button onclick="yillikRaporPDF()" class="btn-sm" style="padding:9px 16px;font-size:12px;">⬇ PDF</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -3833,7 +5379,13 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Asansör Teknik Dosyası</h2>
             <p style="font-size:11px;color:#475569;margin-top:2px;">Seri no, marka, montaj ve periyodik muayene takibi</p>
           </div>
-          <button onclick="openModal('mAsansor')" class="btn-sm admin-only">+ Asansör Ekle</button>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <div class="search-box-wrap">
+              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" class="db-input" placeholder="Bina, seri no, marka ara..." oninput="aramaGuncelle('asansorler', this.value)"/>
+            </div>
+            <button onclick="openModal('mAsansor')" class="btn-sm admin-only">+ Asansör Ekle</button>
+          </div>
         </div>
 
         <div id="asansorMuayeneUyari" style="display:none;margin-bottom:16px;"></div>
@@ -4013,16 +5565,33 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Günü (Ayın)</label><input id="f-soz-gun" type="number" min="1" max="31" class="db-input" placeholder="5"/></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Sözleşme Başlangıç Tarihi</label><input id="f-soz-baslangic" type="date" class="db-input"/></div>
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Son Ödeme Tarihi</label><input id="f-soz-sonodeme" type="date" class="db-input"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Sözleşme Başlangıç Tarihi</label><input id="f-soz-baslangic" type="date" class="db-input" onchange="sozBitisTarihiGuncelle()"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Sözleşme Süresi</label>
+          <select id="f-soz-sure" class="db-input" onchange="sozBitisTarihiGuncelle()">
+            <option value="6">6 Ay</option>
+            <option value="12" selected>1 Yıl</option>
+            <option value="24">2 Yıl</option>
+            <option value="36">3 Yıl</option>
+          </select>
+        </div>
       </div>
-      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Durum</label>
+      <div class="card" id="sozBitisTarihiKutu" style="padding:10px 12px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.15);">
+        <p style="font-size:11px;color:#64748B;">📅 Sözleşme bitiş/yenileme tarihi: <b id="sozBitisTarihiGoster" style="color:#00ADB5;">—</b> — bu tarihe 30 gün kala bildirim merkezinde uyarı çıkar.</p>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Son Ödeme Tarihi</label><input id="f-soz-sonodeme" type="date" class="db-input"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Durum</label>
         <select id="f-soz-durum" class="db-input"><option value="odendi">Ödendi</option><option value="bekliyor">Bekliyor</option><option value="gecikti">Gecikti</option></select></div>
+      </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Notlar / Kapsam</label><textarea id="f-soz-not" rows="2" class="db-input" style="resize:none;" placeholder="Sözleşme kapsamı, ek bilgi..."></textarea></div>
 
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding-top:4px;">
         <input type="checkbox" id="f-soz-pdfOlustur" checked style="width:16px;height:16px;accent-color:#00ADB5;cursor:pointer;">
         <span style="font-size:12px;color:#94A3B8;">Kaydettiğimde <b style="color:#00ADB5;">logolu sözleşme PDF'i</b> otomatik oluşturup indir</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="f-soz-anaSozlesmeOlustur" style="width:16px;height:16px;accent-color:#00ADB5;cursor:pointer;">
+        <span style="font-size:12px;color:#94A3B8;"><b style="color:#00ADB5;">Ana Sözleşme</b> (detaylı hukuki şartlar, sorumluluk ve fesih maddeleri) PDF'ini de oluştur</span>
       </label>
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
@@ -4115,6 +5684,75 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
   </div>
 </div>
 
+<!-- Maaş Tanımla Modal -->
+<div id="modal-mMaasTanim" class="modal-wrap" onclick="if(event.target===this)closeModal('mMaasTanim')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Personel Maaşı Tanımla</h3>
+      <button onclick="closeModal('mMaasTanim')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Personel *</label>
+        <select id="f-maas-personel" class="db-input"><option value="">— Seçiniz —</option></select>
+      </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Aylık Sabit Maaş (₺) *</label><input id="f-maas-tutar" type="number" class="db-input" placeholder="18000"/></div>
+      <div class="card" style="padding:10px 12px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.15);">
+        <p style="font-size:11px;color:#64748B;">ℹ️ Bu tutar her ay için sabit kalır. Fazla mesai şu kurala göre otomatik hesaplanır: <b style="color:#00ADB5;">hafta içi 08:30-18:00 dışı</b>, <b style="color:#00ADB5;">Cumartesi 13:00 sonrası</b>, ve <b style="color:#00ADB5;">Pazar tamamı</b> 1.5 katı ücretle maaşa eklenir. Personele o ay verilen avanslar, ödeme işaretlenirken otomatik olarak bu tutardan düşülür.</p>
+      </div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mMaasTanim')" class="btn-ghost">İptal</button>
+      <button onclick="saveMaasTanim()" class="btn-sm">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Mesai Kaydı Ekle/Düzenle Modal -->
+<div id="modal-mMesai" class="modal-wrap" onclick="if(event.target===this)closeModal('mMesai')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 id="mMesaiTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">Mesai Kaydı</h3>
+      <button onclick="closeModal('mMesai')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <input type="hidden" id="f-mesai-editId"/>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Personel *</label>
+        <select id="f-mesai-personel" class="db-input" onchange="mesaiOnizlemeGuncelle()"><option value="">— Seçiniz —</option></select>
+      </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-mesai-tarih" type="date" class="db-input" onchange="mesaiOnizlemeGuncelle()"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Durum *</label>
+        <select id="f-mesai-durum" class="db-input" onchange="toggleMesaiSaatAlanlari();mesaiOnizlemeGuncelle()">
+          <option value="calisti">Çalıştı</option>
+          <option value="izinli">İzinli</option>
+          <option value="raporlu">Raporlu (Sağlık)</option>
+          <option value="gelmedi">Gelmedi (İzinsiz)</option>
+        </select>
+      </div>
+      <div id="f-mesai-saat-wrap" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Giriş Saati</label><input id="f-mesai-giris" type="time" class="db-input" value="08:00" oninput="mesaiOnizlemeGuncelle()"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Çıkış Saati</label><input id="f-mesai-cikis" type="time" class="db-input" value="18:00" oninput="mesaiOnizlemeGuncelle()"/></div>
+      </div>
+
+      <!-- Canlı ücret önizlemesi -->
+      <div id="mesaiOnizlemeKutusu" class="card" style="display:none;padding:12px 14px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.18);">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div id="mesaiOnizlemeBaslik" style="font-size:11px;color:#94A3B8;">Bu kayıt eklendiğinde</div>
+            <div id="mesaiOnizlemeDetay" style="font-size:10px;color:#475569;margin-top:2px;">—</div>
+          </div>
+          <div id="mesaiOnizlemeTutar" style="font-size:18px;font-weight:800;color:#00ADB5;">+0 ₺</div>
+        </div>
+      </div>
+
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not</label><input id="f-mesai-not" type="text" class="db-input" placeholder="Opsiyonel açıklama"/></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mMesai')" class="btn-ghost">İptal</button>
+      <button onclick="saveMesai()" class="btn-sm">Kaydet</button>
+    </div>
+  </div>
+</div>
+
 <!-- Avans Kullanım Kaydet Modal -->
 <div id="modal-mAvansKullanim" class="modal-wrap" onclick="if(event.target===this)closeModal('mAvansKullanim')">
   <div class="modal-box">
@@ -4167,6 +5805,65 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mAsansor')" class="btn-ghost">İptal</button>
       <button onclick="saveAsansor()" class="btn-sm">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- QR Kod Görüntüleme/Yazdırma Modal -->
+<div id="modal-mQrKod" class="modal-wrap" onclick="if(event.target===this)closeModal('mQrKod')">
+  <div class="modal-box" style="max-width:340px;">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Asansör QR Kodu</h3>
+      <button onclick="closeModal('mQrKod')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <div style="padding:24px 20px;display:flex;flex-direction:column;align-items:center;gap:14px;">
+      <div id="qrKoduUyari" style="display:none;width:100%;padding:10px 12px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:8px;">
+        <p style="font-size:11px;color:#F59E0B;font-weight:600;margin-bottom:3px;">⚠️ Yerel dosyadan görüntülüyorsunuz</p>
+        <p style="font-size:10.5px;color:#94A3B8;">Bu QR kod sadece sitenizin <b>canlı adresinden</b> (örn. www.as-elasansor.com.tr) açıldığında başka telefonlarda çalışır. Şu an "file://" ile açtığınız için kod sadece bu bilgisayarda anlamlıdır.</p>
+      </div>
+      <div id="qrKoduAlani" style="background:#fff;padding:16px;border-radius:12px;"></div>
+      <div style="text-align:center;">
+        <div id="qrKoduBinaAdi" style="font-size:14px;font-weight:700;color:#E2E8F0;">—</div>
+        <div style="font-size:11px;color:#475569;margin-top:4px;">Bu kodu yazdırıp asansörün içine/yanına yapıştırın. Teknisyen telefonla okutunca panele giriş yapıp tek tıkla o ayın bakımını işaretler.</div>
+        <div id="qrKoduUrlGoster" style="font-size:9px;color:#334155;margin-top:8px;word-break:break-all;font-family:monospace;">—</div>
+      </div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mQrKod')" class="btn-ghost">Kapat</button>
+      <button onclick="qrKoduYazdir()" class="btn-sm">🖨️ Yazdır</button>
+    </div>
+  </div>
+</div>
+
+<!-- QR'dan Gelince Açılan Hızlı Bakım İşaretleme Ekranı -->
+<div id="modal-mQrHizliBakim" class="modal-wrap" style="z-index:300;">
+  <div class="modal-box" style="max-width:380px;">
+    <div style="padding:18px 20px;border-bottom:1px solid rgba(30,41,59,.6);text-align:center;">
+      <div style="font-size:11px;color:#475569;text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin-bottom:4px;">QR Kod ile Erişim</div>
+      <h3 id="qrHizliBinaAdi" style="font-size:16px;font-weight:800;color:#E2E8F0;">—</h3>
+      <div id="qrHizliKabinAdi" style="font-size:12px;color:#94A3B8;margin-top:2px;">—</div>
+    </div>
+    <div style="padding:24px 20px;display:flex;flex-direction:column;gap:14px;">
+
+      <!-- Bu ayın bakım durumu -->
+      <div id="qrHizliDurumKutu" class="card" style="padding:14px;text-align:center;">
+        <div id="qrHizliDurumMetin" style="font-size:13px;font-weight:700;">—</div>
+      </div>
+
+      <!-- Büyük "Bakımı Yaptım" butonu -->
+      <button id="qrHizliBakimBtn" onclick="qrHizliBakimIsaretle()" style="width:100%;padding:22px;font-size:16px;font-weight:800;background:linear-gradient(135deg,#10B981,#059669);color:#fff;border:none;border-radius:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:0 8px 24px rgba(16,185,129,.3);">
+        <svg viewBox="0 0 24 24" style="width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:3;"><path d="M5 13l4 4L19 7"/></svg>
+        Bu Ayın Bakımını Yaptım
+      </button>
+
+      <!-- İkincil kısayollar -->
+      <div style="display:flex;gap:8px;">
+        <button onclick="qrHizliArizaBildir()" style="flex:1;padding:12px;font-size:12px;font-weight:700;background:rgba(239,68,68,.1);color:#EF4444;border:1px solid rgba(239,68,68,.25);border-radius:10px;cursor:pointer;">⚠️ Arıza Bildir</button>
+        <button onclick="qrHizliDetayGor()" style="flex:1;padding:12px;font-size:12px;font-weight:700;background:rgba(0,173,181,.1);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:10px;cursor:pointer;">📋 Tüm Bilgiler</button>
+      </div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);text-align:center;">
+      <button onclick="closeModal('mQrHizliBakim')" class="btn-ghost" style="width:100%;">Kapat</button>
     </div>
   </div>
 </div>
@@ -4485,6 +6182,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <td id="ps-baslangic" style="padding:12px 18px; color:#0F172A;">—</td>
           </tr>
           <tr style="border-bottom:1px solid #F1F5F9;">
+            <td style="padding:12px 18px; background:#F8FAFC; color:#64748B; font-weight:600;">Sözleşme Yenileme Tarihi</td>
+            <td id="ps-bitis" style="padding:12px 18px; color:#0F172A; font-weight:700;">—</td>
+          </tr>
+          <tr style="border-bottom:1px solid #F1F5F9;">
             <td style="padding:12px 18px; background:#F8FAFC; color:#64748B; font-weight:600;">Ödeme Günü</td>
             <td id="ps-odemeGunu" style="padding:12px 18px; color:#0F172A;">Her ayın —. günü</td>
           </tr>
@@ -4530,6 +6231,361 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     <!-- Alt bilgi -->
     <div style="background:#F8FAFC; padding:16px 40px; border-top:1px solid #E2E8F0; text-align:center;">
       <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
+    </div>
+  </div>
+
+  <!-- ── ANA SÖZLEŞME (GENEL HİZMET SÖZLEŞMESİ) ŞABLONU ── -->
+  <!-- Bu, hukuki bir belgedir. Fiilen kullanılmadan önce bir avukata onaylatılması önerilir. -->
+  <div id="pdfAnaSozlesmeSablon" style="width:800px; background:#fff; font-family:'Inter',system-ui,sans-serif; color:#0F172A; font-size:12.5px; line-height:1.65;">
+
+    <!-- Üst koyu şerit + logo -->
+    <div style="background:linear-gradient(135deg,#0F172A,#1E293B); padding:26px 40px; display:flex; align-items:center; justify-content:space-between;">
+      <div style="display:flex; align-items:center; gap:14px;">
+        <svg width="44" height="44" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#1E293B"/>
+          <rect x="36" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <rect x="56" y="12" width="16" height="76" rx="3" fill="#F3F4F6"/>
+          <rect x="80" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <path d="M 64 20 L 59 25 L 69 25 Z" fill="#1E293B"/>
+          <rect x="62.5" y="25" width="3" height="8" fill="#1E293B"/>
+          <path d="M 64 80 L 59 75 L 69 75 Z" fill="#1E293B"/>
+          <rect x="62.5" y="67" width="3" height="8" fill="#1E293B"/>
+        </svg>
+        <div>
+          <div style="font-size:20px; font-weight:800; color:#fff; letter-spacing:-0.3px;">AS-EL ASANSÖR</div>
+          <div style="font-size:10.5px; color:#94A3B8; letter-spacing:0.5px; margin-top:2px;">1989'dan Beri Güvenle</div>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:10px; color:#64748B; text-transform:uppercase; letter-spacing:1px; font-weight:600;">Genel Hizmet Sözleşmesi</div>
+        <div id="as-sozNo" style="font-size:12px; color:#00ADB5; font-weight:700; font-family:monospace; margin-top:3px;">AS-SOZ-00000000</div>
+        <div id="as-tarih" style="font-size:10px; color:#94A3B8; margin-top:2px;">20.06.2026</div>
+      </div>
+    </div>
+
+    <div style="padding:32px 40px;">
+
+      <!-- Başlık -->
+      <div style="text-align:center; margin-bottom:22px;">
+        <div style="font-size:17px; font-weight:800; color:#0F172A; letter-spacing:-0.2px;">ASANSÖR BAKIM, MONTAJ VE REVİZYON HİZMETLERİ<br>GENEL SÖZLEŞMESİ</div>
+        <div style="width:50px; height:3px; background:#00ADB5; margin:10px auto 0; border-radius:2px;"></div>
+      </div>
+
+      <!-- Taraflar -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:20px;">
+        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px;">
+          <div style="font-size:9.5px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.7px; font-weight:700; margin-bottom:8px;">Yüklenici ("AS-EL")</div>
+          <div style="font-size:13px; font-weight:800; color:#0F172A; margin-bottom:4px;">AS-EL ASANSÖR</div>
+          <div style="font-size:10.5px; color:#64748B; line-height:1.6;">İncirtepe Mah. 269. Sok. No: 3 Daire: 1<br>Esenyurt / İstanbul · 0533 497 73 17</div>
+        </div>
+        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px;">
+          <div style="font-size:9.5px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.7px; font-weight:700; margin-bottom:8px;">Hizmet Alan ("Müşteri")</div>
+          <div id="as-binaAdi" style="font-size:13px; font-weight:800; color:#0F172A; margin-bottom:4px;">Tuna Apartmanı</div>
+          <div style="font-size:10.5px; color:#64748B; line-height:1.6;">
+            <span id="as-binaAdres">—</span><br>
+            Yetkili: <span id="as-binaYetkili">—</span> · Tel: <span id="as-binaTel">—</span><br>
+            Vergi/TC No: <span id="as-binaVergiNo">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Önsöz -->
+      <p style="font-size:11px; color:#334155; margin-bottom:18px; text-align:justify;">
+        Bu sözleşme; yukarıda unvanı ve adresi yazılı AS-EL Asansör ("Yüklenici") ile Müşteri arasında, asansörlerin bakım, montaj ve/veya revizyon hizmetlerinin yürütülmesine ilişkin karşılıklı hak ve yükümlülükleri düzenlemek amacıyla, <b>6098 sayılı Türk Borçlar Kanunu</b> ve <b>Asansör İşletme, Bakım ve Periyodik Kontrol Yönetmeliği</b> hükümleri çerçevesinde akdedilmiştir.
+      </p>
+
+      <!-- MADDE 1 -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:12px; font-weight:800; color:#0F172A; margin-bottom:5px;">MADDE 1 — SÖZLEŞMENİN KONUSU VE KAPSAMI</div>
+        <p style="font-size:11px; color:#334155; text-align:justify; margin:0;">
+          1.1. Bu sözleşmenin konusu, Müşteriye ait binada bulunan asansör(ler)in <b id="as-tip">Bakım</b> kapsamında periyodik bakım, kontrol, ayar ve gerekli küçük onarım hizmetlerinin AS-EL tarafından yürütülmesidir. Hizmet kapsamı: <span id="as-kapsam">Periyodik bakım, kontrol ve gerekli ayar/onarım hizmetleri.</span><br>
+          1.2. AS-EL, hizmetlerini <b>TS EN 81-20/50</b> standartları ve ilgili Bilim, Sanayi ve Teknoloji Bakanlığı düzenlemelerine uygun olarak yürütmeyi taahhüt eder.<br>
+          1.3. Asansörün yasal periyodik muayenesinin (A tipi muayene kuruluşu kontrolü) yaptırılması, aksi yazılı olarak kararlaştırılmadıkça, <b>bina yönetiminin/Müşterinin sorumluluğundadır.</b>
+        </p>
+      </div>
+
+      <!-- MADDE 2 -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:12px; font-weight:800; color:#0F172A; margin-bottom:5px;">MADDE 2 — SÖZLEŞME SÜRESİ VE BAŞLANGICI</div>
+        <p style="font-size:11px; color:#334155; text-align:justify; margin:0;">
+          2.1. Sözleşme, <b id="as-baslangic">—</b> tarihinde başlar ve taraflardan biri Madde 7'de belirtilen şekilde fesih bildiriminde bulunmadığı sürece kendiliğinden yenilenerek devam eder.
+        </p>
+      </div>
+
+      <!-- MADDE 3 — ÜCRET VE ÖDEME -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:12px; font-weight:800; color:#0F172A; margin-bottom:5px;">MADDE 3 — HİZMET BEDELİ VE ÖDEME ŞARTLARI</div>
+        <p style="font-size:11px; color:#334155; text-align:justify; margin:0;">
+          3.1. Müşteri, işbu sözleşme kapsamındaki hizmetler karşılığında AS-EL'e <b id="as-tutar" style="color:#00ADB5;">1.500 ₺</b> bedeli, <b id="as-odemeGunu">her ayın 5. günü</b> ödemekle yükümlüdür.<br>
+          3.2. Ödemenin kararlaştırılan vadeden itibaren <b>15 (on beş) gün</b> içinde yapılmaması halinde, AS-EL <b>hizmeti tek taraflı olarak askıya alma hakkına</b> sahiptir. Hizmetin askıya alınması, AS-EL'in bu sözleşmeden kaynaklanan diğer haklarını ortadan kaldırmaz.<br>
+          3.3. Gecikilen ödemeler için, gecikilen her gün için 6098 sayılı TBK'da düzenlenen yasal temerrüt faizi uygulanır.<br>
+          3.4. Hizmetin askıya alınmış olması, asansörün bu süre zarfında işletilmesinden kaynaklanacak her türlü risk ve sorumluluğun Müşteriye ait olduğu anlamına gelir.
+        </p>
+      </div>
+
+      <!-- MADDE 4 — YÜKLENİCİNİN YÜKÜMLÜLÜKLERİ -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:12px; font-weight:800; color:#0F172A; margin-bottom:5px;">MADDE 4 — YÜKLENİCİNİN (AS-EL'İN) YÜKÜMLÜLÜKLERİ</div>
+        <p style="font-size:11px; color:#334155; text-align:justify; margin:0;">
+          4.1. AS-EL, sözleşme kapsamındaki periyodik bakımları, taraflarca belirlenen sıklıkta ve mesleki dikkat/özen yükümlülüğüne uygun şekilde gerçekleştirir.<br>
+          4.2. AS-EL, bakım sırasında tespit ettiği, kapsam dışı kalan ve can/mal güvenliğini tehdit eden arızaları Müşteriye yazılı veya sözlü olarak bildirmekle yükümlüdür.<br>
+          4.3. AS-EL'in sorumluluğu, kendi kusurundan (kasıt veya ihmalinden) doğrudan kaynaklanan zararlarla sınırlıdır; bu sorumluluk Türk Borçlar Kanunu'nun emredici hükümlerine uygun olarak değerlendirilir.
+        </p>
+      </div>
+
+      <!-- MADDE 5 — MÜŞTERİNİN YÜKÜMLÜLÜKLERİ VE SORUMLULUK AYRIMI (Kritik koruma maddesi) -->
+      <div style="margin-bottom:14px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:10px; padding:14px 16px;">
+        <div style="font-size:12px; font-weight:800; color:#92400E; margin-bottom:5px;">MADDE 5 — MÜŞTERİNİN YÜKÜMLÜLÜKLERİ VE SORUMLULUK AYRIMI</div>
+        <p style="font-size:11px; color:#334155; text-align:justify; margin:0;">
+          5.1. Müşteri; asansörün yasal periyodik muayenesini (A tipi muayene kuruluşu kontrolü) süresi içinde yaptırmak, asansör kuyusu/makine dairesi gibi alanlara yetkisiz kişilerin girişini önlemek ve asansörde tespit edilen arızaları geciktirmeden AS-EL'e bildirmekle yükümlüdür.<br>
+          5.2. Müşterinin veya AS-EL dışındaki üçüncü kişilerin (yetkisiz teknik personel, bina sakinleri, üçüncü şahıslar dahil) asansör üzerinde yaptığı her türlü müdahale, tadilat veya bu maddede sayılan yükümlülüklerin ihmal edilmesi, bu sözleşme kapsamı dışındadır.<br>
+          5.3. <b>Müşterinin işbu Madde 5'te sayılan yükümlülüklerini yerine getirmemesinden, asansörün yetkisiz kişilerce kullanılmasından veya üçüncü kişilerin müdahalesinden kaynaklanan her türlü arıza, kaza, yaralanma, ölüm veya maddi/manevi zarardan AS-EL sorumlu tutulamaz; sorumluluk doğrudan ilgili yükümlülüğü ihmal eden tarafa aittir.</b><br>
+          5.4. Bu madde, AS-EL'in kendi kusurundan kaynaklanan sorumluluğunu ortadan kaldırmaz; sadece tarafların kendi kusur alanlarına ilişkin sorumluluk dağılımını netleştirir.
+        </p>
+      </div>
+
+      <!-- MADDE 6 — MÜCBİR SEBEP -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:12px; font-weight:800; color:#0F172A; margin-bottom:5px;">MADDE 6 — MÜCBİR SEBEP</div>
+        <p style="font-size:11px; color:#334155; text-align:justify; margin:0;">
+          6.1. Doğal afet, yangın, salgın hastalık, resmi makam kararları, grev/lokavt gibi tarafların kontrolü dışındaki mücbir sebep hallerinde, edimlerin ifası bu hallerin süresi boyunca durdurulur ve taraflar bu süre zarfında birbirlerinden tazminat talep edemez.
+        </p>
+      </div>
+
+      <!-- MADDE 7 — FESİH -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:12px; font-weight:800; color:#0F172A; margin-bottom:5px;">MADDE 7 — FESİH</div>
+        <p style="font-size:11px; color:#334155; text-align:justify; margin:0;">
+          7.1. Taraflardan her biri, en az <b>30 (otuz) gün önceden yazılı bildirimde bulunmak</b> suretiyle bu sözleşmeyi tek taraflı olarak feshedebilir.<br>
+          7.2. Müşterinin ödeme yükümlülüğünü, AS-EL'in Madde 3.2 kapsamında yaptığı yazılı ihtara rağmen <b>30 (otuz) gün içinde</b> yerine getirmemesi halinde, AS-EL sözleşmeyi <b>tek taraflı ve tazminatsız olarak feshedebilir.</b><br>
+          7.3. Sözleşmenin feshi, fesih tarihine kadar tahakkuk etmiş ödeme yükümlülüklerini ortadan kaldırmaz.
+        </p>
+      </div>
+
+      <!-- MADDE 8 — UYUŞMAZLIKLARIN ÇÖZÜMÜ -->
+      <div style="margin-bottom:20px;">
+        <div style="font-size:12px; font-weight:800; color:#0F172A; margin-bottom:5px;">MADDE 8 — UYUŞMAZLIKLARIN ÇÖZÜMÜ</div>
+        <p style="font-size:11px; color:#334155; text-align:justify; margin:0;">
+          8.1. Bu sözleşmeden kaynaklanan uyuşmazlıklarda, asansörün bulunduğu yer mahkemeleri ve icra müdürlükleri yetkilidir.<br>
+          8.2. Sözleşmede hüküm bulunmayan hallerde 6098 sayılı Türk Borçlar Kanunu ve ilgili asansör yönetmelikleri uygulanır.
+        </p>
+      </div>
+
+      <!-- Kapanış -->
+      <p style="font-size:10.5px; color:#64748B; text-align:justify; margin-bottom:24px;">
+        İş bu sözleşme, 8 (sekiz) madde ve eklerden ibaret olup, taraflarca okunarak, serbest iradeleriyle ve karşılıklı mutabakatla 2 (iki) nüsha olarak imzalanmıştır.
+      </p>
+
+      <!-- İmza alanı -->
+      <div style="display:flex; justify-content:space-between; padding-top:20px; border-top:1px solid #F1F5F9;">
+        <div style="text-align:center; width:220px;">
+          <div style="font-size:11px; font-weight:700; color:#0F172A; margin-bottom:2px;">AS-EL ASANSÖR</div>
+          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:36px; font-size:10px; color:#64748B; font-weight:600;">Yüklenici Yetkilisi · İmza</div>
+        </div>
+        <div style="text-align:center; width:220px;">
+          <div id="as-binaAdi2" style="font-size:11px; font-weight:700; color:#0F172A; margin-bottom:2px;">Müşteri</div>
+          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:36px; font-size:10px; color:#64748B; font-weight:600;">Müşteri / Bina Yetkilisi · İmza</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alt bilgi -->
+    <div style="background:#F8FAFC; padding:14px 40px; border-top:1px solid #E2E8F0; text-align:center;">
+      <div style="font-size:9.5px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
+    </div>
+  </div>
+
+  <!-- ── MAAŞ BORDROSU ŞABLONU ── -->
+  <div id="pdfBordroSablon" style="width:800px; background:#fff; font-family:'Inter',system-ui,sans-serif; color:#0F172A;">
+    <!-- Üst koyu şerit + logo -->
+    <div style="background:linear-gradient(135deg,#0F172A,#1E293B); padding:28px 40px; display:flex; align-items:center; justify-content:space-between;">
+      <div style="display:flex; align-items:center; gap:14px;">
+        <svg width="48" height="48" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#1E293B"/>
+          <rect x="36" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <rect x="56" y="12" width="16" height="76" rx="3" fill="#F3F4F6"/>
+          <rect x="80" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <path d="M 64 20 L 59 25 L 69 25 Z" fill="#1E293B"/>
+          <rect x="62.5" y="25" width="3" height="8" fill="#1E293B"/>
+          <path d="M 64 80 L 59 75 L 69 75 Z" fill="#1E293B"/>
+          <rect x="62.5" y="67" width="3" height="8" fill="#1E293B"/>
+        </svg>
+        <div>
+          <div style="font-size:22px; font-weight:800; color:#fff; letter-spacing:-0.3px;">AS-EL ASANSÖR</div>
+          <div style="font-size:11px; color:#94A3B8; letter-spacing:0.5px; margin-top:2px;">1989'dan Beri Güvenle</div>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:11px; color:#64748B; text-transform:uppercase; letter-spacing:1px; font-weight:600;">Maaş Bordrosu</div>
+        <div id="pb-donem" style="font-size:15px; color:#00ADB5; font-weight:700; margin-top:3px;">Haziran 2026</div>
+        <div id="pb-tarih" style="font-size:11px; color:#94A3B8; margin-top:2px;">20.06.2026</div>
+      </div>
+    </div>
+
+    <div style="padding:32px 40px;">
+
+      <!-- Personel bilgi kartı -->
+      <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:14px; padding:20px 24px; margin-bottom:24px; display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-size:10px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:6px;">Personel</div>
+          <div id="pb-personelAd" style="font-size:18px; font-weight:800; color:#0F172A;">Ahmet Kaya</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:10px; color:#94A3B8; text-transform:uppercase; letter-spacing:0.6px; font-weight:600; margin-bottom:4px;">Bordro No</div>
+          <div id="pb-bordroNo" style="font-size:13px; color:#334155; font-weight:600; font-family:monospace;">BRD-00000000</div>
+        </div>
+      </div>
+
+      <!-- Kazanç / Kesinti tablosu -->
+      <div style="border:1px solid #E2E8F0; border-radius:14px; overflow:hidden; margin-bottom:20px;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="background:#0F172A;">
+              <th style="text-align:left; padding:11px 18px; color:#fff; font-size:10px; text-transform:uppercase; letter-spacing:0.6px; font-weight:700;">Açıklama</th>
+              <th style="text-align:right; padding:11px 18px; color:#fff; font-size:10px; text-transform:uppercase; letter-spacing:0.6px; font-weight:700;">Tutar</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #F1F5F9;">
+              <td style="padding:12px 18px; color:#334155;">Sabit Aylık Maaş</td>
+              <td id="pb-aylikMaas" style="padding:12px 18px; text-align:right; color:#0F172A; font-weight:600;">0 ₺</td>
+            </tr>
+            <tr style="border-bottom:1px solid #F1F5F9; background:#F8FAFC;">
+              <td style="padding:12px 18px; color:#334155;">
+                Fazla Mesai <span id="pb-fazlaMesaiDetay" style="color:#94A3B8; font-size:11px;">(0 saat × 1.5)</span>
+              </td>
+              <td id="pb-fazlaMesaiUcreti" style="padding:12px 18px; text-align:right; color:#059669; font-weight:700;">+0 ₺</td>
+            </tr>
+            <tr style="border-bottom:2px solid #E2E8F0;">
+              <td style="padding:12px 18px; color:#0F172A; font-weight:700;">Brüt Toplam</td>
+              <td id="pb-brutToplam" style="padding:12px 18px; text-align:right; color:#0F172A; font-weight:800;">0 ₺</td>
+            </tr>
+            <tr>
+              <td style="padding:12px 18px; color:#DC2626;">Bu Ay Verilen Avans (Kesinti)</td>
+              <td id="pb-avansKesinti" style="padding:12px 18px; text-align:right; color:#DC2626; font-weight:700;">-0 ₺</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Net ödenecek kutusu -->
+      <div style="background:linear-gradient(135deg,#00ADB5,#0891B2); border-radius:14px; padding:22px 26px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 8px 24px rgba(0,173,181,0.25); margin-bottom:24px;">
+        <div>
+          <div style="font-size:11px; color:rgba(255,255,255,0.85); text-transform:uppercase; letter-spacing:1px; font-weight:700;">Net Ödenecek Tutar</div>
+          <div style="font-size:11px; color:rgba(255,255,255,0.65); margin-top:2px;">Brüt toplam − avans kesintisi</div>
+        </div>
+        <div id="pb-netOdenecek" style="font-size:30px; font-weight:800; color:#fff; letter-spacing:-0.5px;">0 ₺</div>
+      </div>
+
+      <!-- Mesai detay tablosu -->
+      <div style="margin-bottom:28px;">
+        <div style="font-size:11px; color:#475569; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:10px;">Mesai Özeti</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
+          <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:14px;">
+            <div style="font-size:9px; color:#94A3B8; text-transform:uppercase; font-weight:700; margin-bottom:4px;">Toplam Çalışılan</div>
+            <div id="pb-toplamSaat" style="font-size:16px; font-weight:800; color:#0F172A;">0 saat</div>
+          </div>
+          <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:14px;">
+            <div style="font-size:9px; color:#94A3B8; text-transform:uppercase; font-weight:700; margin-bottom:4px;">Fazla Mesai Saati</div>
+            <div id="pb-fazlaSaat" style="font-size:16px; font-weight:800; color:#00ADB5;">0 saat</div>
+          </div>
+          <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:14px;">
+            <div style="font-size:9px; color:#94A3B8; text-transform:uppercase; font-weight:700; margin-bottom:4px;">Saatlik Ücret</div>
+            <div id="pb-saatlikUcret" style="font-size:16px; font-weight:800; color:#0F172A;">0 ₺</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- İmza alanı -->
+      <div style="display:flex; justify-content:space-between; padding-top:20px; border-top:1px solid #F1F5F9;">
+        <div style="text-align:center; width:220px;">
+          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:36px; font-size:10px; color:#64748B; font-weight:600;">AS-EL Asansör Yetkilisi</div>
+        </div>
+        <div style="text-align:center; width:220px;">
+          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:36px; font-size:10px; color:#64748B; font-weight:600;">Personel İmza</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alt bilgi -->
+    <div style="background:#F8FAFC; padding:14px 40px; border-top:1px solid #E2E8F0; text-align:center;">
+      <div style="font-size:9.5px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
+    </div>
+  </div>
+
+  <!-- ── YILLIK MALİ RAPOR ŞABLONU ── -->
+  <div id="pdfYillikRaporSablon" style="width:800px; background:#fff; font-family:'Inter',system-ui,sans-serif; color:#0F172A;">
+    <div style="background:linear-gradient(135deg,#0F172A,#1E293B); padding:28px 40px; display:flex; align-items:center; justify-content:space-between;">
+      <div style="display:flex; align-items:center; gap:14px;">
+        <svg width="48" height="48" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#1E293B"/>
+          <rect x="36" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <rect x="56" y="12" width="16" height="76" rx="3" fill="#F3F4F6"/>
+          <rect x="80" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <path d="M 64 20 L 59 25 L 69 25 Z" fill="#1E293B"/>
+          <rect x="62.5" y="25" width="3" height="8" fill="#1E293B"/>
+          <path d="M 64 80 L 59 75 L 69 75 Z" fill="#1E293B"/>
+          <rect x="62.5" y="67" width="3" height="8" fill="#1E293B"/>
+        </svg>
+        <div>
+          <div style="font-size:22px; font-weight:800; color:#fff; letter-spacing:-0.3px;">AS-EL ASANSÖR</div>
+          <div style="font-size:11px; color:#94A3B8; letter-spacing:0.5px; margin-top:2px;">1989'dan Beri Güvenle</div>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:11px; color:#64748B; text-transform:uppercase; letter-spacing:1px; font-weight:600;">Yıllık Mali Rapor</div>
+        <div id="pyr-yil" style="font-size:18px; color:#00ADB5; font-weight:800; margin-top:3px;">2026</div>
+        <div id="pyr-tarih" style="font-size:11px; color:#94A3B8; margin-top:2px;">20.06.2026</div>
+      </div>
+    </div>
+
+    <div style="padding:32px 40px;">
+
+      <!-- Yıl geneli özet kartları -->
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:24px;">
+        <div style="background:#ECFDF5; border:1px solid #A7F3D0; border-radius:12px; padding:18px 20px;">
+          <div style="font-size:10px; color:#059669; text-transform:uppercase; letter-spacing:0.6px; font-weight:700; margin-bottom:8px;">Yıllık Toplam Gelir</div>
+          <div id="pyr-toplamGelir" style="font-size:20px; font-weight:800; color:#059669;">0 ₺</div>
+        </div>
+        <div style="background:#FEF2F2; border:1px solid #FECACA; border-radius:12px; padding:18px 20px;">
+          <div style="font-size:10px; color:#DC2626; text-transform:uppercase; letter-spacing:0.6px; font-weight:700; margin-bottom:8px;">Yıllık Toplam Gider</div>
+          <div id="pyr-toplamGider" style="font-size:20px; font-weight:800; color:#DC2626;">0 ₺</div>
+        </div>
+        <div id="pyr-kar-kutu" style="background:linear-gradient(135deg,#10B981,#059669); border-radius:12px; padding:18px 20px;">
+          <div style="font-size:10px; color:rgba(255,255,255,0.85); text-transform:uppercase; letter-spacing:0.6px; font-weight:700; margin-bottom:8px;">Yıllık Net Kar/Zarar</div>
+          <div id="pyr-netKar" style="font-size:20px; font-weight:800; color:#fff;">0 ₺</div>
+        </div>
+      </div>
+
+      <!-- Aylık özet tablosu -->
+      <div style="margin-bottom:24px;">
+        <div style="font-size:11px; color:#475569; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:10px;">Aylık Özet</div>
+        <div style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden;">
+          <table style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr style="background:#0F172A;">
+                <th style="text-align:left; padding:9px 14px; color:#fff; font-size:9.5px; text-transform:uppercase; font-weight:700;">Ay</th>
+                <th style="text-align:right; padding:9px 14px; color:#fff; font-size:9.5px; text-transform:uppercase; font-weight:700;">Gelir</th>
+                <th style="text-align:right; padding:9px 14px; color:#fff; font-size:9.5px; text-transform:uppercase; font-weight:700;">Gider (Toplam)</th>
+                <th style="text-align:right; padding:9px 14px; color:#fff; font-size:9.5px; text-transform:uppercase; font-weight:700;">Net Kar/Zarar</th>
+              </tr>
+            </thead>
+            <tbody id="pyr-aylikTablo"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Detay sayıları -->
+      <div>
+        <div style="font-size:11px; color:#475569; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:10px;">Kayıt Özeti</div>
+        <div id="pyr-detayOzet" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;"></div>
+        <p style="font-size:10px; color:#94A3B8; margin-top:12px; text-align:center;">Detaylı kayıt dökümü için Excel/CSV raporunu indirin.</p>
+      </div>
+    </div>
+
+    <!-- Alt bilgi -->
+    <div style="background:#F8FAFC; padding:14px 40px; border-top:1px solid #E2E8F0; text-align:center;">
+      <div style="font-size:9.5px; color:#94A3B8; font-weight:500;">AS-EL Asansör · İncirtepe Mah. 269. Sok. No: 3 Daire: 1, Esenyurt / İstanbul · 0533 497 73 17</div>
     </div>
   </div>
 
