@@ -27,6 +27,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 
 <!-- ══ FIREBASE SDK (CDN) ══════════════════════════════════════ -->
 <script type="module">
@@ -2068,6 +2069,91 @@ window.qrHizliDetayGor = () => {
     }
   }, 300);
 };
+
+/* ═══════════════════════════════════════════════════════════════
+   PANEL İÇİ KAMERA İLE QR OKUYUCU
+   Bakım Takibi sayfasındaki "📷 QR Okut" butonuyla açılır. Telefonun
+   kamerasını panel içinde başlatır, asansör QR kodunu canlı olarak
+   tarar ve okuduğunda otomatik olarak Hızlı Bakım ekranını açar.
+═══════════════════════════════════════════════════════════════ */
+let G_QR_OKUYUCU_ORNEK = null; // aktif Html5Qrcode örneği (durdurmak için saklanır)
+
+window.qrOkuyucuAc = () => {
+  if (typeof Html5Qrcode === 'undefined') {
+    alert('QR okuyucu kütüphanesi henüz yüklenmedi. Lütfen birkaç saniye sonra tekrar deneyin.');
+    return;
+  }
+
+  // Kamera, tarayıcı güvenlik kısıtlaması nedeniyle SADECE https:// (veya localhost)
+  // üzerinden çalışır. file:// veya http:// üzerinde kamera izni verilmez.
+  if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+    alert('Kamera erişimi sadece güvenli (https://) bir adresten çalışır.\n\nLütfen siteyi www.as-elasansor.com.tr üzerinden açıp tekrar deneyin.');
+    return;
+  }
+
+  document.getElementById('qrOkuyucuDurum').textContent = 'Kamera başlatılıyor...';
+  document.getElementById('qrOkuyucuVideoAlani').innerHTML = '';
+  openModal('mQrOkuyucu');
+
+  G_QR_OKUYUCU_ORNEK = new Html5Qrcode('qrOkuyucuVideoAlani');
+
+  G_QR_OKUYUCU_ORNEK.start(
+    { facingMode: 'environment' }, // arka kamerayı tercih et
+    { fps: 10, qrbox: { width: 230, height: 230 } },
+    (decodedText) => qrOkuyucuSonucIsle(decodedText),
+    () => { /* her karede "bulunamadı" hatası gelir, sessizce yoksay */ }
+  ).then(() => {
+    document.getElementById('qrOkuyucuDurum').textContent = 'Kamerayı QR koda doğrultun...';
+  }).catch((err) => {
+    document.getElementById('qrOkuyucuDurum').innerHTML = `
+      <span style="color:#EF4444;">Kameraya erişilemedi.</span><br>
+      <span style="font-size:10px;color:#475569;">Tarayıcı ayarlarından kamera izni vermeniz gerekebilir.</span>`;
+    console.warn('Kamera başlatma hatası:', err);
+  });
+};
+
+window.qrOkuyucuKapat = () => {
+  if (G_QR_OKUYUCU_ORNEK) {
+    G_QR_OKUYUCU_ORNEK.stop().then(() => {
+      G_QR_OKUYUCU_ORNEK.clear();
+      G_QR_OKUYUCU_ORNEK = null;
+    }).catch(() => { G_QR_OKUYUCU_ORNEK = null; });
+  }
+  closeModal('mQrOkuyucu');
+};
+
+// Kamera bir QR kod okuduğunda çağrılır. Beklenen format panelin
+// kendi URL'si + ?asansor=ID şeklindedir (asansör QR'larıyla aynı format).
+function qrOkuyucuSonucIsle(decodedText) {
+  // Aynı kodu art arda okuyup tekrar tekrar tetiklemesin diye hemen durdur
+  if (G_QR_OKUYUCU_ORNEK) {
+    G_QR_OKUYUCU_ORNEK.stop().then(() => {
+      G_QR_OKUYUCU_ORNEK.clear();
+      G_QR_OKUYUCU_ORNEK = null;
+    }).catch(() => { G_QR_OKUYUCU_ORNEK = null; });
+  }
+
+  let asansorId = null;
+  try {
+    const url = new URL(decodedText);
+    asansorId = url.searchParams.get('asansor');
+  } catch (e) {
+    // decodedText geçerli bir URL değilse, doğrudan ID olabilir mi diye dene
+    asansorId = decodedText;
+  }
+
+  closeModal('mQrOkuyucu');
+
+  const asansor = G_ASANSORLER.find(a => a.id === asansorId);
+  if (!asansor) {
+    alert('Okutulan kod bu sisteme ait bir asansör QR\'ı değil veya kayıt bulunamadı.');
+    return;
+  }
+
+  G_QR_AKTIF_ASANSOR = asansor;
+  qrHizliEkraniDoldur(asansor);
+  openModal('mQrHizliBakim');
+}
 
 function renderAsansorler() {
   const grid = document.getElementById('asansorGrid');
@@ -4955,6 +5041,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
               <input type="text" class="db-input" placeholder="Bina, kabin, teknisyen ara..." oninput="aramaGuncelle('bakimlar', this.value)"/>
             </div>
             <button onclick="exportBakimlarCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
+            <button onclick="qrOkuyucuAc()" style="display:flex;align-items:center;gap:6px;padding:9px 14px;font-size:12px;font-weight:700;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:8px;cursor:pointer;">
+              <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;"><path d="M3 9V7a2 2 0 012-2h2M3 15v2a2 2 0 002 2h2m10-14h2a2 2 0 012 2v2m-4 10h2a2 2 0 002-2v-2"/><rect x="8" y="8" width="8" height="8" rx="1"/></svg>
+              QR Okut
+            </button>
             <button onclick="openModal('mBakim')" class="btn-sm admin-only">+ Bakım Planla</button>
           </div>
         </div>
@@ -5864,6 +5954,24 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);text-align:center;">
       <button onclick="closeModal('mQrHizliBakim')" class="btn-ghost" style="width:100%;">Kapat</button>
+    </div>
+  </div>
+</div>
+
+<!-- Panel İçi Kamera ile QR Okuyucu -->
+<div id="modal-mQrOkuyucu" class="modal-wrap" style="z-index:300;">
+  <div class="modal-box" style="max-width:420px;">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">📷 QR Kod Okut</h3>
+      <button onclick="qrOkuyucuKapat()" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <div style="padding:18px 20px;">
+      <p style="font-size:11px;color:#94A3B8;margin-bottom:12px;text-align:center;">Asansördeki QR kodu kameraya gösterin — otomatik algılanacak.</p>
+      <div id="qrOkuyucuVideoAlani" style="width:100%;border-radius:14px;overflow:hidden;background:#000;min-height:280px;display:flex;align-items:center;justify-content:center;"></div>
+      <div id="qrOkuyucuDurum" style="text-align:center;font-size:12px;color:#64748B;margin-top:12px;">Kamera başlatılıyor...</div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);text-align:center;">
+      <button onclick="qrOkuyucuKapat()" class="btn-ghost" style="width:100%;">Vazgeç</button>
     </div>
   </div>
 </div>
