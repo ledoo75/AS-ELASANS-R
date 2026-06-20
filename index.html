@@ -387,6 +387,16 @@ function subscribeAll() {
   const role = currentUserData?.rol;
   const bina = currentUserData?.bina || null;
 
+  // Genel Ayarlar (örn. aylık bakım hatırlatma günü) — tüm roller okuyabilir
+  const ayarlarRef = doc(db, 'ayarlar', 'genel');
+  unsubscribers.push(onSnapshot(ayarlarRef, snap => {
+    if (snap.exists()) {
+      G_AYLIK_HATIRLATMA_GUNU = snap.data().aylikHatirlatmaGunu || 25;
+    }
+    if (document.getElementById('pg-aylik')?.classList.contains('active')) renderAylikTakip();
+    rebuildBildirimler();
+  }));
+
   // Binalar
   const binaQ = query(collection(db, 'binalar'), orderBy('ad'));
   unsubscribers.push(onSnapshot(binaQ, snap => {
@@ -461,6 +471,7 @@ function subscribeAll() {
     if (role === 'bina' && bina) data = data.filter(a => a.bina === bina);
     G_AYLIK_BAKIMLAR = data;
     if (document.getElementById('pg-aylik')?.classList.contains('active')) renderAylikTakip();
+    rebuildBildirimler();
   }));
 
   // Cari Borçlar (anlaşma bedeli üzerinden otomatik/manuel borçlandırma)
@@ -861,13 +872,47 @@ window.aylikAyShift = (delta, buAy) => {
   renderAylikTakip();
 };
 
-window.aylikDurumDegistir = async (id, yeniDurum) => {
+window.aylikDurumDegistir = async (id, yeniDurum, binaAdi) => {
   try {
     await updateDoc(doc(db, 'aylikBakimlar', id), {
       durum: yeniDurum,
       ...(yeniDurum === 'yapildi' ? { yapilmaTarihi: serverTimestamp(), yapanKisi: currentUserData?.ad || '—' } : {})
     });
+
+    // "Yapıldı" işaretlenirken, binanın sorumlu teknisyeni biliniyorsa
+    // otomatik olarak o teknisyen adıyla somut bir bakım kaydı da oluştur
+    // (Bakım Takibi geçmişinde ve teknisyen performansında görünsün).
+    if (yeniDurum === 'yapildi' && binaAdi) {
+      const bina = G_BINALAR.find(b => b.ad === binaAdi);
+      const teknisyenAd = bina?.sorumluTeknisyenAd || currentUserData?.ad || '—';
+      await addDoc(collection(db, 'bakimlar'), {
+        bina: binaAdi, kabin: '', tip: 'Aylık Periyodik',
+        tarih: new Date().toISOString().slice(0,10),
+        teknisyen: teknisyenAd,
+        notlar: 'Aylık Bakım Takibi üzerinden işaretlendi.',
+        durum: 'tamamlandi', tamamlanmaTarihi: serverTimestamp(),
+        olusturuldu: serverTimestamp()
+      });
+    }
   } catch (e) { alert('Hata: ' + e.message); }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   AYLIK BAKIM — OTOMATİK HATIRLATMA AYARI
+   Ayın hangi gününden sonra hâlâ "yapılmadı" olan binalar için
+   Bildirim Merkezi'nde uyarı çıkarılacağı, Firestore'da tek bir
+   ayar belgesinde (ayarlar/genel) saklanır — tüm kullanıcılar için
+   ortak ve kalıcıdır.
+═══════════════════════════════════════════════════════════════ */
+let G_AYLIK_HATIRLATMA_GUNU = 25; // varsayılan değer, Firestore'dan gelene kadar kullanılır
+
+window.aylikHatirlatmaGunuKaydet = async () => {
+  const gun = parseInt(document.getElementById('aylikHatirlatmaGunu').value) || 25;
+  try {
+    await setDoc(doc(db, 'ayarlar', 'genel'), { aylikHatirlatmaGunu: gun }, { merge: true });
+    G_AYLIK_HATIRLATMA_GUNU = gun;
+    rebuildBildirimler();
+  } catch (e) { alert('Ayar kaydedilemedi: ' + e.message); }
 };
 
 function renderAylikTakip() {
@@ -875,6 +920,9 @@ function renderAylikTakip() {
   const statsEl = document.getElementById('aylikStats');
   const listeEl = document.getElementById('aylikListe');
   if (!label || !listeEl) return;
+
+  const gunInput = document.getElementById('aylikHatirlatmaGunu');
+  if (gunInput && document.activeElement !== gunInput) gunInput.value = G_AYLIK_HATIRLATMA_GUNU;
 
   const ayAdlari = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
   const yil = aylikSeciliTarih.getFullYear();
@@ -953,10 +1001,11 @@ function renderAylikTakip() {
         <div style="font-size:11px;color:${renk};font-weight:600;margin-top:2px;">
           ${yapildiMi ? `✓ Bu ay bakımı yapıldı ${k.yapanKisi ? '— '+k.yapanKisi : ''}` : '✗ Bu ay henüz bakım yapılmadı'}
         </div>
+        ${(() => { const b = G_BINALAR.find(x => x.ad === k.bina); return b?.sorumluTeknisyenAd ? `<div style="font-size:10px;color:#475569;margin-top:2px;">👤 Sorumlu: ${b.sorumluTeknisyenAd}</div>` : ''; })()}
       </div>
       ${isAdminTeknisyen ? `
         ${k.id ? `
-          <button onclick="aylikDurumDegistir('${k.id}','${yapildiMi ? 'yapilmadi' : 'yapildi'}')"
+          <button onclick="aylikDurumDegistir('${k.id}','${yapildiMi ? 'yapilmadi' : 'yapildi'}','${k.bina.replace(/'/g,"\\'")}')"
             style="padding:10px 18px;font-size:12px;font-weight:700;border:none;border-radius:10px;cursor:pointer;background:${yapildiMi ? 'rgba(239,68,68,.15)' : 'linear-gradient(135deg,#10B981,#059669)'};color:${yapildiMi ? '#EF4444' : '#fff'};flex-shrink:0;">
             ${yapildiMi ? 'Geri Al' : '✓ Yapıldı Olarak İşaretle'}
           </button>
@@ -1074,6 +1123,9 @@ window.saveBina = async () => {
   const asansor         = parseInt(document.getElementById('f-bina-asansor').value) || 0;
   const sozlesme        = document.getElementById('f-bina-sozlesme').value;
   const durum           = document.getElementById('f-bina-durum').value;
+  const sorumluSel      = document.getElementById('f-bina-sorumluTeknisyen');
+  const sorumluTeknisyenId = sorumluSel.value;
+  const sorumluTeknisyenAd = sorumluSel.selectedOptions[0]?.dataset.ad || '';
   const anlasmaTipi     = document.getElementById('f-bina-anlasmaTipi').value;
   const anlasmaTutar    = parseFloat(document.getElementById('f-bina-anlasmaTutar').value) || 0;
   const anlasmaPeriyodik= document.getElementById('f-bina-anlasmaPeriyodik').checked;
@@ -1096,6 +1148,7 @@ window.saveBina = async () => {
   const data = {
     ad, cariKodu: finalCariKodu, adres, yetkili, telefon, vergiNo,
     asansorSayisi: asansor, sozlesme, durum,
+    sorumluTeknisyenId, sorumluTeknisyenAd,
     anlasmaTipi, anlasmaTutar, anlasmaPeriyodik,
     guncellendi: serverTimestamp()
   };
@@ -1154,10 +1207,23 @@ window.saveBina = async () => {
   } catch(e) { alert('Hata: ' + e.message); }
 };
 
+// Cari (bina) formundaki "Sorumlu Teknisyen" dropdown'unu admin/teknisyen
+// rolündeki kullanıcılarla doldurur.
+function binaSorumluTeknisyenSeciciDoldur() {
+  const sel = document.getElementById('f-bina-sorumluTeknisyen');
+  if (!sel) return;
+  const mevcut = sel.value;
+  const personeller = G_KULLANICILAR.filter(u => u.rol === 'admin' || u.rol === 'teknisyen');
+  sel.innerHTML = '<option value="">— Atanmamış —</option>' +
+    personeller.map(p => `<option value="${p.id}" data-ad="${(p.ad||'').replace(/"/g,'')}">${p.ad}</option>`).join('');
+  if (mevcut) sel.value = mevcut;
+}
+
 window.editBina = async (id) => {
   const snap = await getDoc(doc(db, 'binalar', id));
   if (!snap.exists()) return;
   const b = snap.data();
+  binaSorumluTeknisyenSeciciDoldur();
   document.getElementById('f-bina-ad').value               = b.ad || '';
   document.getElementById('f-bina-cariKodu').value         = b.cariKodu || '';
   document.getElementById('f-bina-adres').value             = b.adres || '';
@@ -1167,6 +1233,7 @@ window.editBina = async (id) => {
   document.getElementById('f-bina-asansor').value           = b.asansorSayisi || '';
   document.getElementById('f-bina-sozlesme').value          = b.sozlesme || '';
   document.getElementById('f-bina-durum').value             = b.durum || 'ok';
+  document.getElementById('f-bina-sorumluTeknisyen').value  = b.sorumluTeknisyenId || '';
   document.getElementById('f-bina-anlasmaTipi').value       = b.anlasmaTipi || '';
   document.getElementById('f-bina-anlasmaTutar').value      = b.anlasmaTutar || '';
   document.getElementById('f-bina-anlasmaPeriyodik').checked= !!b.anlasmaPeriyodik;
@@ -1181,7 +1248,9 @@ window.deleteBina = async (id, ad) => {
 };
 
 window.resetBinaForm = function() {
+  binaSorumluTeknisyenSeciciDoldur();
   ['f-bina-ad','f-bina-cariKodu','f-bina-adres','f-bina-yetkili','f-bina-telefon','f-bina-vergiNo','f-bina-asansor','f-bina-anlasmaTutar'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-bina-sorumluTeknisyen').value = '';
   document.getElementById('f-bina-anlasmaTipi').value = '';
   document.getElementById('f-bina-anlasmaPeriyodik').checked = false;
   document.getElementById('f-bina-editId').value = '';
@@ -2361,6 +2430,25 @@ function rebuildBildirimler() {
       });
     }
   });
+
+  // Aylık Bakım Hatırlatma — ayın belirlenen gününden sonra hâlâ
+  // "yapılmadı" olan binalar için uyarı (yalnızca BU AY için, ve
+  // ayın o günü gelmişse gösterilir).
+  const bugun = new Date();
+  if (bugun.getDate() >= G_AYLIK_HATIRLATMA_GUNU) {
+    const buAyKey = `${bugun.getFullYear()}-${String(bugun.getMonth()+1).padStart(2,'0')}`;
+    G_AYLIK_BAKIMLAR.filter(a => a.ayKey === buAyKey && a.durum !== 'yapildi').forEach(a => {
+      bildirimler.push({
+        tip: 'aylikHatirlatma',
+        ikon: '🔔',
+        renk: '#F59E0B',
+        baslik: 'Aylık Bakım Hatırlatma',
+        mesaj: `${a.bina} — bu ayın bakımı henüz yapılmadı (ayın ${G_AYLIK_HATIRLATMA_GUNU}. günü geçti)`,
+        zaman: null,
+        id: 'aylikhat-' + a.id
+      });
+    });
+  }
 
   G_BILDIRIMLER = bildirimler;
   renderBildirimPanel();
@@ -5053,6 +5141,22 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           </div>
         </div>
 
+        <!-- Hatırlatma Günü Ayarı -->
+        <div class="card admin-only" style="padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;border-color:rgba(245,158,11,.2);">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-size:16px;">🔔</span>
+            <div>
+              <div style="font-size:12px;font-weight:700;color:#E2E8F0;">Otomatik Hatırlatma</div>
+              <div style="font-size:10.5px;color:#475569;">Ayın bu gününden sonra hâlâ "yapılmadı" olan binalar için Bildirim Merkezi'nde uyarı çıkar.</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:11px;color:#94A3B8;">Ayın</span>
+            <input id="aylikHatirlatmaGunu" type="number" min="1" max="31" class="db-input" style="width:60px;text-align:center;padding:8px;" onchange="aylikHatirlatmaGunuKaydet()"/>
+            <span style="font-size:11px;color:#94A3B8;">. günü</span>
+          </div>
+        </div>
+
         <!-- Özet kartları -->
         <div id="aylikStats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;"></div>
 
@@ -5592,6 +5696,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Sözleşme Tipi</label>
         <select id="f-bina-sozlesme" class="db-input"><option>Aylık Periyodik Bakım</option><option>Yıllık Bakım Paketi</option><option>Sadece Arıza Hizmeti</option></select></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Sorumlu Teknisyen</label>
+        <select id="f-bina-sorumluTeknisyen" class="db-input"><option value="">— Atanmamış —</option></select>
+        <p style="font-size:10px;color:#64748B;margin-top:5px;">ℹ️ Aylık Bakım Takibi'nde bu bina işaretlenirken teknisyen alanı otomatik bu kişiyle doldurulur.</p>
+      </div>
 
       <div class="card" style="padding:14px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.18);">
         <p style="font-size:11px;font-weight:700;color:#00ADB5;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em;">💰 Anlaşma Bedeli (Otomatik Borçlandırma)</p>
