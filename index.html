@@ -74,6 +74,27 @@ let currentUser     = null;
 let currentUserData = null;
 let unsubscribers   = [];
 
+// QR koddan gelinmiş mi? Sayfa İLK yüklendiği anda (giriş ekranı
+// gösterilmeden önce) URL'den okunup burada saklanır — daha sonra
+// login akışı sırasında URL değişse/temizlense bile bu değer kalır.
+const G_QR_ASANSOR_ID = new URLSearchParams(window.location.search).get('asansor');
+
+// Görünür debug izi — QR akışının hangi adımda olduğunu ekranda
+// küçük bir etiketle gösterir. Sorun çözülünce kaldırılabilir.
+function qrDebugGoster(mesaj) {
+  if (!G_QR_ASANSOR_ID) return; // QR'dan gelinmediyse debug izini hiç gösterme
+  let el = document.getElementById('qrDebugEtiketi');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'qrDebugEtiketi';
+    el.style.cssText = 'position:fixed;bottom:12px;left:12px;right:12px;z-index:9999;background:#0F172A;color:#00ADB5;font-size:11px;font-family:monospace;padding:8px 12px;border-radius:8px;border:1px solid rgba(0,173,181,.4);box-shadow:0 4px 12px rgba(0,0,0,.4);';
+    document.body.appendChild(el);
+  }
+  const zaman = new Date().toLocaleTimeString('tr-TR');
+  el.textContent = `[QR DEBUG ${zaman}] ${mesaj}`;
+}
+qrDebugGoster(`Sayfa yüklendi. URL'den okunan asansör ID: ${G_QR_ASANSOR_ID || '(yok)'}`);
+
 /* ═══════════════════════════════════════════════════════════════
    AUTH STATE OBSERVER
 ═══════════════════════════════════════════════════════════════ */
@@ -101,6 +122,7 @@ const AUTO_PROFILES = {
 };
 
 onAuthStateChanged(auth, async (user) => {
+  qrDebugGoster(`onAuthStateChanged tetiklendi. user: ${user ? user.email : '(giriş yapılmamış)'}`);
   if (user) {
     try {
       const userRef = doc(db, 'kullanicilar', user.uid);
@@ -259,6 +281,7 @@ function modYukle() {
 }
 
 function openDashboard() {
+  qrDebugGoster('openDashboard() çalıştı.');
   document.getElementById('dashboard').classList.add('open');
   document.body.style.overflow = 'hidden';
   setupUI();
@@ -273,13 +296,13 @@ function openDashboard() {
     setTimeout(otomatikPeriyodikBorcOlustur, 1700);
   }
 
-  // QR kod ile gelindiyse (?asansor=ID), asansör verisi gerçekten
-  // yüklenene kadar bekleyip otomatik olarak Asansör Dosyası sayfasına
-  // ve ilgili karta götür. Sabit bir süre beklemek yerine veri varlığı
-  // kontrol edilir (yavaş bağlantılarda hatalı "bulunamadı" mesajını önler).
-  const qrAsansorId = new URLSearchParams(window.location.search).get('asansor');
-  if (qrAsansorId) {
-    qrVeriBeklerekYonlendir(qrAsansorId);
+  // QR kod ile gelindiyse, sayfa ilk yüklenirken sabitlenen G_QR_ASANSOR_ID
+  // kullanılır (window.location.search'e tekrar bakmıyoruz — login akışı
+  // sırasında URL değişmiş olsa bile bu değer kaybolmaz). Asansör verisi
+  // gerçekten yüklenene kadar bekleyip otomatik yönlendirme yapılır.
+  if (G_QR_ASANSOR_ID) {
+    qrDebugGoster(`QR akışı başlatılıyor, asansör ID: ${G_QR_ASANSOR_ID}`);
+    qrVeriBeklerekYonlendir(G_QR_ASANSOR_ID);
   }
 }
 
@@ -288,7 +311,10 @@ function qrVeriBeklerekYonlendir(asansorId, gecenSure) {
   const MAKSIMUM_BEKLEME = 8000; // 8 saniye sonra veri gelmediyse de yönlendir (kayıt gerçekten yok diyebiliriz)
   const KONTROL_ARALIGI = 250;
 
+  if (gecenSure === 0) qrDebugGoster(`Asansör verisi bekleniyor... (şu an ${G_ASANSORLER.length} kayıt yüklü)`);
+
   if (G_ASANSORLER.length > 0 || gecenSure >= MAKSIMUM_BEKLEME) {
+    qrDebugGoster(`Veri hazır (${G_ASANSORLER.length} asansör). Yönlendiriliyor...`);
     qrAsansoreYonlendir(asansorId);
     return;
   }
@@ -1940,7 +1966,9 @@ window.qrKoduYazdir = () => {
 let G_QR_AKTIF_ASANSOR = null; // QR ile açılan hızlı ekranın hangi asansöre ait olduğunu tutar
 
 function qrAsansoreYonlendir(asansorId) {
+  qrDebugGoster(`qrAsansoreYonlendir çağrıldı. Aranan ID: ${asansorId} — Toplam asansör: ${G_ASANSORLER.length}`);
   const asansor = G_ASANSORLER.find(a => a.id === asansorId);
+  qrDebugGoster(asansor ? `Asansör bulundu: ${asansor.bina} - ${asansor.kabin}` : 'Asansör BULUNAMADI (ID eşleşmedi)');
 
   // URL'i hemen temizle (parametre tekrar tetiklenmesin, sayfa yenilenince karışmasın)
   const temizUrl = window.location.origin + window.location.pathname;
@@ -1958,6 +1986,7 @@ function qrAsansoreYonlendir(asansorId) {
   G_QR_AKTIF_ASANSOR = asansor;
   qrHizliEkraniDoldur(asansor);
   openModal('mQrHizliBakim');
+  qrDebugGoster('Hızlı Bakım ekranı açıldı. ✓ Akış tamamlandı.');
 }
 
 // QR ile açılan hızlı ekranı, o asansörün bu ayki bakım durumuna göre doldurur.
