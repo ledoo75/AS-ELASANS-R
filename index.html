@@ -425,6 +425,18 @@ window.aramaGuncelle = (sayfa, terim) => {
   renderMap[sayfa]?.();
 };
 
+// Bakım Takibi — tarihe göre geçmişe dönük filtreleme. Sadece
+// başlangıç girilirse o günün kayıtları, ikisi de girilirse aralık
+// gösterilir. "renderBakimlar" zaten bu input'ların değerini okuyor,
+// burada sadece yeniden render tetikleniyor.
+window.bakimTarihFiltreUygula = () => renderBakimlar(G_BAKIMLAR);
+
+window.bakimTarihFiltreTemizle = () => {
+  document.getElementById('bakimTarihBaslangic').value = '';
+  document.getElementById('bakimTarihBitis').value = '';
+  renderBakimlar(G_BAKIMLAR);
+};
+
 function subscribeAll() {
   const role = currentUserData?.rol;
   const bina = currentUserData?.bina || null;
@@ -802,10 +814,31 @@ function renderBakimlar(data) {
   const grid = document.getElementById('bakimGrid');
   const list = document.getElementById('bakimDashList');
 
-  const gridData = data.filter(b => aramaEslesir(G_ARAMA.bakimlar, b.bina, b.kabin, b.tip, b.teknisyen));
+  const tarihBaslangic = document.getElementById('bakimTarihBaslangic')?.value || '';
+  const tarihBitis = document.getElementById('bakimTarihBitis')?.value || '';
+
+  let gridData = data.filter(b => aramaEslesir(G_ARAMA.bakimlar, b.bina, b.kabin, b.tip, b.teknisyen));
+
+  // Tarih filtresi: sadece başlangıç girilmişse o günün kayıtları,
+  // ikisi de girilmişse aralık, hiçbiri girilmemişse filtre uygulanmaz.
+  if (tarihBaslangic && !tarihBitis) {
+    gridData = gridData.filter(b => (b.tarih || '') === tarihBaslangic);
+  } else if (tarihBaslangic && tarihBitis) {
+    gridData = gridData.filter(b => (b.tarih || '') >= tarihBaslangic && (b.tarih || '') <= tarihBitis);
+  } else if (!tarihBaslangic && tarihBitis) {
+    gridData = gridData.filter(b => (b.tarih || '') <= tarihBitis);
+  }
+
+  const sonucEtiketi = document.getElementById('bakimTarihSonucSayisi');
+  if (sonucEtiketi) {
+    sonucEtiketi.textContent = (tarihBaslangic || tarihBitis) ? `${gridData.length} kayıt bulundu` : '';
+  }
 
   if (!gridData.length) {
-    grid.innerHTML = `<div style="padding:28px;text-align:center;color:#475569;font-size:13px;grid-column:1/-1;">${G_ARAMA.bakimlar ? 'Aramayla eşleşen bakım bulunamadı.' : 'Henüz bakım kaydı yok.'}</div>`;
+    const mesaj = (tarihBaslangic || tarihBitis)
+      ? 'Bu tarih aralığında bakım kaydı bulunamadı.'
+      : (G_ARAMA.bakimlar ? 'Aramayla eşleşen bakım bulunamadı.' : 'Henüz bakım kaydı yok.');
+    grid.innerHTML = `<div style="padding:28px;text-align:center;color:#475569;font-size:13px;grid-column:1/-1;">${mesaj}</div>`;
   }
   if (!data.length) {
     list.innerHTML = `<div style="padding:16px 18px;font-size:12px;color:#475569;">Yaklaşan bakım yok.</div>`;
@@ -842,6 +875,9 @@ function renderBakimlar(data) {
           <button onclick="deleteBakim('${b.id}')" class="btn-ghost admin-only" style="flex:1;padding:8px;font-size:11px;">Sil</button>
         </div>
       ` : `
+        ${b.checklistMaddeleri ? `
+          <button onclick="gecmisFisiGoster('${b.id}')" style="width:100%;padding:10px;font-size:12px;font-weight:700;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:8px;cursor:pointer;margin-bottom:8px;">📄 Bakım Fişini Görüntüle</button>
+        ` : ''}
         <button onclick="deleteBakim('${b.id}')" class="btn-ghost admin-only" style="width:100%;padding:8px;font-size:11px;">Sil</button>
       `}
     </div>`).join('');
@@ -2472,7 +2508,7 @@ window.checklistTamamla = async () => {
     document.getElementById('qrHizliBakimBtn').disabled = true;
 
     // Bakım fişini otomatik PDF olarak indir
-    await downloadBakimFisiPDF(asansor, yapilanMaddeler, not, bugun);
+    await downloadBakimFisiPDF(asansor, yapilanMaddeler, not, bugun, currentUserData?.ad);
 
   } catch(e) {
     alert('Hata: ' + e.message);
@@ -2482,7 +2518,7 @@ window.checklistTamamla = async () => {
 // Checklist tamamlanınca logolu, teknisyen adı ve tarihli bir Bakım
 // Fişi PDF'i üretir — bina yöneticisi veya teknisyen bunu kanıt
 // belgesi olarak saklayabilir.
-async function downloadBakimFisiPDF(asansor, yapilanMaddeler, not, tarih) {
+async function downloadBakimFisiPDF(asansor, yapilanMaddeler, not, tarih, teknisyenAdi) {
   if (typeof window.html2canvas === 'undefined') {
     alert('PDF kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.');
     return;
@@ -2492,7 +2528,7 @@ async function downloadBakimFisiPDF(asansor, yapilanMaddeler, not, tarih) {
   document.getElementById('bf-kabinAdi').textContent = asansor.kabin || '—';
   document.getElementById('bf-tarih').textContent = tarih.toLocaleDateString('tr-TR');
   document.getElementById('bf-saat').textContent = tarih.toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' });
-  document.getElementById('bf-teknisyen').textContent = currentUserData?.ad || '—';
+  document.getElementById('bf-teknisyen').textContent = teknisyenAdi || currentUserData?.ad || '—';
   document.getElementById('bf-not').textContent = not || '—';
 
   document.getElementById('bf-maddeler').innerHTML = BAKIM_CHECKLIST_MADDELERI.map(madde => {
@@ -2513,6 +2549,20 @@ async function downloadBakimFisiPDF(asansor, yapilanMaddeler, not, tarih) {
 
   await renderHtmlToPdf('pdfBakimFisiSablon', `Bakim_Fisi_${asansor.bina.replace(/\s+/g,'_')}_${tarih.toISOString().slice(0,10)}.pdf`);
 }
+
+// Bakım Takibi geçmişindeki bir kayda ait Bakım Fişi PDF'ini, daha
+// önce kaydedilmiş checklist verisini kullanarak yeniden üretir.
+window.gecmisFisiGoster = async (bakimId) => {
+  const kayit = G_BAKIMLAR.find(b => b.id === bakimId);
+  if (!kayit) { alert('Bakım kaydı bulunamadı.'); return; }
+  if (!kayit.checklistMaddeleri) { alert('Bu kayıt için kontrol listesi verisi bulunamadı.'); return; }
+
+  const asansor = { bina: kayit.bina, kabin: kayit.kabin || '' };
+  // tamamlanmaTarihi bir Firestore Timestamp'tir; yoksa kaydın tarih alanını kullan
+  const tarih = kayit.tamamlanmaTarihi?.toDate ? kayit.tamamlanmaTarihi.toDate() : new Date(kayit.tarih);
+
+  await downloadBakimFisiPDF(asansor, kayit.checklistMaddeleri, kayit.notlar, tarih, kayit.teknisyen);
+};
 
 window.qrHizliArizaBildir = () => {
   const asansor = G_QR_AKTIF_ASANSOR;
@@ -5656,7 +5706,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
       <!-- BAKIMLAR -->
       <div id="pg-bakimlar" class="db-page">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px;">
           <div><h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Bakım Takibi</h2><p style="font-size:11px;color:#475569;margin-top:2px;">Firebase Firestore — Gerçek zamanlı</p></div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <div class="search-box-wrap">
@@ -5671,6 +5721,17 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <button onclick="openModal('mBakim')" class="btn-sm admin-only">+ Bakım Planla</button>
           </div>
         </div>
+
+        <!-- Tarih Filtresi -->
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px;padding:10px 14px;background:rgba(0,173,181,.04);border:1px solid rgba(0,173,181,.15);border-radius:10px;">
+          <span style="font-size:11px;color:#94A3B8;font-weight:600;white-space:nowrap;">📅 Tarihe Göre:</span>
+          <input id="bakimTarihBaslangic" type="date" class="db-input" style="max-width:160px;" onchange="bakimTarihFiltreUygula()"/>
+          <span style="font-size:11px;color:#475569;">—</span>
+          <input id="bakimTarihBitis" type="date" class="db-input" style="max-width:160px;" onchange="bakimTarihFiltreUygula()"/>
+          <button onclick="bakimTarihFiltreTemizle()" class="btn-ghost" style="padding:8px 14px;font-size:11px;">Temizle</button>
+          <span id="bakimTarihSonucSayisi" style="font-size:11px;color:#00ADB5;font-weight:600;margin-left:auto;"></span>
+        </div>
+
         <div id="bakimGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px;"></div>
       </div>
 
