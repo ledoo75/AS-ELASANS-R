@@ -219,6 +219,24 @@ window.toggleLP = () => {
   p.type = p.type === 'password' ? 'text' : 'password';
 };
 
+// Firebase Auth'un ham, İngilizce/teknik hata kodlarını kullanıcıya
+// gösterilecek anlaşılır Türkçe mesajlara çevirir. Tanınmayan bir kod
+// gelirse, en azından genel/güvenli bir mesaja düşer (ham kod asla
+// doğrudan ekrana basılmaz).
+function firebaseHataMesajiCevir(kod, mesaj) {
+  const haritalar = {
+    'auth/invalid-credential': 'Kullanıcı adı veya şifre hatalı.',
+    'auth/wrong-password': 'Kullanıcı adı veya şifre hatalı.',
+    'auth/user-not-found': 'Kullanıcı adı veya şifre hatalı.',
+    'auth/invalid-email': 'Kullanıcı adı veya şifre hatalı.',
+    'auth/too-many-requests': 'Çok fazla başarısız giriş denemesi yapıldı. Lütfen birkaç dakika sonra tekrar deneyin.',
+    'auth/network-request-failed': 'İnternet bağlantısı kurulamadı. Lütfen bağlantınızı kontrol edip tekrar deneyin.',
+    'auth/user-disabled': 'Bu kullanıcı hesabı devre dışı bırakılmış. Yöneticinizle iletişime geçin.',
+    'auth/internal-error': 'Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.',
+  };
+  return haritalar[kod] || 'Giriş yapılamadı. Kullanıcı adı ve şifrenizi kontrol edip tekrar deneyin.';
+}
+
 function showLoginError(msg) {
   const el = document.getElementById('loginErr');
   el.querySelector('span').textContent = msg;
@@ -289,8 +307,7 @@ window.doLogin = async () => {
     // onAuthStateChanged devralır — ama o da hata verebilir, aşağıda yakalıyoruz
   } catch (e) {
     clearTimeout(timeoutId);
-    // GERÇEK Firebase hata kodunu göster (debug için)
-    showLoginError(`Hata: ${e.code || e.message}`);
+    showLoginError(firebaseHataMesajiCevir(e.code, e.message));
     btn.innerHTML = 'Giriş Yap';
     btn.disabled = false;
   }
@@ -1452,10 +1469,56 @@ window.resetBinaForm = function() {
 // ── CARİ LİSTESİNDEN HIZLI İŞLEM KISAYOLLARI ──────────────────
 // Cari satırındaki 🔧/⚠️/💰 butonları tıklanınca ilgili modali,
 // bina adı önceden doldurulmuş şekilde açar.
+/* ═══════════════════════════════════════════════════════════════
+   BİNA ADI AUTOCOMPLETE (yazarak arama)
+   Bakım Planla gibi formlarda kullanılan, sadece Cari Yönetimi'nde
+   kayıtlı binaları öneren, serbest/yanlış isim girişini engelleyen
+   özel autocomplete bileşeni. "hiddenId" gerçek değeri tutan input,
+   görünen kutu "hiddenId-arama" ID'siyle, öneri listesi de
+   "hiddenId-oneriler" ID'siyle eşleşir (bu üçlü isimlendirme
+   kuralına uyan her form bu fonksiyonları kullanabilir).
+═══════════════════════════════════════════════════════════════ */
+window.binaAutocompleteAra = (hiddenId, terim) => {
+  // Kullanıcı yazmaya başladığında, daha önce seçilmiş gerçek değeri
+  // geçersiz kıl — yeni bir seçim yapılana kadar form gönderilemez.
+  document.getElementById(hiddenId).value = '';
+
+  const oneriEl = document.getElementById(hiddenId + '-oneriler');
+  if (!oneriEl) return;
+
+  if (terim.trim().length < 2) {
+    oneriEl.style.display = 'none';
+    return;
+  }
+
+  const eslesenler = G_BINALAR.filter(b => aramaEslesir(terim, b.ad));
+
+  if (!eslesenler.length) {
+    oneriEl.innerHTML = `<div class="bina-autocomplete-bos">Eşleşen kayıtlı cari bulunamadı.</div>`;
+  } else {
+    oneriEl.innerHTML = eslesenler.slice(0, 8).map(b =>
+      `<div class="bina-autocomplete-item" onmousedown="binaAutocompleteSec('${hiddenId}','${b.ad.replace(/'/g,"\\'")}')">${b.ad}</div>`
+    ).join('');
+  }
+  oneriEl.style.display = 'block';
+};
+
+window.binaAutocompleteSec = (hiddenId, binaAdi) => {
+  document.getElementById(hiddenId).value = binaAdi;
+  document.getElementById(hiddenId + '-arama').value = binaAdi;
+  binaAutocompleteKapat(hiddenId);
+};
+
+window.binaAutocompleteKapat = (hiddenId) => {
+  const oneriEl = document.getElementById(hiddenId + '-oneriler');
+  if (oneriEl) oneriEl.style.display = 'none';
+};
+
 window.hizliBakimEkle = (binaAdi) => {
   resetBakimForm?.();
   openModal('mBakim');
   document.getElementById('f-bakim-bina').value = binaAdi;
+  document.getElementById('f-bakim-bina-arama').value = binaAdi;
 };
 
 window.hizliArizaEkle = (binaAdi) => {
@@ -4757,6 +4820,7 @@ window.saveBakim = async () => {
     });
     closeModal('mBakim');
     document.getElementById('f-bakim-bina').value = '';
+    document.getElementById('f-bakim-bina-arama').value = '';
     document.getElementById('f-bakim-kabin').value = '';
     document.getElementById('f-bakim-tarih').value = '';
     document.getElementById('f-bakim-teknik').value = '';
@@ -5071,16 +5135,14 @@ window.openModal  = (id) => {
       if (binaList) binaList.innerHTML = G_BINALAR.map(b => `<option value="${b.ad}">`).join('');
     }
   }
-  // Bakım Planla modalı açılırken, "Bina Adı" seçici sadece Cari
-  // Yönetimi'nde kayıtlı binalarla doldurulur — serbest/yanlış isim
-  // girilip kayıtsız bir cariye bakım atanması engellenir.
+  // Bakım Planla modalı açılırken, eğer hidden alan zaten bir değerle
+  // önceden doldurulmuşsa (örn. hızlı işlem kısayolundan), görünen
+  // arama kutusuna da yansıtılır.
   if (id === 'mBakim') {
-    const binaSel = document.getElementById('f-bakim-bina');
-    if (binaSel) {
-      const mevcut = binaSel.value;
-      binaSel.innerHTML = '<option value="">— Cari Seçin —</option>' +
-        G_BINALAR.map(b => `<option value="${b.ad}">${b.ad}</option>`).join('');
-      if (mevcut) binaSel.value = mevcut;
+    const hidden = document.getElementById('f-bakim-bina');
+    const gorunen = document.getElementById('f-bakim-bina-arama');
+    if (hidden && gorunen && hidden.value) {
+      gorunen.value = hidden.value;
     }
   }
 };
@@ -5284,6 +5346,16 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
 .search-box-wrap input { padding-left: 34px !important; }
 .search-box-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: #475569; pointer-events: none; }
 body.light-mode .search-box-icon { color: #94A3B8; }
+
+/* Bina adı autocomplete (yazarak arama) öneri listesi */
+.bina-autocomplete-liste { position:absolute; top:100%; left:0; right:0; z-index:50; margin-top:4px; background:#0D1629; border:1px solid rgba(0,173,181,.3); border-radius:10px; max-height:200px; overflow-y:auto; box-shadow:0 12px 24px rgba(0,0,0,.4); }
+.bina-autocomplete-item { padding:10px 14px; font-size:13px; color:#E2E8F0; cursor:pointer; border-bottom:1px solid rgba(30,41,59,.5); }
+.bina-autocomplete-item:last-child { border-bottom:none; }
+.bina-autocomplete-item:hover, .bina-autocomplete-item.aktif { background:rgba(0,173,181,.12); }
+.bina-autocomplete-bos { padding:10px 14px; font-size:12px; color:#475569; }
+body.light-mode .bina-autocomplete-liste { background:#FFFFFF !important; border-color:#E2E8F0 !important; }
+body.light-mode .bina-autocomplete-item { color:#1E293B !important; border-bottom-color:#F1F5F9 !important; }
+body.light-mode .bina-autocomplete-item:hover, body.light-mode .bina-autocomplete-item.aktif { background:#F0FDFA !important; }
 
 /* SITE */
 .site-input { width:100%;padding:11px 14px;border:1px solid #E2E8F0;border-radius:8px;font-size:14px;color:#0F172A;background:#fff;transition:border-color .2s;font-family:'Inter',sans-serif; }
@@ -6507,8 +6579,14 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <button onclick="closeModal('mBakim')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
     </div>
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
-      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label>
-        <select id="f-bakim-bina" class="db-input"><option value="">— Cari Seçin —</option></select>
+      <div style="position:relative;">
+        <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label>
+        <input id="f-bakim-bina-arama" type="text" class="db-input" placeholder="Cari adı yazın (en az 2 harf)..." autocomplete="off"
+          oninput="binaAutocompleteAra('f-bakim-bina', this.value)"
+          onfocus="if(this.value.length>=2) binaAutocompleteAra('f-bakim-bina', this.value)"
+          onblur="setTimeout(()=>binaAutocompleteKapat('f-bakim-bina'), 150)"/>
+        <input type="hidden" id="f-bakim-bina"/>
+        <div id="f-bakim-bina-oneriler" class="bina-autocomplete-liste" style="display:none;"></div>
         <p style="font-size:10px;color:#64748B;margin-top:5px;">ℹ️ Sadece Cari Yönetimi'nde kayıtlı binalar seçilebilir.</p>
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kabin</label><input id="f-bakim-kabin" type="text" class="db-input" placeholder="Kabin #1"/></div>
