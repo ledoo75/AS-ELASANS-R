@@ -388,6 +388,7 @@ let G_AYLIK_BAKIMLAR = [];     // her bina için aylık bakım yapıldı/yapılm
 let G_BORCLAR = [];            // cari borç kayıtları (anlaşma bedeli üzerinden otomatik/manuel)
 let G_GIDERLER = [];            // firma giderleri (yakıt, malzeme, kira vb.)
 let G_TALEPLER = [];            // site iletişim formundan gelen müşteri talepleri
+let G_BAKIM_BINA_ARAMA = '';    // Bakım Takibi'ndeki bina adına özel arama (tarih filtresinden bağımsız)
 let G_MAASLAR = [];             // personel sabit aylık maaş tanımları
 let G_MAAS_ODEMELERI = [];      // her ay için "maaş ödendi" kayıtları
 let G_MESAI = [];               // günlük mesai/puantaj kayıtları
@@ -434,6 +435,13 @@ window.bakimTarihFiltreUygula = () => renderBakimlar(G_BAKIMLAR);
 window.bakimTarihFiltreTemizle = () => {
   document.getElementById('bakimTarihBaslangic').value = '';
   document.getElementById('bakimTarihBitis').value = '';
+  renderBakimlar(G_BAKIMLAR);
+};
+
+// Bakım Takibi — bina adına göre arama, tarih filtresinden tamamen
+// bağımsız çalışır; ikisi aynı anda da uygulanabilir.
+window.bakimBinaAramaGuncelle = (terim) => {
+  G_BAKIM_BINA_ARAMA = terim;
   renderBakimlar(G_BAKIMLAR);
 };
 
@@ -819,6 +827,11 @@ function renderBakimlar(data) {
 
   let gridData = data.filter(b => aramaEslesir(G_ARAMA.bakimlar, b.bina, b.kabin, b.tip, b.teknisyen));
 
+  // Bina adına göre arama (tarih filtresinden ve genel aramadan bağımsız, ikisiyle birlikte de çalışır)
+  if (G_BAKIM_BINA_ARAMA) {
+    gridData = gridData.filter(b => aramaEslesir(G_BAKIM_BINA_ARAMA, b.bina));
+  }
+
   // Tarih filtresi: sadece başlangıç girilmişse o günün kayıtları,
   // ikisi de girilmişse aralık, hiçbiri girilmemişse filtre uygulanmaz.
   if (tarihBaslangic && !tarihBitis) {
@@ -835,8 +848,8 @@ function renderBakimlar(data) {
   }
 
   if (!gridData.length) {
-    const mesaj = (tarihBaslangic || tarihBitis)
-      ? 'Bu tarih aralığında bakım kaydı bulunamadı.'
+    const mesaj = (tarihBaslangic || tarihBitis || G_BAKIM_BINA_ARAMA)
+      ? 'Bu filtreyle eşleşen bakım kaydı bulunamadı.'
       : (G_ARAMA.bakimlar ? 'Aramayla eşleşen bakım bulunamadı.' : 'Henüz bakım kaydı yok.');
     grid.innerHTML = `<div style="padding:28px;text-align:center;color:#475569;font-size:13px;grid-column:1/-1;">${mesaj}</div>`;
   }
@@ -5723,13 +5736,19 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         </div>
 
         <!-- Tarih Filtresi -->
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px;padding:10px 14px;background:rgba(0,173,181,.04);border:1px solid rgba(0,173,181,.15);border-radius:10px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:10px 14px;background:rgba(0,173,181,.04);border:1px solid rgba(0,173,181,.15);border-radius:10px;">
           <span style="font-size:11px;color:#94A3B8;font-weight:600;white-space:nowrap;">📅 Tarihe Göre:</span>
           <input id="bakimTarihBaslangic" type="date" class="db-input" style="max-width:160px;" onchange="bakimTarihFiltreUygula()"/>
           <span style="font-size:11px;color:#475569;">—</span>
           <input id="bakimTarihBitis" type="date" class="db-input" style="max-width:160px;" onchange="bakimTarihFiltreUygula()"/>
           <button onclick="bakimTarihFiltreTemizle()" class="btn-ghost" style="padding:8px 14px;font-size:11px;">Temizle</button>
           <span id="bakimTarihSonucSayisi" style="font-size:11px;color:#00ADB5;font-weight:600;margin-left:auto;"></span>
+        </div>
+
+        <!-- Bina Adına Göre Arama (tarih filtresinden bağımsız çalışır) -->
+        <div class="search-box-wrap" style="max-width:100%;margin-bottom:16px;">
+          <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input type="text" class="db-input" placeholder="Bina adına göre ara..." oninput="bakimBinaAramaGuncelle(this.value)"/>
         </div>
 
         <div id="bakimGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px;"></div>
