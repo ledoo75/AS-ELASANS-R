@@ -2497,11 +2497,16 @@ async function downloadBakimFisiPDF(asansor, yapilanMaddeler, not, tarih) {
 
   document.getElementById('bf-maddeler').innerHTML = BAKIM_CHECKLIST_MADDELERI.map(madde => {
     const yapildi = yapilanMaddeler.includes(madde);
+    const checkSvg = yapildi
+      ? `<svg width="9" height="9" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+      : '';
     return `
-      <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #F1F5F9;">
-        <span style="width:16px;height:16px;border-radius:4px;background:${yapildi?'#10B981':'#F1F5F9'};color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${yapildi?'✓':''}</span>
-        <span style="font-size:11px;color:${yapildi?'#0F172A':'#94A3B8'};">${madde}</span>
-      </div>`;
+      <table style="width:100%; border-collapse:collapse; border-bottom:1px solid #F8FAFC;"><tr>
+        <td style="width:18px; padding:5px 0; vertical-align:middle;">
+          <div style="width:14px; height:14px; line-height:14px; text-align:center; border-radius:3px; background:${yapildi?'#10B981':'#F1F5F9'};">${checkSvg}</div>
+        </td>
+        <td style="padding:5px 0 5px 6px; vertical-align:middle; font-size:10.5px; line-height:1.3; color:${yapildi?'#0F172A':'#94A3B8'};">${madde}</td>
+      </tr></table>`;
   }).join('');
 
   document.getElementById('bf-ozet').textContent = `${yapilanMaddeler.length} / ${BAKIM_CHECKLIST_MADDELERI.length} madde tamamlandı`;
@@ -7380,38 +7385,38 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     <div style="padding:32px 40px;">
 
       <!-- Bina + teknisyen bilgi kartı -->
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:24px;">
-        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:14px; padding:18px 20px;">
-          <div style="font-size:10px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:6px;">Bina / Asansör</div>
-          <div id="bf-binaAdi" style="font-size:16px; font-weight:800; color:#0F172A;">—</div>
-          <div id="bf-kabinAdi" style="font-size:12px; color:#64748B; margin-top:2px;">—</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:20px;">
+        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:14px; padding:14px 18px;">
+          <div style="font-size:10px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:5px;">Bina / Asansör</div>
+          <div id="bf-binaAdi" style="font-size:15px; font-weight:800; color:#0F172A;">—</div>
+          <div id="bf-kabinAdi" style="font-size:11px; color:#64748B; margin-top:2px;">—</div>
         </div>
-        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:14px; padding:18px 20px;">
-          <div style="font-size:10px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:6px;">Bakımı Yapan Teknisyen</div>
-          <div id="bf-teknisyen" style="font-size:16px; font-weight:800; color:#0F172A;">—</div>
-          <div id="bf-ozet" style="font-size:12px; color:#64748B; margin-top:2px;">—</div>
+        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:14px; padding:14px 18px;">
+          <div style="font-size:10px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:5px;">Bakımı Yapan Teknisyen</div>
+          <div id="bf-teknisyen" style="font-size:15px; font-weight:800; color:#0F172A;">—</div>
+          <div id="bf-ozet" style="font-size:11px; color:#64748B; margin-top:2px;">—</div>
         </div>
       </div>
 
-      <!-- Kontrol listesi -->
-      <div style="margin-bottom:20px;">
-        <div style="font-size:11px; color:#475569; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:10px;">Bakım İşlemi Kapsamında Yapılanlar</div>
-        <div id="bf-maddeler" style="border:1px solid #E2E8F0; border-radius:12px; padding:14px 18px;"></div>
+      <!-- Kontrol listesi (2 sütun, fotoğraftaki orijinal forma uygun) -->
+      <div style="margin-bottom:16px;">
+        <div style="font-size:11px; color:#475569; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:8px;">Bakım İşlemi Kapsamında Yapılanlar</div>
+        <div id="bf-maddeler" style="border:1px solid #E2E8F0; border-radius:12px; padding:10px 16px; display:grid; grid-template-columns:1fr 1fr; gap:0 20px;"></div>
       </div>
 
       <!-- Not -->
-      <div style="margin-bottom:28px;">
-        <div style="font-size:11px; color:#475569; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:8px;">Teknisyen Notu</div>
-        <div id="bf-not" style="font-size:12px; color:#334155; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:12px 16px;">—</div>
+      <div style="margin-bottom:20px;">
+        <div style="font-size:11px; color:#475569; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:6px;">Teknisyen Notu</div>
+        <div id="bf-not" style="font-size:11px; color:#334155; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:10px 14px; min-height:16px;">—</div>
       </div>
 
       <!-- İmza alanı -->
-      <div style="display:flex; justify-content:space-between; padding-top:20px; border-top:1px solid #F1F5F9;">
+      <div style="display:flex; justify-content:space-between; padding-top:14px; border-top:1px solid #F1F5F9;">
         <div style="text-align:center; width:220px;">
-          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:36px; font-size:10px; color:#64748B; font-weight:600;">Bakımı Yapan Teknisyen</div>
+          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:24px; font-size:10px; color:#64748B; font-weight:600;">Bakımı Yapan Teknisyen</div>
         </div>
         <div style="text-align:center; width:220px;">
-          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:36px; font-size:10px; color:#64748B; font-weight:600;">Bina Yetkilisi</div>
+          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:24px; font-size:10px; color:#64748B; font-weight:600;">Bina Yetkilisi</div>
         </div>
       </div>
     </div>
