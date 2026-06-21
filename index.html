@@ -496,6 +496,14 @@ window.bakimBinaAramaGuncelle = (terim) => {
 function subscribeAll() {
   const role = currentUserData?.rol;
   const bina = currentUserData?.bina || null;
+  // Bina adı karşılaştırmaları büyük/küçük harf ve baştaki/sondaki boşluk
+  // farklarına karşı dayanıklı olsun diye normalize edilmiş hali de
+  // hazırlanır. Firestore'daki kullanıcı kaydında "bina" alanı yanlışlıkla
+  // farklı harf büyüklüğüyle girilse bile (örn. "KARADAĞ APARTMAN" vs
+  // "Karadağ Apartman"), eşleştirme yine doğru çalışır — bu, veri
+  // tutarsızlığının ciddi bir gizlilik açığına dönüşmesini önler.
+  const binaNorm = (bina || '').trim().toLocaleLowerCase('tr-TR');
+  const binaEslesir = (deger) => (deger || '').trim().toLocaleLowerCase('tr-TR') === binaNorm;
 
   // Müşteri Talepleri (site iletişim formu) — sadece admin/teknisyen görür
   if (role === 'admin' || role === 'teknisyen') {
@@ -521,7 +529,7 @@ function subscribeAll() {
   const binaQ = query(collection(db, 'binalar'), orderBy('ad'));
   unsubscribers.push(onSnapshot(binaQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(b => b.ad === bina);
+    if (role === 'bina' && bina) data = data.filter(b => binaEslesir(b.ad));
     G_BINALAR = data;
     renderBinalar(data);
     renderBinaSayac(data.length);
@@ -531,7 +539,7 @@ function subscribeAll() {
   const bakimQ = query(collection(db, 'bakimlar'), orderBy('tarih'));
   unsubscribers.push(onSnapshot(bakimQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(b => b.bina === bina);
+    if (role === 'bina' && bina) data = data.filter(b => binaEslesir(b.bina));
     G_BAKIMLAR = data;
     renderBakimlar(data);
     renderBekleyenSayac(data.filter(b => b.durum === 'bekliyor').length);
@@ -545,7 +553,7 @@ function subscribeAll() {
   const arizaQ = query(collection(db, 'arizalar'), orderBy('tarih', 'desc'));
   unsubscribers.push(onSnapshot(arizaQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(a => a.bina === bina);
+    if (role === 'bina' && bina) data = data.filter(a => binaEslesir(a.bina));
     const eskiUzunluk = G_ARIZALAR.length;
     G_ARIZALAR = data;
     renderArizalar(data);
@@ -559,7 +567,7 @@ function subscribeAll() {
   const sozQ = query(collection(db, 'sozlesmeler'), orderBy('bina'));
   unsubscribers.push(onSnapshot(sozQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(s => s.bina === bina);
+    if (role === 'bina' && bina) data = data.filter(s => binaEslesir(s.bina));
     G_SOZLESMELER = data;
     renderSozlesmeler(data);
     rebuildBildirimler();
@@ -569,7 +577,7 @@ function subscribeAll() {
   const odemeQ = query(collection(db, 'odemeler'), orderBy('tarih', 'desc'));
   unsubscribers.push(onSnapshot(odemeQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(o => o.bina === bina);
+    if (role === 'bina' && bina) data = data.filter(o => binaEslesir(o.bina));
     G_ODEMELER = data;
     if (document.getElementById('pg-muhasebe')?.classList.contains('active')) renderMuhasebe();
     rebuildBildirimler();
@@ -579,7 +587,7 @@ function subscribeAll() {
   const asansorQ = query(collection(db, 'asansorler'), orderBy('bina'));
   unsubscribers.push(onSnapshot(asansorQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(a => a.bina === bina);
+    if (role === 'bina' && bina) data = data.filter(a => binaEslesir(a.bina));
     G_ASANSORLER = data;
     if (document.getElementById('pg-asansorler')?.classList.contains('active')) renderAsansorler();
     renderMuayeneSayac();
@@ -590,7 +598,7 @@ function subscribeAll() {
   const aylikQ = query(collection(db, 'aylikBakimlar'), orderBy('ayKey', 'desc'));
   unsubscribers.push(onSnapshot(aylikQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(a => a.bina === bina);
+    if (role === 'bina' && bina) data = data.filter(a => binaEslesir(a.bina));
     G_AYLIK_BAKIMLAR = data;
     if (document.getElementById('pg-aylik')?.classList.contains('active')) renderAylikTakip();
     rebuildBildirimler();
@@ -600,7 +608,7 @@ function subscribeAll() {
   const borcQ = query(collection(db, 'borclar'), orderBy('tarih', 'desc'));
   unsubscribers.push(onSnapshot(borcQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(b => b.bina === bina);
+    if (role === 'bina' && bina) data = data.filter(b => binaEslesir(b.bina));
     G_BORCLAR = data;
     if (document.getElementById('muhTab-musteri')?.style.display !== 'none') renderMusteriCariListesi();
   }));
