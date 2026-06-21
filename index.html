@@ -505,6 +505,22 @@ function subscribeAll() {
   const binaNorm = (bina || '').trim().toLocaleLowerCase('tr-TR');
   const binaEslesir = (deger) => (deger || '').trim().toLocaleLowerCase('tr-TR') === binaNorm;
 
+  // ── GEÇİCİ TEŞHİS PANELİ ──
+  // Bina rolündeki kullanıcılar için, ekranın üstünde her zaman görünen
+  // küçük bir bilgi şeridi gösterir: gerçek rol, gerçek "bina" değeri ve
+  // bu kod sürümünün çalıştığına dair bir işaret. Sorun çözülünce
+  // kaldırılacaktır.
+  if (role === 'bina') {
+    let panel = document.getElementById('binaTeshisPaneli');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'binaTeshisPaneli';
+      panel.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;background:#7C3AED;color:#fff;font-size:11px;font-family:monospace;padding:6px 12px;text-align:center;';
+      document.body.prepend(panel);
+    }
+    panel.textContent = `[TEŞHİS v2] rol="${role}" | bina="${bina}" | binaNorm="${binaNorm}"`;
+  }
+
   // Müşteri Talepleri (site iletişim formu) — sadece admin/teknisyen görür
   if (role === 'admin' || role === 'teknisyen') {
     const talepQ = query(collection(db, 'talepler'), orderBy('tarih', 'desc'));
@@ -4561,6 +4577,18 @@ function renderMusteriCariListesi() {
   const tbody = document.getElementById('musteriCariTableBody');
   if (!tbody) return;
 
+  // GEÇİCİ TEŞHİS: G_BINALAR'da gerçekte kaç kayıt var, hangi binalar
+  if (currentUserData?.rol === 'bina') {
+    let panel2 = document.getElementById('binaTeshisPaneli2');
+    if (!panel2) {
+      panel2 = document.createElement('div');
+      panel2.id = 'binaTeshisPaneli2';
+      panel2.style.cssText = 'position:fixed;top:26px;left:0;right:0;z-index:999999;background:#DC2626;color:#fff;font-size:11px;font-family:monospace;padding:6px 12px;text-align:center;';
+      document.body.prepend(panel2);
+    }
+    panel2.textContent = `[TEŞHİS v2] G_BINALAR.length=${G_BINALAR.length} | binalar=[${G_BINALAR.map(b=>b.ad).join(', ')}]`;
+  }
+
   if (!G_BINALAR.length) {
     tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz bina kaydı yok.</td></tr>`;
     return;
@@ -5465,9 +5493,9 @@ body.light-mode .modal-box [style*="border-bottom:1px solid rgba(30,41,59"],
 body.light-mode .modal-box [style*="border-top:1px solid rgba(30,41,59"] { border-color: #E2E8F0 !important; }
 
 /* Bakım Kontrol Listesi (Checklist) — koyu tema varsayılan, açık temada güçlü kontrast */
-.checklist-satir { display:flex; align-items:center; gap:10px; padding:11px 12px; background:rgba(15,23,42,.3); border:1px solid rgba(30,41,59,.5); border-radius:10px; cursor:pointer; transition:background .15s, border-color .15s; }
-.checklist-kutu { width:20px; height:20px; border-radius:6px; border:2px solid #475569; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:12px; color:#fff; background:transparent; transition:background .15s, border-color .15s; }
-.checklist-metin { font-size:12.5px; color:#CBD5E1; flex:1; }
+.checklist-satir { display:flex; align-items:center; gap:12px; padding:14px 14px; min-height:44px; background:rgba(15,23,42,.3); border:1px solid rgba(30,41,59,.5); border-radius:10px; cursor:pointer; transition:background .15s, border-color .15s; }
+.checklist-kutu { width:24px; height:24px; border-radius:7px; border:2px solid #475569; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:14px; color:#fff; background:transparent; transition:background .15s, border-color .15s; }
+.checklist-metin { font-size:13.5px; line-height:1.4; color:#CBD5E1; flex:1; }
 .checklist-satir-isaretli { background: rgba(16,185,129,.1) !important; border-color: rgba(16,185,129,.4) !important; }
 .checklist-kutu-isaretli { background: #10B981 !important; border-color: #10B981 !important; }
 
@@ -6954,8 +6982,8 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
       <!-- İkincil kısayollar -->
       <div style="display:flex;gap:8px;">
-        <button onclick="qrHizliArizaBildir()" style="flex:1;padding:12px;font-size:12px;font-weight:700;background:rgba(239,68,68,.1);color:#EF4444;border:1px solid rgba(239,68,68,.25);border-radius:10px;cursor:pointer;">⚠️ Arıza Bildir</button>
-        <button onclick="qrHizliDetayGor()" style="flex:1;padding:12px;font-size:12px;font-weight:700;background:rgba(0,173,181,.1);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:10px;cursor:pointer;">📋 Tüm Bilgiler</button>
+        <button onclick="qrHizliArizaBildir()" style="flex:1;padding:14px 12px;min-height:44px;font-size:13px;font-weight:700;background:rgba(239,68,68,.1);color:#EF4444;border:1px solid rgba(239,68,68,.25);border-radius:10px;cursor:pointer;">⚠️ Arıza Bildir</button>
+        <button onclick="qrHizliDetayGor()" style="flex:1;padding:14px 12px;min-height:44px;font-size:13px;font-weight:700;background:rgba(0,173,181,.1);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:10px;cursor:pointer;">📋 Tüm Bilgiler</button>
       </div>
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);text-align:center;">
