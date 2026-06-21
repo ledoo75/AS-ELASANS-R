@@ -387,6 +387,7 @@ let G_KULLANICILAR = [];      // personel listesi (avans dropdown'u için)
 let G_AYLIK_BAKIMLAR = [];     // her bina için aylık bakım yapıldı/yapılmadı kaydı
 let G_BORCLAR = [];            // cari borç kayıtları (anlaşma bedeli üzerinden otomatik/manuel)
 let G_GIDERLER = [];            // firma giderleri (yakıt, malzeme, kira vb.)
+let G_TALEPLER = [];            // site iletişim formundan gelen müşteri talepleri
 let G_MAASLAR = [];             // personel sabit aylık maaş tanımları
 let G_MAAS_ODEMELERI = [];      // her ay için "maaş ödendi" kayıtları
 let G_MESAI = [];               // günlük mesai/puantaj kayıtları
@@ -396,7 +397,7 @@ let G_MESAI = [];               // günlük mesai/puantaj kayıtları
 // G_BINALAR/G_BAKIMLAR gibi ham veriyi bu terime göre filtreler.
 const G_ARAMA = {
   binalar: '', bakimlar: '', arizalar: '', sozlesmeler: '',
-  asansorler: '', odemeler: '', musteriCari: ''
+  asansorler: '', odemeler: '', musteriCari: '', talepler: ''
 };
 
 // Genel amaçlı arama yardımcı fonksiyonu: bir nesnenin seçilen
@@ -419,6 +420,7 @@ window.aramaGuncelle = (sayfa, terim) => {
     asansorler: () => renderAsansorler(),
     odemeler: () => renderMuhasebe(),
     musteriCari: () => renderMusteriCariListesi(),
+    talepler: () => renderTalepler(),
   };
   renderMap[sayfa]?.();
 };
@@ -426,6 +428,16 @@ window.aramaGuncelle = (sayfa, terim) => {
 function subscribeAll() {
   const role = currentUserData?.rol;
   const bina = currentUserData?.bina || null;
+
+  // Müşteri Talepleri (site iletişim formu) — sadece admin/teknisyen görür
+  if (role === 'admin' || role === 'teknisyen') {
+    const talepQ = query(collection(db, 'talepler'), orderBy('tarih', 'desc'));
+    unsubscribers.push(onSnapshot(talepQ, snap => {
+      G_TALEPLER = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (document.getElementById('pg-talepler')?.classList.contains('active')) renderTalepler();
+      renderTaleplerSayac();
+    }));
+  }
 
   // Genel Ayarlar (örn. aylık bakım hatırlatma günü) — tüm roller okuyabilir
   const ayarlarRef = doc(db, 'ayarlar', 'genel');
@@ -458,6 +470,7 @@ function subscribeAll() {
     if (document.getElementById('pg-takvim')?.classList.contains('active')) renderCalendar();
     if (document.getElementById('pg-performans')?.classList.contains('active')) renderPerformans();
     if (document.getElementById('pg-gorevler')?.classList.contains('active')) renderGunlukGorevler();
+    if (role === 'bina') renderBinaDashboard();
   }));
 
   // Arızalar
@@ -471,6 +484,7 @@ function subscribeAll() {
     renderAcikArizaSayac(data.filter(a => a.durum === 'acik').length);
     if (document.getElementById('pg-performans')?.classList.contains('active')) renderPerformans();
     rebuildBildirimler();
+    if (role === 'bina') renderBinaDashboard();
   }));
 
   // Sözleşmeler
@@ -595,10 +609,25 @@ function setupUI() {
   document.getElementById('userAvatar').textContent       = u?.initials || '??';
   document.getElementById('pageTitle').textContent        = 'Genel Bakış';
 
+  // Bina yöneticisine sade dashboard, admin/teknisyene detaylı dashboard göster
+  const adminGorunum1 = document.getElementById('dashboardAdminGorunum');
+  const adminGorunum2 = document.getElementById('dashboardAdminGorunum2');
+  const binaGorunum = document.getElementById('dashboardBinaGorunum');
+  if (role === 'bina') {
+    if (adminGorunum1) adminGorunum1.style.display = 'none';
+    if (adminGorunum2) adminGorunum2.style.display = 'none';
+    if (binaGorunum) binaGorunum.style.display = 'block';
+  } else {
+    if (adminGorunum1) adminGorunum1.style.display = 'grid';
+    if (adminGorunum2) adminGorunum2.style.display = 'grid';
+    if (binaGorunum) binaGorunum.style.display = 'none';
+  }
+
   // Sidebar nav
   const navDefs = {
     admin: [
       { id:'dashboard',   icon:'grid',     label:'Genel Bakış' },
+      { id:'talepler',    icon:'inbox',    label:'Müşteri Talepleri' },
       { id:'gorevler',    icon:'route',    label:'Bugünün Görevleri' },
       { id:'takvim',      icon:'calendar', label:'Bakım Takvimi' },
       { id:'aylik',       icon:'checklist',label:'Aylık Bakım Takibi' },
@@ -613,6 +642,7 @@ function setupUI() {
     ],
     teknisyen: [
       { id:'dashboard', icon:'grid',     label:'Genel Bakış' },
+      { id:'talepler',  icon:'inbox',    label:'Müşteri Talepleri' },
       { id:'gorevler',  icon:'route',    label:'Bugünün Görevleri' },
       { id:'takvim',    icon:'calendar', label:'Bakım Takvimi' },
       { id:'aylik',     icon:'checklist',label:'Aylık Bakım Takibi' },
@@ -624,7 +654,6 @@ function setupUI() {
     bina: [
       { id:'dashboard', icon:'grid',  label:'Genel Bakış' },
       { id:'asansorler',icon:'elevator', label:'Asansörlerim' },
-      { id:'aylik',     icon:'checklist', label:'Aylık Bakım Durumum' },
       { id:'bakimlar',  icon:'tool',  label:'Bakım Durumu' },
       { id:'arizalar',  icon:'alert', label:'Arıza Bildir' },
       { id:'sozlesmeler', icon:'file', label:'Sözleşmem' },
@@ -646,6 +675,7 @@ function setupUI() {
     bell:     `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>`,
     checklist:`<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>`,
     route:    `<circle cx="6" cy="19" r="2.5" stroke-width="2"/><circle cx="18" cy="5" r="2.5" stroke-width="2"/><path stroke-linecap="round" stroke-width="2" d="M8.3 17.5L13 9M15.5 7.3L18 5M8 19h6a3 3 0 003-3v-1a3 3 0 013-3"/>`,
+    inbox:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>`,
   };
 
   const items  = navDefs[role] || navDefs.bina;
@@ -678,10 +708,15 @@ function setupUI() {
 ═══════════════════════════════════════════════════════════════ */
 // Sayfa bazlı erişim kısıtlaması — UI'da gizli olsa da konsoldan zorlanmaya karşı
 const ADMIN_ONLY_PAGES = ['kullanicilar'];
+const BINA_ROLE_YASAKLI_PAGES = ['aylik']; // bina yöneticisi bu sayfaları hiç görmemeli
 
 window.showPage = (name, btn) => {
   const role = currentUserData?.rol;
   if (ADMIN_ONLY_PAGES.includes(name) && role !== 'admin') {
+    alert('Bu sayfaya erişim yetkiniz yok.');
+    return;
+  }
+  if (BINA_ROLE_YASAKLI_PAGES.includes(name) && role === 'bina') {
     alert('Bu sayfaya erişim yetkiniz yok.');
     return;
   }
@@ -697,7 +732,7 @@ window.showPage = (name, btn) => {
     takvim:'Bakım Takvimi', sozlesmeler:'Sözleşme & Fatura Takibi',
     performans:'Teknisyen Performansı', muhasebe:'Muhasebe',
     asansorler:'Asansör Teknik Dosyası', aylik:'Aylık Bakım Takibi',
-    gorevler:'Bugünün Görevleri'
+    gorevler:'Bugünün Görevleri', talepler:'Müşteri Talepleri'
   };
   document.getElementById('pageTitle').textContent = titles[name] || name;
   if (name === 'takvim') renderCalendar();
@@ -706,6 +741,7 @@ window.showPage = (name, btn) => {
   if (name === 'asansorler') renderAsansorler();
   if (name === 'aylik') renderAylikTakip();
   if (name === 'gorevler') renderGunlukGorevler();
+  if (name === 'talepler') renderTalepler();
   closeMobileSidebar();
 };
 
@@ -1339,6 +1375,115 @@ function tarihToDate(ts) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   MÜŞTERİ TALEPLERİ — Site İletişim Formu Yönetimi
+   Sitedeki "Proje Teklifi Gönder" formundan gelen talepler burada
+   listelenir. Durum takibi yapılır (yeni → arandı → teklif → müşteri
+   oldu / kapandı), ve her talepten tek tıkla telefon arama veya
+   WhatsApp ile hızlı dönüş yapılabilir.
+═══════════════════════════════════════════════════════════════ */
+const TALEP_DURUM_BILGI = {
+  yeni:     { etiket: 'Yeni',             renk: '#3B82F6', ikon: '🔵' },
+  arandi:   { etiket: 'Arandı',           renk: '#F59E0B', ikon: '📞' },
+  teklif:   { etiket: 'Teklif Verildi',   renk: '#8B5CF6', ikon: '📄' },
+  musteri:  { etiket: 'Müşteri Oldu',     renk: '#10B981', ikon: '✓' },
+  kapandi:  { etiket: 'İlgisiz / Kapandı',renk: '#475569', ikon: '✕' },
+};
+
+function renderTaleplerSayac() {
+  const yeniSayisi = G_TALEPLER.filter(t => t.durum === 'yeni').length;
+  const badge = document.getElementById('badge-talepler');
+  if (badge) {
+    if (yeniSayisi > 0) { badge.textContent = yeniSayisi; badge.className = 'nav-badge badge-warn-sm'; badge.style.display = 'inline'; }
+    else { badge.style.display = 'none'; }
+  }
+}
+
+window.talepDurumGuncelle = async (id, yeniDurum) => {
+  try {
+    await updateDoc(doc(db, 'talepler', id), { durum: yeniDurum, guncellendi: serverTimestamp() });
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.talepSil = async (id, ad) => {
+  if (!confirm(`"${ad}" talebini silmek istediğinizden emin misiniz?`)) return;
+  await deleteDoc(doc(db, 'talepler', id));
+};
+
+// Bir talebe WhatsApp üzerinden hızlı dönüş mesajı gönderir.
+window.talepWhatsapp = (tel, ad) => {
+  const temizTel = (tel||'').replace(/[^0-9]/g, '').replace(/^0/, '');
+  const mesaj = `Merhaba ${ad}, AS-EL Asansör'e gösterdiğiniz ilgi için teşekkür ederiz. Talebinizle ilgili size yardımcı olmak isteriz.`;
+  const url = `https://wa.me/90${temizTel}?text=${encodeURIComponent(mesaj)}`;
+  window.open(url, '_blank');
+};
+
+window.renderTalepler = function() {
+  const listeEl = document.getElementById('taleplerListesi');
+  const ozetEl = document.getElementById('taleplerOzet');
+  if (!listeEl) return;
+
+  const durumFiltre = document.getElementById('taleplerDurumFiltre')?.value || '';
+  let data = G_TALEPLER;
+  if (durumFiltre) data = data.filter(t => t.durum === durumFiltre);
+  data = data.filter(t => aramaEslesir(G_ARAMA.talepler, t.ad, t.tel, t.not));
+
+  // Özet kartları (durum bazlı sayılar, filtre uygulanmadan tüm veri üzerinden)
+  if (ozetEl) {
+    const durumlar = ['yeni','arandi','teklif','musteri','kapandi'];
+    ozetEl.innerHTML = durumlar.map(d => {
+      const bilgi = TALEP_DURUM_BILGI[d];
+      const sayi = G_TALEPLER.filter(t => t.durum === d).length;
+      return `
+        <div class="card" style="padding:12px;text-align:center;cursor:pointer;" onclick="document.getElementById('taleplerDurumFiltre').value='${d}';renderTalepler();">
+          <div style="font-size:18px;margin-bottom:4px;">${bilgi.ikon}</div>
+          <div style="font-size:18px;font-weight:900;color:${bilgi.renk};">${sayi}</div>
+          <div style="font-size:9px;color:#475569;margin-top:2px;">${bilgi.etiket}</div>
+        </div>`;
+    }).join('');
+  }
+
+  if (!data.length) {
+    listeEl.innerHTML = `<div class="card" style="padding:32px;text-align:center;color:#475569;font-size:13px;">${G_ARAMA.talepler || durumFiltre ? 'Aramayla/filtreyle eşleşen talep bulunamadı.' : 'Henüz site üzerinden talep gelmemiş.'}</div>`;
+    return;
+  }
+
+  const tarihStr = ts => {
+    if (!ts) return '—';
+    if (ts.toDate) return ts.toDate().toLocaleString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+    return ts;
+  };
+
+  listeEl.innerHTML = data.map(t => {
+    const bilgi = TALEP_DURUM_BILGI[t.durum] || TALEP_DURUM_BILGI.yeni;
+    return `
+    <div class="card" style="padding:16px;border-left:3px solid ${bilgi.renk};">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+        <div>
+          <div style="font-size:14px;font-weight:700;color:#E2E8F0;">${t.ad}</div>
+          <div style="font-size:11px;color:#64748B;margin-top:2px;">📱 ${t.tel} ${t.hizmet ? '· ' + t.hizmet : ''}</div>
+          <div style="font-size:10px;color:#475569;margin-top:2px;">🕐 ${tarihStr(t.tarih)}</div>
+        </div>
+        <span class="sbadge" style="background:${bilgi.renk}22;color:${bilgi.renk};border:1px solid ${bilgi.renk}44;flex-shrink:0;">${bilgi.ikon} ${bilgi.etiket}</span>
+      </div>
+      ${t.not ? `<div style="font-size:12px;color:#94A3B8;background:rgba(15,23,42,.4);padding:10px 12px;border-radius:8px;margin-bottom:12px;">${t.not}</div>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <a href="tel:${t.tel}" style="padding:7px 12px;font-size:11px;font-weight:700;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:8px;text-decoration:none;display:inline-flex;align-items:center;gap:5px;">📞 Ara</a>
+        <button onclick="talepWhatsapp('${t.tel}','${(t.ad||'').replace(/'/g,"\\'")}')" style="padding:7px 12px;font-size:11px;font-weight:700;background:rgba(34,197,94,.12);color:#22C55E;border:1px solid rgba(34,197,94,.25);border-radius:8px;cursor:pointer;">📲 WhatsApp</button>
+        <select onchange="talepDurumGuncelle('${t.id}', this.value)" class="db-input" style="flex:1;min-width:140px;max-width:180px;padding:7px 10px;font-size:11px;">
+          ${Object.entries(TALEP_DURUM_BILGI).map(([key, b]) => `<option value="${key}" ${t.durum===key?'selected':''}>${b.ikon} ${b.etiket}</option>`).join('')}
+        </select>
+        <button onclick="talepSil('${t.id}','${(t.ad||'').replace(/'/g,"\\'")}')" class="admin-only" style="padding:7px 10px;font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;margin-left:auto;">Sil</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  const role = currentUserData?.rol;
+  document.querySelectorAll('.admin-only').forEach(el => {
+    el.style.display = role === 'admin' ? '' : 'none';
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
    BUGÜNÜN GÖREVLERİ — Teknisyen Bazlı Görev Listesi
    Seçili güne planlanmış bakımlar, teknisyene göre gruplanır.
    Harita yok — sıralı, sade bir liste (bakım kaydındaki sıraya göre).
@@ -1350,6 +1495,70 @@ window.gorevGunShift = (delta, buGun) => {
   else gorevSeciliTarih.setDate(gorevSeciliTarih.getDate() + delta);
   renderGunlukGorevler();
 };
+
+/* ═══════════════════════════════════════════════════════════════
+   BİNA YÖNETİCİSİ — SADE DASHBOARD
+   Admin/teknisyenin gördüğü karmaşık genel bakış yerine, bina
+   yöneticisine sadece kendi binasıyla ilgili 3 basit bilgi gösterir:
+   asansör genel durumu, bu ayın bakım durumu, son yapılan bakım.
+═══════════════════════════════════════════════════════════════ */
+function renderBinaDashboard() {
+  const binaAdi = currentUserData?.bina;
+  if (!binaAdi) return;
+
+  // Asansör genel durumu: açık arıza varsa kırmızı, yoksa yeşil
+  const acikAriza = G_ARIZALAR.filter(a => a.durum === 'acik').length;
+  const asansorIkon = document.getElementById('bina-dash-asansorDurum');
+  const asansorMetin = document.getElementById('bina-dash-asansorMetin');
+  if (asansorIkon && asansorMetin) {
+    if (acikAriza > 0) {
+      asansorIkon.textContent = '🔴';
+      asansorMetin.textContent = `${acikAriza} Açık Arıza`;
+      asansorMetin.style.color = '#EF4444';
+    } else {
+      asansorIkon.textContent = '🟢';
+      asansorMetin.textContent = 'Asansör Normal';
+      asansorMetin.style.color = '#E2E8F0';
+    }
+  }
+
+  // Bu ayın bakım durumu (Aylık Bakım Takibi verisinden)
+  const ayKey = new Date().toISOString().slice(0,7);
+  const buAyinKaydi = G_AYLIK_BAKIMLAR.find(a => a.bina === binaAdi && a.ayKey === ayKey);
+  const bakimIkon = document.getElementById('bina-dash-bakimDurum');
+  const bakimMetin = document.getElementById('bina-dash-bakimMetin');
+  if (bakimIkon && bakimMetin) {
+    if (buAyinKaydi?.durum === 'yapildi') {
+      bakimIkon.textContent = '✅';
+      bakimMetin.textContent = 'Bu Ay Yapıldı';
+      bakimMetin.style.color = '#10B981';
+    } else {
+      bakimIkon.textContent = '⏳';
+      bakimMetin.textContent = 'Bu Ay Bekliyor';
+      bakimMetin.style.color = '#F59E0B';
+    }
+  }
+
+  // Son yapılan bakım (en güncel tamamlanmış kayıt)
+  const sonBakimEl = document.getElementById('bina-dash-sonBakim');
+  if (sonBakimEl) {
+    const tamamlananlar = G_BAKIMLAR.filter(b => b.durum === 'tamamlandi')
+      .sort((a,b) => (b.tarih||'').localeCompare(a.tarih||''));
+    const son = tamamlananlar[0];
+    if (son) {
+      sonBakimEl.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${son.tip || 'Bakım'}</div>
+            <div style="font-size:11px;color:#64748B;margin-top:2px;">👤 ${son.teknisyen || '—'}</div>
+          </div>
+          <div style="font-size:12px;color:#94A3B8;">${son.tarih || '—'}</div>
+        </div>`;
+    } else {
+      sonBakimEl.innerHTML = `<span style="color:#475569;">Henüz tamamlanmış bakım kaydı yok.</span>`;
+    }
+  }
+}
 
 function renderGunlukGorevler() {
   const ozetEl = document.getElementById('gorevOzet');
@@ -2130,45 +2339,131 @@ function qrHizliEkraniDoldur(asansor) {
 
 // Büyük "Bu Ayın Bakımını Yaptım" butonu — tek tıkla aylık bakım kaydını
 // oluşturur (yoksa) veya günceller (varsa) ve "yapildi" olarak işaretler.
-window.qrHizliBakimIsaretle = async () => {
+/* ═══════════════════════════════════════════════════════════════
+   BAKIM KONTROL LİSTESİ (CHECKLIST)
+   QR ile gelen teknisyen "Bu Ayın Bakımını Yaptım" dediğinde, doğrudan
+   kaydetmek yerine standart 22 maddelik bakım kontrol listesi açılır.
+   Teknisyen yaptığı işleri işaretler, isterse not ekler, "Bakımı
+   Tamamla" dediğinde işaretli maddeler + not ile birlikte kayıt
+   oluşur ve ardından logolu Bakım Fişi PDF'i otomatik indirilir.
+═══════════════════════════════════════════════════════════════ */
+const BAKIM_CHECKLIST_MADDELERI = [
+  'Kabin Raylarının Yağlanması',
+  'Alarm ve Diyafon Tesisatının Kontrolü',
+  'Ağırlık Raylarının Yağlanması',
+  'Makina Motor ve Yağı Kontrolü',
+  'Gösterge ve Sinyalizasyon Işıklarının Kontrolü',
+  'Makina Yan Yatak Kontrolü',
+  'Kat ve Duruş Seviyelerinin Kontrolü',
+  'Askı Halatlarının Kontrolü',
+  'Kabin Aydınlatmasının Kontrolü',
+  'Saptırma Kasnağının Kontrolü',
+  'Kapı Camlarının Kontrolü',
+  'Makina Tahrik Kasnağının Kontrolü',
+  'Kabin Üstü Temizliğinin Yapılması',
+  'Kapı Menteşelerinin Yağlanması',
+  'Kilit ve Fiş Kontak Devrelerinin Emniyet Kontrolü',
+  'Kat ve Kabin Kapı Makaralarının Kontrolü',
+  'Kabin Patenlerinin Kontrolü',
+  'Kuyu Dibinin Kontrolü',
+  'Karşı Ağırlık Patenlerinin Kontrolü',
+  'Kuyu Aydınlatmasının Kontrolü',
+  'Manuel Kapalı Tesislerde Kapı Kayışlarının Kontrolü',
+  'Otomatik Kapalı Tesislerde Kapı Kayışlarının Kontrolü',
+];
+
+let G_CHECKLIST_ISARETLI = new Set(); // şu an açık olan checklist'te işaretli madde indeksleri
+
+window.qrChecklistAc = () => {
+  const asansor = G_QR_AKTIF_ASANSOR;
+  if (!asansor) return;
+
+  G_CHECKLIST_ISARETLI = new Set();
+  document.getElementById('checklistBinaAdi').textContent = `${asansor.bina}${asansor.kabin ? ' — '+asansor.kabin : ''}`;
+  document.getElementById('checklistNot').value = '';
+
+  const liste = document.getElementById('checklistMaddeleri');
+  liste.innerHTML = BAKIM_CHECKLIST_MADDELERI.map((madde, i) => `
+    <label data-idx="${i}" onclick="checklistMaddeToggle(${i})" style="display:flex;align-items:center;gap:10px;padding:11px 12px;background:rgba(15,23,42,.3);border:1px solid rgba(30,41,59,.5);border-radius:10px;cursor:pointer;transition:background .15s;">
+      <span class="checklist-kutu" style="width:20px;height:20px;border-radius:6px;border:2px solid #475569;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;">​</span>
+      <span style="font-size:12.5px;color:#CBD5E1;flex:1;">${madde}</span>
+    </label>`).join('');
+
+  checklistIlerlemeGuncelle();
+  openModal('mBakimChecklist');
+};
+
+window.checklistMaddeToggle = (idx) => {
+  const satir = document.querySelector(`#checklistMaddeleri label[data-idx="${idx}"]`);
+  const kutu = satir.querySelector('.checklist-kutu');
+
+  if (G_CHECKLIST_ISARETLI.has(idx)) {
+    G_CHECKLIST_ISARETLI.delete(idx);
+    kutu.style.background = 'transparent';
+    kutu.style.borderColor = '#475569';
+    kutu.textContent = '\u200B';
+    satir.style.background = 'rgba(15,23,42,.3)';
+  } else {
+    G_CHECKLIST_ISARETLI.add(idx);
+    kutu.style.background = '#10B981';
+    kutu.style.borderColor = '#10B981';
+    kutu.textContent = '✓';
+    satir.style.background = 'rgba(16,185,129,.08)';
+  }
+  checklistIlerlemeGuncelle();
+};
+
+function checklistIlerlemeGuncelle() {
+  const toplam = BAKIM_CHECKLIST_MADDELERI.length;
+  const yapilan = G_CHECKLIST_ISARETLI.size;
+  const yuzde = Math.round((yapilan/toplam)*100);
+  document.getElementById('checklistProgressBar').style.width = yuzde + '%';
+  document.getElementById('checklistProgressMetin').textContent = `${yapilan} / ${toplam} madde`;
+}
+
+// Checklist tamamlanınca: işaretli maddeler + not ile bakım kaydı
+// oluşturulur (hem aylikBakimlar hem bakimlar koleksiyonuna), ardından
+// logolu Bakım Fişi PDF'i otomatik üretilip indirilir.
+window.checklistTamamla = async () => {
   const asansor = G_QR_AKTIF_ASANSOR;
   if (!asansor) return;
   if (!baglantiKontrolEt()) return;
 
+  if (G_CHECKLIST_ISARETLI.size === 0) {
+    if (!confirm('Hiçbir madde işaretlemediniz. Yine de bakımı tamamlamak istiyor musunuz?')) return;
+  }
+
+  const not = document.getElementById('checklistNot').value.trim();
+  const yapilanMaddeler = BAKIM_CHECKLIST_MADDELERI.filter((_, i) => G_CHECKLIST_ISARETLI.has(i));
   const ayKey = new Date().toISOString().slice(0,7);
   const bugun = new Date();
 
   try {
     const mevcutKayit = G_AYLIK_BAKIMLAR.find(a => a.bina === asansor.bina && a.ayKey === ayKey);
-
     if (mevcutKayit) {
       await updateDoc(doc(db, 'aylikBakimlar', mevcutKayit.id), {
-        durum: 'yapildi',
-        yapilmaTarihi: serverTimestamp(),
-        yapanKisi: currentUserData?.ad || '—'
+        durum: 'yapildi', yapilmaTarihi: serverTimestamp(), yapanKisi: currentUserData?.ad || '—'
       });
     } else {
       await addDoc(collection(db, 'aylikBakimlar'), {
-        bina: asansor.bina,
-        ayKey,
-        yil: bugun.getFullYear(),
-        ay: bugun.getMonth() + 1,
-        durum: 'yapildi',
-        yapilmaTarihi: serverTimestamp(),
-        yapanKisi: currentUserData?.ad || '—',
+        bina: asansor.bina, ayKey, yil: bugun.getFullYear(), ay: bugun.getMonth() + 1,
+        durum: 'yapildi', yapilmaTarihi: serverTimestamp(), yapanKisi: currentUserData?.ad || '—',
         olusturuldu: serverTimestamp()
       });
     }
 
-    // Ayrıca somut bir bakım kaydı da oluştur (Bakım Takibi geçmişinde görünsün)
     await addDoc(collection(db, 'bakimlar'), {
       bina: asansor.bina, kabin: asansor.kabin || '', tip: 'Aylık Periyodik',
       tarih: bugun.toISOString().slice(0,10),
       teknisyen: currentUserData?.ad || '—',
-      notlar: 'QR kod ile sahadan hızlı işaretleme.',
+      notlar: not || 'QR kod ile sahadan kontrol listesi dolduruldu.',
+      checklistMaddeleri: yapilanMaddeler,
+      checklistToplam: BAKIM_CHECKLIST_MADDELERI.length,
       durum: 'tamamlandi', tamamlanmaTarihi: serverTimestamp(),
       olusturuldu: serverTimestamp()
     });
+
+    closeModal('mBakimChecklist');
 
     document.getElementById('qrHizliDurumKutu').style.borderColor = 'rgba(16,185,129,.3)';
     document.getElementById('qrHizliDurumKutu').style.background = 'rgba(16,185,129,.06)';
@@ -2178,10 +2473,43 @@ window.qrHizliBakimIsaretle = async () => {
     document.getElementById('qrHizliBakimBtn').style.opacity = '0.6';
     document.getElementById('qrHizliBakimBtn').disabled = true;
 
+    // Bakım fişini otomatik PDF olarak indir
+    await downloadBakimFisiPDF(asansor, yapilanMaddeler, not, bugun);
+
   } catch(e) {
     alert('Hata: ' + e.message);
   }
 };
+
+// Checklist tamamlanınca logolu, teknisyen adı ve tarihli bir Bakım
+// Fişi PDF'i üretir — bina yöneticisi veya teknisyen bunu kanıt
+// belgesi olarak saklayabilir.
+async function downloadBakimFisiPDF(asansor, yapilanMaddeler, not, tarih) {
+  if (typeof window.html2canvas === 'undefined') {
+    alert('PDF kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.');
+    return;
+  }
+
+  document.getElementById('bf-binaAdi').textContent = asansor.bina;
+  document.getElementById('bf-kabinAdi').textContent = asansor.kabin || '—';
+  document.getElementById('bf-tarih').textContent = tarih.toLocaleDateString('tr-TR');
+  document.getElementById('bf-saat').textContent = tarih.toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' });
+  document.getElementById('bf-teknisyen').textContent = currentUserData?.ad || '—';
+  document.getElementById('bf-not').textContent = not || '—';
+
+  document.getElementById('bf-maddeler').innerHTML = BAKIM_CHECKLIST_MADDELERI.map(madde => {
+    const yapildi = yapilanMaddeler.includes(madde);
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #F1F5F9;">
+        <span style="width:16px;height:16px;border-radius:4px;background:${yapildi?'#10B981':'#F1F5F9'};color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${yapildi?'✓':''}</span>
+        <span style="font-size:11px;color:${yapildi?'#0F172A':'#94A3B8'};">${madde}</span>
+      </div>`;
+  }).join('');
+
+  document.getElementById('bf-ozet').textContent = `${yapilanMaddeler.length} / ${BAKIM_CHECKLIST_MADDELERI.length} madde tamamlandı`;
+
+  await renderHtmlToPdf('pdfBakimFisiSablon', `Bakim_Fisi_${asansor.bina.replace(/\s+/g,'_')}_${tarih.toISOString().slice(0,10)}.pdf`);
+}
 
 window.qrHizliArizaBildir = () => {
   const asansor = G_QR_AKTIF_ASANSOR;
@@ -2192,6 +2520,7 @@ window.qrHizliArizaBildir = () => {
   document.getElementById('f-ariza-aciklama').value = '';
   openModal('mAriza');
 };
+
 
 window.qrHizliDetayGor = () => {
   const asansor = G_QR_AKTIF_ASANSOR;
@@ -5128,7 +5457,8 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
       <!-- GENEL BAKIŞ -->
       <div id="pg-dashboard" class="db-page active">
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;">
+        <!-- ADMIN/TEKNİSYEN GENEL BAKIŞ -->
+        <div id="dashboardAdminGorunum" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;">
           <div class="card" style="padding:16px;">
             <div style="font-size:11px;color:#475569;margin-bottom:6px;">Toplam Bina</div>
             <div id="stat-bina" style="font-size:26px;font-weight:900;color:#E2E8F0;">—</div>
@@ -5145,7 +5475,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <div style="font-size:11px;color:#475569;margin-top:3px;">Çözüm bekliyor</div>
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:12px;" class="hero-grid">
+        <div id="dashboardAdminGorunum2" style="display:grid;grid-template-columns:1.5fr 1fr;gap:12px;" class="hero-grid">
           <div class="card" style="padding:0;overflow:hidden;">
             <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;align-items:center;justify-content:space-between;">
               <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">Yaklaşan Bakımlar</h3>
@@ -5163,6 +5493,61 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             </div>
           </div>
         </div>
+
+        <!-- BİNA YÖNETİCİSİ İÇİN SADE GÖRÜNÜM -->
+        <div id="dashboardBinaGorunum" style="display:none;">
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px;">
+            <div class="card" style="padding:20px;text-align:center;">
+              <div id="bina-dash-asansorDurum" style="font-size:32px;margin-bottom:8px;">🟢</div>
+              <div id="bina-dash-asansorMetin" style="font-size:13px;font-weight:700;color:#E2E8F0;">Asansör Normal</div>
+              <div style="font-size:11px;color:#475569;margin-top:4px;">Genel durum</div>
+            </div>
+            <div class="card" style="padding:20px;text-align:center;">
+              <div id="bina-dash-bakimDurum" style="font-size:32px;margin-bottom:8px;">⏳</div>
+              <div id="bina-dash-bakimMetin" style="font-size:13px;font-weight:700;color:#E2E8F0;">Bu Ay Bekliyor</div>
+              <div style="font-size:11px;color:#475569;margin-top:4px;">Aylık bakım</div>
+            </div>
+          </div>
+
+          <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
+            <div style="padding:14px 18px;border-bottom:1px solid rgba(30,41,59,.5);">
+              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">Son Bakım</h3>
+            </div>
+            <div id="bina-dash-sonBakim" style="padding:18px;font-size:12px;color:#94A3B8;">Yükleniyor...</div>
+          </div>
+
+          <button onclick="openModal('mAriza')" style="width:100%;padding:16px;font-size:14px;font-weight:700;background:rgba(239,68,68,.12);color:#EF4444;border:1px solid rgba(239,68,68,.25);border-radius:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;">
+            ⚠️ Arıza Bildir
+          </button>
+        </div>
+      </div>
+
+      <!-- MÜŞTERİ TALEPLERİ -->
+      <div id="pg-talepler" class="db-page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+          <div>
+            <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Müşteri Talepleri</h2>
+            <p style="font-size:11px;color:#475569;margin-top:2px;">Sitedeki iletişim formundan gelen talepler</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div class="search-box-wrap">
+              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" class="db-input" placeholder="Ad, telefon ara..." oninput="aramaGuncelle('talepler', this.value)"/>
+            </div>
+            <select id="taleplerDurumFiltre" class="db-input" style="max-width:160px;" onchange="renderTalepler()">
+              <option value="">Tüm Durumlar</option>
+              <option value="yeni">🔵 Yeni</option>
+              <option value="arandi">📞 Arandı</option>
+              <option value="teklif">📄 Teklif Verildi</option>
+              <option value="musteri">✓ Müşteri Oldu</option>
+              <option value="kapandi">✕ İlgisiz/Kapandı</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="taleplerOzet" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px;"></div>
+
+        <div id="taleplerListesi" style="display:flex;flex-direction:column;gap:10px;"></div>
       </div>
 
       <!-- BUGÜNÜN GÖREVLERİ -->
@@ -6172,7 +6557,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       </div>
 
       <!-- Büyük "Bakımı Yaptım" butonu -->
-      <button id="qrHizliBakimBtn" onclick="qrHizliBakimIsaretle()" style="width:100%;padding:22px;font-size:16px;font-weight:800;background:linear-gradient(135deg,#10B981,#059669);color:#fff;border:none;border-radius:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:0 8px 24px rgba(16,185,129,.3);">
+      <button id="qrHizliBakimBtn" onclick="qrChecklistAc()" style="width:100%;padding:22px;font-size:16px;font-weight:800;background:linear-gradient(135deg,#10B981,#059669);color:#fff;border:none;border-radius:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:0 8px 24px rgba(16,185,129,.3);">
         <svg viewBox="0 0 24 24" style="width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:3;"><path d="M5 13l4 4L19 7"/></svg>
         Bu Ayın Bakımını Yaptım
       </button>
@@ -6185,6 +6570,33 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);text-align:center;">
       <button onclick="closeModal('mQrHizliBakim')" class="btn-ghost" style="width:100%;">Kapat</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bakım Kontrol Listesi (Checklist) — QR ile sahadan doldurulur -->
+<div id="modal-mBakimChecklist" class="modal-wrap" style="z-index:10001;">
+  <div class="modal-box" style="max-width:480px;max-height:90vh;display:flex;flex-direction:column;">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);flex-shrink:0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">📋 Bakım Kontrol Listesi</h3>
+        <button onclick="closeModal('mBakimChecklist')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+      </div>
+      <div id="checklistBinaAdi" style="font-size:12px;color:#94A3B8;margin-top:4px;">—</div>
+      <div style="margin-top:10px;background:rgba(15,23,42,.4);border-radius:8px;height:6px;overflow:hidden;">
+        <div id="checklistProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#00ADB5,#10B981);transition:width .3s;"></div>
+      </div>
+      <div id="checklistProgressMetin" style="font-size:11px;color:#64748B;margin-top:6px;text-align:right;">0 / 22 madde</div>
+    </div>
+
+    <div id="checklistMaddeleri" style="padding:14px 20px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:6px;"></div>
+
+    <div style="padding:14px 20px;border-top:1px solid rgba(30,41,59,.6);flex-shrink:0;">
+      <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not (opsiyonel)</label>
+      <textarea id="checklistNot" rows="2" class="db-input" style="resize:none;margin-bottom:12px;" placeholder="Ek gözlem, değiştirilen parça, dikkat edilmesi gereken nokta..."></textarea>
+      <button id="checklistTamamlaBtn" onclick="checklistTamamla()" style="width:100%;padding:16px;font-size:14px;font-weight:800;background:linear-gradient(135deg,#10B981,#059669);color:#fff;border:none;border-radius:14px;cursor:pointer;">
+        ✓ Bakımı Tamamla ve Kaydet
+      </button>
     </div>
   </div>
 </div>
@@ -6919,6 +7331,77 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div style="font-size:11px; color:#475569; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:10px;">Kayıt Özeti</div>
         <div id="pyr-detayOzet" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;"></div>
         <p style="font-size:10px; color:#94A3B8; margin-top:12px; text-align:center;">Detaylı kayıt dökümü için Excel/CSV raporunu indirin.</p>
+      </div>
+    </div>
+
+    <!-- Alt bilgi -->
+    <div style="background:#F8FAFC; padding:14px 40px; border-top:1px solid #E2E8F0; text-align:center;">
+      <div style="font-size:9.5px; color:#94A3B8; font-weight:500;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17</div>
+    </div>
+  </div>
+
+  <!-- ── BAKIM FİŞİ ŞABLONU ── -->
+  <div id="pdfBakimFisiSablon" style="width:800px; background:#fff; font-family:'Inter',system-ui,sans-serif; color:#0F172A;">
+    <div style="background:linear-gradient(135deg,#0F172A,#1E293B); padding:28px 40px; display:flex; align-items:center; justify-content:space-between;">
+      <div style="display:flex; align-items:center; gap:14px;">
+        <svg width="48" height="48" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#1E293B"/>
+          <rect x="36" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <rect x="56" y="12" width="16" height="76" rx="3" fill="#F3F4F6"/>
+          <rect x="80" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <path d="M 64 20 L 59 25 L 69 25 Z" fill="#1E293B"/>
+          <rect x="62.5" y="25" width="3" height="8" fill="#1E293B"/>
+          <path d="M 64 80 L 59 75 L 69 75 Z" fill="#1E293B"/>
+          <rect x="62.5" y="67" width="3" height="8" fill="#1E293B"/>
+        </svg>
+        <div>
+          <div style="font-size:22px; font-weight:800; color:#fff; letter-spacing:-0.3px;">AS-EL ASANSÖR</div>
+          <div style="font-size:11px; color:#94A3B8; letter-spacing:0.5px; margin-top:2px;">1989'dan Beri Güvenle</div>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:11px; color:#64748B; text-transform:uppercase; letter-spacing:1px; font-weight:600;">Bakım Fişi</div>
+        <div id="bf-tarih" style="font-size:15px; color:#00ADB5; font-weight:700; margin-top:3px;">—</div>
+        <div id="bf-saat" style="font-size:11px; color:#94A3B8; margin-top:2px;">—</div>
+      </div>
+    </div>
+
+    <div style="padding:32px 40px;">
+
+      <!-- Bina + teknisyen bilgi kartı -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:24px;">
+        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:14px; padding:18px 20px;">
+          <div style="font-size:10px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:6px;">Bina / Asansör</div>
+          <div id="bf-binaAdi" style="font-size:16px; font-weight:800; color:#0F172A;">—</div>
+          <div id="bf-kabinAdi" style="font-size:12px; color:#64748B; margin-top:2px;">—</div>
+        </div>
+        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:14px; padding:18px 20px;">
+          <div style="font-size:10px; color:#00ADB5; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:6px;">Bakımı Yapan Teknisyen</div>
+          <div id="bf-teknisyen" style="font-size:16px; font-weight:800; color:#0F172A;">—</div>
+          <div id="bf-ozet" style="font-size:12px; color:#64748B; margin-top:2px;">—</div>
+        </div>
+      </div>
+
+      <!-- Kontrol listesi -->
+      <div style="margin-bottom:20px;">
+        <div style="font-size:11px; color:#475569; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:10px;">Bakım İşlemi Kapsamında Yapılanlar</div>
+        <div id="bf-maddeler" style="border:1px solid #E2E8F0; border-radius:12px; padding:14px 18px;"></div>
+      </div>
+
+      <!-- Not -->
+      <div style="margin-bottom:28px;">
+        <div style="font-size:11px; color:#475569; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:8px;">Teknisyen Notu</div>
+        <div id="bf-not" style="font-size:12px; color:#334155; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:12px 16px;">—</div>
+      </div>
+
+      <!-- İmza alanı -->
+      <div style="display:flex; justify-content:space-between; padding-top:20px; border-top:1px solid #F1F5F9;">
+        <div style="text-align:center; width:220px;">
+          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:36px; font-size:10px; color:#64748B; font-weight:600;">Bakımı Yapan Teknisyen</div>
+        </div>
+        <div style="text-align:center; width:220px;">
+          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:36px; font-size:10px; color:#64748B; font-weight:600;">Bina Yetkilisi</div>
+        </div>
       </div>
     </div>
 
