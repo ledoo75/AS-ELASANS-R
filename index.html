@@ -1031,6 +1031,12 @@ window.aylikDurumDegistir = async (id, yeniDurum, binaAdi) => {
    ortak ve kalıcıdır.
 ═══════════════════════════════════════════════════════════════ */
 let G_AYLIK_HATIRLATMA_GUNU = 25; // varsayılan değer, Firestore'dan gelene kadar kullanılır
+let G_AYLIK_SADECE_YAPILMADI = false; // true ise listede sadece "yapılmadı" binalar gösterilir
+
+window.aylikSadeceYapilmadiToggle = () => {
+  G_AYLIK_SADECE_YAPILMADI = !G_AYLIK_SADECE_YAPILMADI;
+  renderAylikTakip();
+};
 
 window.aylikHatirlatmaGunuKaydet = async () => {
   const gun = parseInt(document.getElementById('aylikHatirlatmaGunu').value) || 25;
@@ -1056,8 +1062,12 @@ function renderAylikTakip() {
   const ayKey = `${yil}-${String(ay).padStart(2,'0')}`;
   label.textContent = `${ayAdlari[ay-1]} ${yil}`;
 
-  // Seçili ay için kayıtları filtrele
-  let kayitlar = G_AYLIK_BAKIMLAR.filter(a => a.ayKey === ayKey);
+  // Seçili ay için kayıtları filtrele — ve sadece HÂLÂ kayıtlı (silinmemiş)
+  // carilere ait olanları göster. Bir cari silindiğinde, ona ait geçmiş
+  // aylikBakimlar kaydı Firestore'da kalır (veri kaybı önlenir), ama bu
+  // listede artık görünmemesi gerekir.
+  const kayitliBinaAdlari = new Set(G_BINALAR.map(b => b.ad));
+  let kayitlar = G_AYLIK_BAKIMLAR.filter(a => a.ayKey === ayKey && kayitliBinaAdlari.has(a.bina));
 
   // Eğer bu ay için hiç kayıt yoksa (örn. geçmiş bir aya bakılıyor ve oluşturulmamışsa)
   // binalar listesinden sanal satırlar oluştur (sadece görüntüleme, henüz Firestore'a yazılmaz)
@@ -1069,9 +1079,21 @@ function renderAylikTakip() {
     kayitlar.push({ id: null, bina: b.ad, ayKey, durum: 'kayitYok' });
   });
 
-  kayitlar.sort((a,b) => a.bina.localeCompare(b.bina, 'tr'));
+  // Önce durum (yapılmadı/kayıtYok üstte, yapıldı altta), sonra alfabetik
+  kayitlar.sort((a,b) => {
+    const aYapilmadi = a.durum === 'yapilmadi' || a.durum === 'kayitYok';
+    const bYapilmadi = b.durum === 'yapilmadi' || b.durum === 'kayitYok';
+    if (aYapilmadi && !bYapilmadi) return -1;
+    if (!aYapilmadi && bYapilmadi) return 1;
+    return a.bina.localeCompare(b.bina, 'tr');
+  });
 
-  // İstatistikler
+  // "Sadece Yapılmadı" filtresi aktifse, listeyi daraltır (istatistik kartları her zaman TÜM binaları gösterir)
+  const filtreliKayitlar = G_AYLIK_SADECE_YAPILMADI
+    ? kayitlar.filter(k => k.durum === 'yapilmadi' || k.durum === 'kayitYok')
+    : kayitlar;
+
+  // İstatistikler (her zaman tüm kayıtlar üzerinden — filtre uygulanmadan)
   const yapilan = kayitlar.filter(k => k.durum === 'yapildi').length;
   const yapilmayan = kayitlar.filter(k => k.durum === 'yapilmadi' || k.durum === 'kayitYok').length;
   const toplam = kayitlar.length;
@@ -1087,8 +1109,8 @@ function renderAylikTakip() {
         <div style="font-size:11px;color:#475569;margin-bottom:6px;">✓ Yapıldı</div>
         <div style="font-size:24px;font-weight:900;color:#10B981;">${yapilan}</div>
       </div>
-      <div class="card" style="padding:16px;text-align:center;border-color:rgba(239,68,68,.25);">
-        <div style="font-size:11px;color:#475569;margin-bottom:6px;">✗ Yapılmadı</div>
+      <div class="card" style="padding:16px;text-align:center;border-color:rgba(239,68,68,.25);cursor:pointer;${G_AYLIK_SADECE_YAPILMADI?'outline:2px solid #EF4444;':''}" onclick="aylikSadeceYapilmadiToggle()" title="Tıklayınca sadece yapılmadı olanları göster/gizle">
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">✗ Yapılmadı ${G_AYLIK_SADECE_YAPILMADI?'(filtre aktif)':''}</div>
         <div style="font-size:24px;font-weight:900;color:#EF4444;">${yapilmayan}</div>
       </div>`;
   }
@@ -1098,18 +1120,28 @@ function renderAylikTakip() {
     return;
   }
 
+  if (G_AYLIK_SADECE_YAPILMADI && !filtreliKayitlar.length) {
+    listeEl.innerHTML = `<div class="card" style="padding:28px;text-align:center;color:#10B981;font-size:13px;">🎉 Bu ay için tüm binaların bakımı yapılmış! Yapılmadı olan kalmadı.</div>`;
+    return;
+  }
+
   const role = currentUserData?.rol;
   const isAdminTeknisyen = role === 'admin' || role === 'teknisyen';
 
   listeEl.innerHTML = `
+    ${G_AYLIK_SADECE_YAPILMADI ? `
+    <div class="card" style="padding:10px 16px;margin-bottom:4px;background:rgba(239,68,68,.06);border-color:rgba(239,68,68,.25);display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:12px;color:#EF4444;font-weight:600;">🔍 Sadece "Yapılmadı" binalar gösteriliyor (${filtreliKayitlar.length} bina)</span>
+      <button onclick="aylikSadeceYapilmadiToggle()" style="font-size:11px;color:#94A3B8;background:none;border:none;cursor:pointer;text-decoration:underline;">Filtreyi kaldır</button>
+    </div>` : `
     <div class="card" style="padding:10px 16px;margin-bottom:4px;background:rgba(15,23,42,.4);">
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#64748B;">
         <span>Tamamlanma Oranı</span>
         <span style="font-weight:700;color:#E2E8F0;">${oran}%</span>
       </div>
       <div class="prog-bar" style="margin-top:6px;"><div class="prog-fill" style="width:${oran}%"></div></div>
-    </div>
-  ` + kayitlar.map(k => {
+    </div>`}
+  ` + filtreliKayitlar.map(k => {
     const yapildiMi = k.durum === 'yapildi';
     const renk = yapildiMi ? '#10B981' : '#EF4444';
     const bgRenk = yapildiMi ? 'rgba(16,185,129,.06)' : 'rgba(239,68,68,.06)';
@@ -1388,8 +1420,8 @@ window.resetBinaForm = function() {
 // bina adı önceden doldurulmuş şekilde açar.
 window.hizliBakimEkle = (binaAdi) => {
   resetBakimForm?.();
-  document.getElementById('f-bakim-bina').value = binaAdi;
   openModal('mBakim');
+  document.getElementById('f-bakim-bina').value = binaAdi;
 };
 
 window.hizliArizaEkle = (binaAdi) => {
@@ -4892,6 +4924,18 @@ window.openModal  = (id) => {
       if (binaList) binaList.innerHTML = G_BINALAR.map(b => `<option value="${b.ad}">`).join('');
     }
   }
+  // Bakım Planla modalı açılırken, "Bina Adı" seçici sadece Cari
+  // Yönetimi'nde kayıtlı binalarla doldurulur — serbest/yanlış isim
+  // girilip kayıtsız bir cariye bakım atanması engellenir.
+  if (id === 'mBakim') {
+    const binaSel = document.getElementById('f-bakim-bina');
+    if (binaSel) {
+      const mevcut = binaSel.value;
+      binaSel.innerHTML = '<option value="">— Cari Seçin —</option>' +
+        G_BINALAR.map(b => `<option value="${b.ad}">${b.ad}</option>`).join('');
+      if (mevcut) binaSel.value = mevcut;
+    }
+  }
 };
 window.closeModal = (id) => { document.getElementById('modal-'+id).classList.remove('open'); };
 window.openMobileSidebar  = () => { document.getElementById('dbSidebar').classList.add('open'); document.getElementById('sidebarOverlay').style.display='block'; };
@@ -6302,7 +6346,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <button onclick="closeModal('mBakim')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
     </div>
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
-      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label><input id="f-bakim-bina" type="text" class="db-input" placeholder="Tuna Apartmanı"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label>
+        <select id="f-bakim-bina" class="db-input"><option value="">— Cari Seçin —</option></select>
+        <p style="font-size:10px;color:#64748B;margin-top:5px;">ℹ️ Sadece Cari Yönetimi'nde kayıtlı binalar seçilebilir.</p>
+      </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kabin</label><input id="f-bakim-kabin" type="text" class="db-input" placeholder="Kabin #1"/></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-bakim-tarih" type="date" class="db-input"/></div>
