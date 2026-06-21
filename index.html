@@ -505,22 +505,6 @@ function subscribeAll() {
   const binaNorm = (bina || '').trim().toLocaleLowerCase('tr-TR');
   const binaEslesir = (deger) => (deger || '').trim().toLocaleLowerCase('tr-TR') === binaNorm;
 
-  // ── GEÇİCİ TEŞHİS PANELİ ──
-  // Bina rolündeki kullanıcılar için, ekranın üstünde her zaman görünen
-  // küçük bir bilgi şeridi gösterir: gerçek rol, gerçek "bina" değeri ve
-  // bu kod sürümünün çalıştığına dair bir işaret. Sorun çözülünce
-  // kaldırılacaktır.
-  if (role === 'bina') {
-    let panel = document.getElementById('binaTeshisPaneli');
-    if (!panel) {
-      panel = document.createElement('div');
-      panel.id = 'binaTeshisPaneli';
-      panel.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;background:#7C3AED;color:#fff;font-size:11px;font-family:monospace;padding:6px 12px;text-align:center;';
-      document.body.prepend(panel);
-    }
-    panel.textContent = `[TEŞHİS v2] rol="${role}" | bina="${bina}" | binaNorm="${binaNorm}"`;
-  }
-
   // Müşteri Talepleri (site iletişim formu) — sadece admin/teknisyen görür
   if (role === 'admin' || role === 'teknisyen') {
     const talepQ = query(collection(db, 'talepler'), orderBy('tarih', 'desc'));
@@ -4576,18 +4560,6 @@ function doldurMusteriSecimi() {
 function renderMusteriCariListesi() {
   const tbody = document.getElementById('musteriCariTableBody');
   if (!tbody) return;
-
-  // GEÇİCİ TEŞHİS: G_BINALAR'da gerçekte kaç kayıt var, hangi binalar
-  if (currentUserData?.rol === 'bina') {
-    let panel2 = document.getElementById('binaTeshisPaneli2');
-    if (!panel2) {
-      panel2 = document.createElement('div');
-      panel2.id = 'binaTeshisPaneli2';
-      panel2.style.cssText = 'position:fixed;top:26px;left:0;right:0;z-index:999999;background:#DC2626;color:#fff;font-size:11px;font-family:monospace;padding:6px 12px;text-align:center;';
-      document.body.prepend(panel2);
-    }
-    panel2.textContent = `[TEŞHİS v2] G_BINALAR.length=${G_BINALAR.length} | binalar=[${G_BINALAR.map(b=>b.ad).join(', ')}]`;
-  }
 
   if (!G_BINALAR.length) {
     tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz bina kaydı yok.</td></tr>`;
