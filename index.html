@@ -26,6 +26,7 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 
@@ -965,6 +966,7 @@ function renderBakimlar(data) {
             <button onclick="gecmisFisiGoster('${b.id}')" style="flex:1;padding:10px;font-size:12px;font-weight:700;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:8px;cursor:pointer;">📄 Fişi Görüntüle</button>
             <button onclick="checklistDuzenle('${b.id}')" class="admin-only" style="flex:1;padding:10px;font-size:12px;font-weight:700;background:rgba(245,158,11,.12);color:#F59E0B;border:1px solid rgba(245,158,11,.25);border-radius:8px;cursor:pointer;">✏️ Düzenle</button>
           </div>
+          <button onclick="gecmisFisiGosterExcel('${b.id}')" style="width:100%;padding:8px;font-size:11px;font-weight:700;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.2);border-radius:8px;cursor:pointer;margin-bottom:8px;">⬇ Excel Olarak İndir</button>
         ` : ''}
         <button onclick="deleteBakim('${b.id}')" class="btn-ghost admin-only" style="width:100%;padding:8px;font-size:11px;">Sil</button>
       `}
@@ -2825,6 +2827,31 @@ window.gecmisFisiGoster = async (bakimId) => {
   await downloadBakimFisiPDF(asansor, kayit.checklistMaddeleri, kayit.notlar, tarih, kayit.teknisyen);
 };
 
+// Bakım fişini gerçek bir .xlsx dosyası olarak indirir — checklist
+// maddeleri "Yapıldı/Yapılmadı" sütunuyla birlikte listelenir.
+window.gecmisFisiGosterExcel = (bakimId) => {
+  const kayit = G_BAKIMLAR.find(b => b.id === bakimId);
+  if (!kayit) { alert('Bakım kaydı bulunamadı.'); return; }
+  if (!kayit.checklistMaddeleri) { alert('Bu kayıt için kontrol listesi verisi bulunamadı.'); return; }
+
+  const tarih = kayit.tamamlanmaTarihi?.toDate ? kayit.tamamlanmaTarihi.toDate() : new Date(kayit.tarih);
+  const yapilanMaddeler = kayit.checklistMaddeleri;
+
+  const satirlar = [
+    ['Bakım Fişi'],
+    [`Bina: ${kayit.bina}${kayit.kabin ? ' — '+kayit.kabin : ''}`],
+    [`Tarih: ${tarih.toLocaleDateString('tr-TR')}`, `Saat: ${tarih.toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' })}`],
+    [`Bakımı Yapan Teknisyen: ${kayit.teknisyen || '—'}`],
+    [],
+    ['Madde', 'Durum'],
+    ...BAKIM_CHECKLIST_MADDELERI.map(madde => [madde, yapilanMaddeler.includes(madde) ? 'Yapıldı' : 'Yapılmadı']),
+    [],
+    ['Teknisyen Notu', kayit.notlar || '—'],
+  ];
+
+  xlsxIndir(satirlar, `Bakim_Fisi_${kayit.bina.replace(/\s+/g,'_')}_${tarih.toISOString().slice(0,10)}.xlsx`, 'Bakım Fişi');
+};
+
 window.qrHizliArizaBildir = () => {
   const asansor = G_QR_AKTIF_ASANSOR;
   closeModal('mQrHizliBakim');
@@ -3205,24 +3232,36 @@ function csvHucre(deger) {
   return /[",\n;]/.test(s) ? `"${s}"` : s;
 }
 
-function csvIndir(satirlar, dosyaAdi) {
-  const BOM = '\uFEFF'; // Excel'in Türkçe karakterleri doğru göstermesi için
-  const icerik = BOM + satirlar.map(satir => satir.map(csvHucre).join(';')).join('\r\n');
-  const blob = new Blob([icerik], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = dosyaAdi;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+// Verilen 2D satır dizisini gerçek bir .xlsx dosyası olarak indirir.
+// SheetJS (XLSX.utils) kullanır — Excel'de hiçbir uyarı/dönüştürme
+// istemi çıkmadan doğrudan açılan, gerçek Excel formatıdır.
+function xlsxIndir(satirlar, dosyaAdi, sayfaAdi = 'Sayfa1') {
+  if (typeof XLSX === 'undefined') {
+    alert('Excel kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.');
+    return;
+  }
+  const ws = XLSX.utils.aoa_to_sheet(satirlar);
+
+  // Sütun genişliklerini içerikteki en uzun değere göre otomatik ayarla
+  const sutunSayisi = Math.max(...satirlar.map(s => s.length));
+  ws['!cols'] = Array.from({ length: sutunSayisi }, (_, i) => {
+    const maxLen = satirlar.reduce((max, satir) => {
+      const deger = satir[i];
+      const uzunluk = deger === null || deger === undefined ? 0 : String(deger).length;
+      return Math.max(max, uzunluk);
+    }, 8);
+    return { wch: Math.min(maxLen + 2, 45) };
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sayfaAdi);
+  XLSX.writeFile(wb, dosyaAdi);
 }
 
 window.exportBinalarCSV = () => {
   const satirlar = [['Cari Kodu', 'Bina / Cari Adı', 'Adres', 'Yetkili Kişi', 'Telefon', 'Vergi/TC No', 'Asansör Sayısı', 'Sözleşme', 'Durum']];
   G_BINALAR.forEach(b => satirlar.push([b.cariKodu||'', b.ad, b.adres||'', b.yetkili||'', b.telefon||'', b.vergiNo||'', b.asansorSayisi||'', b.sozlesme||'', b.durum||'']));
-  csvIndir(satirlar, `cari_listesi_${new Date().toISOString().slice(0,10)}.csv`);
+  xlsxIndir(satirlar, `cari_listesi_${new Date().toISOString().slice(0,10)}.xlsx`, 'Cari Listesi');
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3291,6 +3330,10 @@ window.tamYedekJSON = () => {
 };
 
 window.tamYedekExcel = () => {
+  if (typeof XLSX === 'undefined') {
+    alert('Excel kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.');
+    return;
+  }
   const veri = yedekVeriHaritasi();
   const tabloBasliklari = {
     cariler: ['Cari Kodu','Ad','Adres','Yetkili','Telefon','Vergi No','Asansör Sayısı','Sözleşme','Durum'],
@@ -3314,29 +3357,40 @@ window.tamYedekExcel = () => {
     avanslar: a => [a.personelAd||'', a.tutar||'', a.tarih||'', a.not||''],
     giderler: g => [g.kategori||'', g.tutar||'', g.tarih||'', g.aciklama||'', g.kaydeden||''],
   };
+  // Sayfa (sheet/tab) adları Excel kısıtlamasına uygun (31 karakter, özel karaktersiz)
+  const sayfaAdlari = {
+    cariler: 'Cariler', bakimlar: 'Bakımlar', arizalar: 'Arızalar',
+    sozlesmeler: 'Sözleşmeler', odemeler: 'Ödemeler', borclar: 'Borçlar',
+    asansorler: 'Asansörler', avanslar: 'Avanslar', giderler: 'Giderler',
+  };
 
-  // Tek CSV içinde her tabloyu başlıkla ayırarak art arda yazıyoruz
-  // (ek kütüphane gerektirmeden, Excel'de açılınca sekme/bölüm gibi görünür)
-  const satirlar = [];
+  const wb = XLSX.utils.book_new();
   let toplamKayit = 0;
+  let sayfaSayisi = 0;
+
   Object.keys(tabloBasliklari).forEach(tabloAdi => {
     const kayitlar = veri[tabloAdi] || [];
     if (!kayitlar.length) return;
-    satirlar.push([`═══ ${tabloAdi.toUpperCase()} (${kayitlar.length} kayıt) ═══`]);
-    satirlar.push(tabloBasliklari[tabloAdi]);
-    kayitlar.forEach(k => satirlar.push(tabloDegerCikar[tabloAdi](k)));
-    satirlar.push([]); // boş satır ile ayır
+    const satirlar = [tabloBasliklari[tabloAdi], ...kayitlar.map(tabloDegerCikar[tabloAdi])];
+    const ws = XLSX.utils.aoa_to_sheet(satirlar);
+    const sutunSayisi = tabloBasliklari[tabloAdi].length;
+    ws['!cols'] = Array.from({ length: sutunSayisi }, (_, i) => {
+      const maxLen = satirlar.reduce((max, satir) => Math.max(max, String(satir[i] ?? '').length), 8);
+      return { wch: Math.min(maxLen + 2, 45) };
+    });
+    XLSX.utils.book_append_sheet(wb, ws, sayfaAdlari[tabloAdi]);
     toplamKayit += kayitlar.length;
+    sayfaSayisi++;
   });
 
-  csvIndir(satirlar, `AS-EL_Tam_Yedek_${new Date().toISOString().slice(0,10)}.csv`);
-  yedekDurumGoster(`✓ Excel/CSV yedek indirildi — ${toplamKayit} kayıt, ${Object.keys(tabloBasliklari).filter(t=>(veri[t]||[]).length).length} tablo.`);
+  XLSX.writeFile(wb, `AS-EL_Tam_Yedek_${new Date().toISOString().slice(0,10)}.xlsx`);
+  yedekDurumGoster(`✓ Excel yedek indirildi — ${toplamKayit} kayıt, ${sayfaSayisi} sayfa (her tablo kendi sekmesinde).`);
 };
 
 window.exportOdemelerCSV = () => {
   const satirlar = [['Bina', 'Tarih', 'Tutar (TL)', 'Ödeme Türü', 'Açıklama', 'Kaydeden']];
   G_ODEMELER.forEach(o => satirlar.push([o.bina, o.tarih, o.tutar||0, o.tur||'', o.aciklama||'', o.kaydeden||'']));
-  csvIndir(satirlar, `odemeler_${new Date().toISOString().slice(0,10)}.csv`);
+  xlsxIndir(satirlar, `odemeler_${new Date().toISOString().slice(0,10)}.xlsx`, 'Ödemeler');
 };
 
 window.exportBakimlarCSV = () => {
@@ -3345,7 +3399,7 @@ window.exportBakimlarCSV = () => {
     const d = tarihToDate(b.tarih);
     satirlar.push([b.bina, b.kabin||'', b.tip||'', d?d.toLocaleDateString('tr-TR'):(b.tarih||''), b.teknisyen||'', b.durum||'']);
   });
-  csvIndir(satirlar, `bakimlar_${new Date().toISOString().slice(0,10)}.csv`);
+  xlsxIndir(satirlar, `bakimlar_${new Date().toISOString().slice(0,10)}.xlsx`, 'Bakımlar');
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3420,7 +3474,7 @@ window.renderGiderler = function() {
 window.exportGiderlerCSV = () => {
   const satirlar = [['Tarih', 'Kategori', 'Açıklama', 'Tutar (TL)', 'Kaydeden']];
   G_GIDERLER.forEach(g => satirlar.push([g.tarih, g.kategori||'', g.aciklama||'', g.tutar||0, g.kaydeden||'']));
-  csvIndir(satirlar, `giderler_${new Date().toISOString().slice(0,10)}.csv`);
+  xlsxIndir(satirlar, `giderler_${new Date().toISOString().slice(0,10)}.xlsx`, 'Giderler');
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3642,7 +3696,7 @@ window.yillikRaporExcel = () => {
   satirlar.push(['Dönem', 'Personel', 'Aylık Maaş (₺)', 'Fazla Mesai (₺)', 'Avans Kesintisi (₺)', 'Net Ödenen (₺)', 'Ödeme Tarihi']);
   veri.detayMaaslar.forEach(m => satirlar.push([m.ayKey, m.personelAd||'', m.aylikMaas||0, m.fazlaMesaiUcreti||0, m.avansToplam||0, m.netOdenen||0, m.odemeTarihi||'']));
 
-  csvIndir(satirlar, `AS-EL_Yillik_Mali_Rapor_${yil}.csv`);
+  xlsxIndir(satirlar, `AS-EL_Yillik_Mali_Rapor_${yil}.xlsx`, 'Yıllık Rapor');
 };
 
 window.yillikRaporPDF = async () => {
@@ -3753,6 +3807,7 @@ window.renderMuhasebe = function() {
         <td style="padding:12px;font-size:12px;color:#64748B;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${o.aciklama||'—'}</td>
         <td style="padding:12px;display:flex;gap:8px;">
           <button onclick="downloadMakbuz('${o.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">📄 Makbuz</button>
+          <button onclick="downloadMakbuzExcel('${o.id}')" style="font-size:11px;color:#10B981;background:none;border:none;cursor:pointer;margin-left:6px;">⬇ Excel</button>
           <button onclick="deleteOdeme('${o.id}','${(o.bina||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
         </td>
       </tr>`).join('');
@@ -4107,6 +4162,40 @@ window.downloadBordroPDF = async (personelId, personelAd, aylikMaas, ayKey) => {
   await renderHtmlToPdf('pdfBordroSablon', `Bordro_${personelAd.replace(/\s+/g,'_')}_${ayKey}.pdf`);
 };
 
+// Maaş bordrosunu gerçek bir .xlsx dosyası olarak indirir (PDF'in
+// Excel karşılığı — aynı hesaplamalardan üretilir).
+window.downloadBordroExcel = (personelId, personelAd, aylikMaas, ayKey) => {
+  const buAyAvans = G_AVANSLAR.filter(a => a.personelId === personelId && (a.tarih||'').startsWith(ayKey))
+                               .reduce((s,a) => s + (a.tutar||0), 0);
+  const mesai = fazlaMesaiHesapla(personelId, aylikMaas, ayKey);
+  const brutToplam = aylikMaas + mesai.fazlaMesaiUcreti;
+  const netOdenecek = brutToplam - buAyAvans;
+
+  const ayAdlari = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+  const [yil, ay] = ayKey.split('-');
+  const donemEtiket = `${ayAdlari[parseInt(ay)-1]} ${yil}`;
+  const bordroNo = 'BRD-' + (personelId+ayKey).replace(/[^a-zA-Z0-9]/g,'').slice(0,8).toUpperCase();
+
+  const satirlar = [
+    [`Maaş Bordrosu — ${personelAd}`],
+    [`Dönem: ${donemEtiket}`, `Bordro No: ${bordroNo}`],
+    [],
+    ['Kalem', 'Tutar'],
+    ['Aylık Maaş', aylikMaas],
+    [`Fazla Mesai Ücreti (${mesai.fazlaSaat.toFixed(1)} saat × 1.5)`, mesai.fazlaMesaiUcreti],
+    ['Brüt Toplam', brutToplam],
+    ['Avans Kesintisi', -buAyAvans],
+    ['Net Ödenecek', netOdenecek],
+    [],
+    ['Mesai Detayı', ''],
+    ['Toplam Çalışılan Saat', mesai.toplamCalisilanSaat.toFixed(1)],
+    ['Fazla Mesai Saati', mesai.fazlaSaat.toFixed(1)],
+    ['Saatlik Ücret', mesai.saatlikUcret.toFixed(0)],
+  ];
+
+  xlsxIndir(satirlar, `Bordro_${personelAd.replace(/\s+/g,'_')}_${ayKey}.xlsx`, 'Bordro');
+};
+
 /* ═══════════════════════════════════════════════════════════════
    VARDİYA KURALLARI VE FAZLA MESAİ HESABI
    - Hafta içi (Pzt-Cuma): normal vardiya 08:30-18:00. Bu aralığın
@@ -4265,6 +4354,7 @@ window.renderMaaslar = function() {
       </td>
       <td style="padding:12px;text-align:right;display:flex;gap:8px;justify-content:flex-end;">
         <button onclick="downloadBordroPDF('${m.personelId}','${m.personelAd.replace(/'/g,"\\'")}',${m.aylikMaas},'${ayKey}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">📄 Bordro</button>
+        <button onclick="downloadBordroExcel('${m.personelId}','${m.personelAd.replace(/'/g,"\\'")}',${m.aylikMaas},'${ayKey}')" style="font-size:11px;color:#10B981;background:none;border:none;cursor:pointer;margin-left:6px;">⬇ Excel</button>
         ${odemeKaydi
           ? `<button onclick="maasOdemeGeriAl('${odemeKaydi.id}')" class="admin-only" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;">Geri Al</button>`
           : `<button onclick="maasOdendiIsaretle('${m.personelId}','${m.personelAd.replace(/'/g,"\\'")}',${m.aylikMaas},'${ayKey}')" class="admin-only" style="font-size:11px;color:#10B981;background:none;border:none;cursor:pointer;font-weight:700;">✓ Ödendi İşaretle</button>`}
@@ -4658,7 +4748,10 @@ window.renderMusteriCariDetay = () => {
           <h3 style="font-size:14px;font-weight:800;color:#E2E8F0;">${binaAdi} — Cari Ekstresi</h3>
           <p style="font-size:11px;color:#475569;margin-top:3px;">Anlaşma: ${bina?.anlasmaTipi || 'Yok'} ${bina?.anlasmaTutar ? '· '+bina.anlasmaTutar.toLocaleString('tr-TR')+' ₺'+(bina.anlasmaPeriyodik?'/ay (otomatik)':' (tek seferlik)') : ''}</p>
         </div>
-        <button onclick="downloadMusteriEkstresi('${binaAdi.replace(/'/g,"\\'")}')" class="btn-sm" style="padding:9px 16px;">📄 Ekstre PDF İndir</button>
+        <div style="display:flex;gap:8px;">
+          <button onclick="downloadMusteriEkstresi('${binaAdi.replace(/'/g,"\\'")}')" class="btn-sm" style="padding:9px 16px;">📄 Ekstre PDF İndir</button>
+          <button onclick="downloadMusteriEkstresiExcel('${binaAdi.replace(/'/g,"\\'")}')" class="btn-ghost" style="padding:9px 16px;">⬇ Excel İndir</button>
+        </div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
         <div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);border-radius:8px;padding:12px;">
@@ -4758,6 +4851,40 @@ window.downloadMusteriEkstresi = async (binaAdi) => {
   await renderHtmlToPdf('pdfEkstreSablon', `Cari_Ekstre_${binaAdi.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.pdf`);
 };
 
+// Müşteri Cari Ekstresi'ni gerçek bir .xlsx dosyası olarak indirir
+// (PDF'in Excel karşılığı — aynı veriden üretilir).
+window.downloadMusteriEkstresiExcel = (binaAdi) => {
+  const bina = G_BINALAR.find(b => b.ad === binaAdi);
+  const borclar = G_BORCLAR.filter(x => x.bina === binaAdi);
+  const tahsilatlar = G_ODEMELER.filter(o => o.bina === binaAdi);
+  const toplamBorc = borclar.reduce((s,x) => s + (x.tutar||0), 0);
+  const toplamTahsilat = tahsilatlar.reduce((s,o) => s + (o.tutar||0), 0);
+  const netBakiye = toplamTahsilat - toplamBorc;
+
+  const hareketler = [
+    ...borclar.map(x => ({ tarih: x.tarih, tip:'Borç', aciklama: x.aciklama || x.tip || 'Anlaşma bedeli', tutar: -(x.tutar||0) })),
+    ...tahsilatlar.map(o => ({ tarih: o.tarih, tip:'Tahsilat', aciklama: o.aciklama || o.tur || 'Ödeme', tutar: o.tutar||0 }))
+  ].sort((a,b) => (a.tarih||'').localeCompare(b.tarih||''));
+
+  let kumulatif = 0;
+  const satirlar = [
+    [`${binaAdi} — Cari Ekstresi`],
+    [`Anlaşma: ${bina?.anlasmaTipi || 'Yok'}${bina?.anlasmaTutar ? ' · '+bina.anlasmaTutar.toLocaleString('tr-TR')+' ₺'+(bina.anlasmaPeriyodik?'/ay (otomatik)':' (tek seferlik)') : ''}`],
+    [],
+    ['Toplam Borç', -toplamBorc],
+    ['Toplam Tahsilat', toplamTahsilat],
+    ['Net Bakiye', netBakiye],
+    [],
+    ['Tarih', 'Tür', 'Açıklama', 'Tutar', 'Bakiye'],
+  ];
+  hareketler.forEach(h => {
+    kumulatif += h.tutar;
+    satirlar.push([h.tarih || '', h.tip, h.aciklama, h.tutar, kumulatif]);
+  });
+
+  xlsxIndir(satirlar, `Cari_Ekstre_${binaAdi.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.xlsx`, 'Cari Ekstresi');
+};
+
 /* ═══════════════════════════════════════════════════════════════
    MAKBUZ — PDF İNDİRME (jsPDF)
 ═══════════════════════════════════════════════════════════════ */
@@ -4783,6 +4910,32 @@ window.downloadMakbuz = async (odemeId) => {
   document.getElementById('pm-tutar').textContent = (o.tutar||0).toLocaleString('tr-TR') + ' ₺';
 
   await renderHtmlToPdf('pdfMakbuzSablon', `Makbuz_${(o.bina||'').replace(/\s+/g,'_')}_${o.tarih}.pdf`);
+};
+
+// Tahsilat makbuzunu gerçek bir .xlsx dosyası olarak indirir.
+window.downloadMakbuzExcel = (odemeId) => {
+  const o = G_ODEMELER.find(x => x.id === odemeId);
+  if (!o) { alert('Ödeme kaydı bulunamadı.'); return; }
+
+  const odemeTarihi = (() => {
+    const d = new Date(o.tarih);
+    return isNaN(d) ? (o.tarih || '—') : d.toLocaleDateString('tr-TR');
+  })();
+
+  const satirlar = [
+    ['Tahsilat Makbuzu'],
+    [`Makbuz No: MKB-${odemeId.slice(0,8).toUpperCase()}`, `Düzenleme Tarihi: ${new Date().toLocaleDateString('tr-TR')}`],
+    [],
+    ['Alan', 'Değer'],
+    ['Bina', o.bina || '—'],
+    ['Ödeme Tarihi', odemeTarihi],
+    ['Ödeme Türü', o.tur || '—'],
+    ['Kaydeden', o.kaydeden || '—'],
+    ['Açıklama', o.aciklama || '—'],
+    ['Tutar', o.tutar || 0],
+  ];
+
+  xlsxIndir(satirlar, `Makbuz_${(o.bina||'').replace(/\s+/g,'_')}_${o.tarih}.xlsx`, 'Makbuz');
 };
 
 // HTML şablonunu canvas'a, sonra PDF'e dönüştüren ortak yardımcı fonksiyon.
