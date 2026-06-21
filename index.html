@@ -223,6 +223,37 @@ function showLoginError(msg) {
   const el = document.getElementById('loginErr');
   el.querySelector('span').textContent = msg;
   el.style.display = 'flex';
+
+  // Görsel geri bildirim: giriş kartını salla, alanları kırmızı vurgula.
+  const kart = document.querySelector('.login-card');
+  const luInput = document.getElementById('lu');
+  const lpInput = document.getElementById('lp');
+
+  [kart, luInput, lpInput].forEach(elm => {
+    if (!elm) return;
+    elm.classList.remove('login-shake');
+  });
+
+  // Bir sonraki frame'de class'ı tekrar ekle (animasyonun yeniden tetiklenmesi için)
+  requestAnimationFrame(() => {
+    if (kart) kart.classList.add('login-shake');
+    if (luInput) luInput.classList.add('login-input-error');
+    if (lpInput) lpInput.classList.add('login-input-error');
+  });
+
+  setTimeout(() => {
+    if (kart) kart.classList.remove('login-shake');
+  }, 550);
+
+  // Kullanıcı tekrar yazmaya başlayınca kırmızı vurgu otomatik kalksın
+  const temizle = () => {
+    luInput?.classList.remove('login-input-error');
+    lpInput?.classList.remove('login-input-error');
+    luInput?.removeEventListener('input', temizle);
+    lpInput?.removeEventListener('input', temizle);
+  };
+  luInput?.addEventListener('input', temizle);
+  lpInput?.addEventListener('input', temizle);
 }
 
 function resetLoginButton() {
@@ -889,7 +920,10 @@ function renderBakimlar(data) {
         </div>
       ` : `
         ${b.checklistMaddeleri ? `
-          <button onclick="gecmisFisiGoster('${b.id}')" style="width:100%;padding:10px;font-size:12px;font-weight:700;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:8px;cursor:pointer;margin-bottom:8px;">📄 Bakım Fişini Görüntüle</button>
+          <div style="display:flex;gap:8px;margin-bottom:8px;">
+            <button onclick="gecmisFisiGoster('${b.id}')" style="flex:1;padding:10px;font-size:12px;font-weight:700;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:8px;cursor:pointer;">📄 Fişi Görüntüle</button>
+            <button onclick="checklistDuzenle('${b.id}')" class="admin-only" style="flex:1;padding:10px;font-size:12px;font-weight:700;background:rgba(245,158,11,.12);color:#F59E0B;border:1px solid rgba(245,158,11,.25);border-radius:8px;cursor:pointer;">✏️ Düzenle</button>
+          </div>
         ` : ''}
         <button onclick="deleteBakim('${b.id}')" class="btn-ghost admin-only" style="width:100%;padding:8px;font-size:11px;">Sil</button>
       `}
@@ -2454,11 +2488,14 @@ const BAKIM_CHECKLIST_MADDELERI = [
 ];
 
 let G_CHECKLIST_ISARETLI = new Set(); // şu an açık olan checklist'te işaretli madde indeksleri
+let G_CHECKLIST_DUZENLEME_ID = null;  // null ise yeni kayıt modu; bir bakım ID'si ise düzenleme modu
+let G_CHECKLIST_TAMAMLAMA_ID = null;  // "Bakım Planla" ile eklenmiş bekleyen bir kaydı checklist ile tamamlama modu
 
 window.qrChecklistAc = () => {
   const asansor = G_QR_AKTIF_ASANSOR;
   if (!asansor) return;
 
+  G_CHECKLIST_DUZENLEME_ID = null; // yeni kayıt modu
   G_CHECKLIST_ISARETLI = new Set();
   document.getElementById('checklistBinaAdi').textContent = `${asansor.bina}${asansor.kabin ? ' — '+asansor.kabin : ''}`;
   document.getElementById('checklistNot').value = '';
@@ -2471,6 +2508,40 @@ window.qrChecklistAc = () => {
     </label>`).join('');
 
   checklistIlerlemeGuncelle();
+  openModal('mBakimChecklist');
+};
+
+// Bakım Takibi'ndeki tamamlanmış bir checklist kaydını düzenlemek için
+// açar — önceden işaretli maddeler ve not, kayıttaki haliyle yüklenir.
+// "Bakımı Tamamla ve Kaydet" dendiğinde yeni kayıt oluşturmaz, mevcut
+// kaydı günceller ve PDF'i güncel verilerle yeniden üretir.
+window.checklistDuzenle = (bakimId) => {
+  const kayit = G_BAKIMLAR.find(b => b.id === bakimId);
+  if (!kayit) { alert('Bakım kaydı bulunamadı.'); return; }
+  if (!kayit.checklistMaddeleri) { alert('Bu kayıt için kontrol listesi verisi bulunamadı.'); return; }
+
+  G_CHECKLIST_DUZENLEME_ID = bakimId;
+  G_CHECKLIST_ISARETLI = new Set(
+    BAKIM_CHECKLIST_MADDELERI
+      .map((madde, i) => kayit.checklistMaddeleri.includes(madde) ? i : null)
+      .filter(i => i !== null)
+  );
+
+  document.getElementById('checklistBinaAdi').textContent = `${kayit.bina}${kayit.kabin ? ' — '+kayit.kabin : ''} — Düzenleme Modu`;
+  document.getElementById('checklistNot').value = (kayit.notlar && kayit.notlar !== 'QR kod ile sahadan kontrol listesi dolduruldu.') ? kayit.notlar : '';
+
+  const liste = document.getElementById('checklistMaddeleri');
+  liste.innerHTML = BAKIM_CHECKLIST_MADDELERI.map((madde, i) => {
+    const isaretli = G_CHECKLIST_ISARETLI.has(i);
+    return `
+    <label data-idx="${i}" onclick="checklistMaddeToggle(${i})" class="checklist-satir ${isaretli ? 'checklist-satir-isaretli' : ''}">
+      <span class="checklist-kutu ${isaretli ? 'checklist-kutu-isaretli' : ''}">${isaretli ? '✓' : '\u200B'}</span>
+      <span class="checklist-metin">${madde}</span>
+    </label>`;
+  }).join('');
+
+  checklistIlerlemeGuncelle();
+  document.getElementById('checklistTamamlaBtn').textContent = '✓ Düzeltmeleri Kaydet';
   openModal('mBakimChecklist');
 };
 
@@ -2500,20 +2571,77 @@ function checklistIlerlemeGuncelle() {
   document.getElementById('checklistProgressMetin').textContent = `${yapilan} / ${toplam} madde`;
 }
 
-// Checklist tamamlanınca: işaretli maddeler + not ile bakım kaydı
-// oluşturulur (hem aylikBakimlar hem bakimlar koleksiyonuna), ardından
-// logolu Bakım Fişi PDF'i otomatik üretilip indirilir.
+// Checklist tamamlanınca: YENİ KAYIT modundaysa işaretli maddeler + not
+// ile bakım kaydı oluşturulur (hem aylikBakimlar hem bakimlar
+// koleksiyonuna). DÜZENLEME modundaysa, sadece mevcut bakimlar
+// dökümanı güncellenir (yeni kayıt veya aylikBakimlar değişikliği
+// yapılmaz — sadece checklist içeriği ve not düzeltilir).
+// Her iki modda da işlem sonunda PDF güncel verilerle yeniden üretilir.
 window.checklistTamamla = async () => {
-  const asansor = G_QR_AKTIF_ASANSOR;
-  if (!asansor) return;
   if (!baglantiKontrolEt()) return;
-
-  if (G_CHECKLIST_ISARETLI.size === 0) {
-    if (!confirm('Hiçbir madde işaretlemediniz. Yine de bakımı tamamlamak istiyor musunuz?')) return;
-  }
 
   const not = document.getElementById('checklistNot').value.trim();
   const yapilanMaddeler = BAKIM_CHECKLIST_MADDELERI.filter((_, i) => G_CHECKLIST_ISARETLI.has(i));
+
+  if (G_CHECKLIST_ISARETLI.size === 0) {
+    if (!confirm('Hiçbir madde işaretlemediniz. Yine de kaydetmek istiyor musunuz?')) return;
+  }
+
+  // ── DÜZENLEME MODU ──
+  if (G_CHECKLIST_DUZENLEME_ID) {
+    const kayit = G_BAKIMLAR.find(b => b.id === G_CHECKLIST_DUZENLEME_ID);
+    if (!kayit) { alert('Bakım kaydı bulunamadı.'); return; }
+
+    try {
+      await updateDoc(doc(db, 'bakimlar', G_CHECKLIST_DUZENLEME_ID), {
+        checklistMaddeleri: yapilanMaddeler,
+        notlar: not || 'QR kod ile sahadan kontrol listesi dolduruldu.',
+        duzenlemeTarihi: serverTimestamp(),
+        duzenleyenKisi: currentUserData?.ad || '—'
+      });
+
+      closeModal('mBakimChecklist');
+      document.getElementById('checklistTamamlaBtn').textContent = '✓ Bakımı Tamamla ve Kaydet';
+      G_CHECKLIST_DUZENLEME_ID = null;
+
+      const tarih = kayit.tamamlanmaTarihi?.toDate ? kayit.tamamlanmaTarihi.toDate() : new Date(kayit.tarih);
+      await downloadBakimFisiPDF({ bina: kayit.bina, kabin: kayit.kabin || '' }, yapilanMaddeler, not, tarih, kayit.teknisyen);
+
+      alert('✓ Bakım fişi düzeltmeleri kaydedildi.');
+    } catch(e) {
+      alert('Hata: ' + e.message);
+    }
+    return;
+  }
+
+  // ── MANUEL TAMAMLAMA MODU ("Bakım Planla" ile eklenmiş bekleyen bir kaydı tamamlama) ──
+  if (G_CHECKLIST_TAMAMLAMA_ID) {
+    const kayit = G_BAKIMLAR.find(b => b.id === G_CHECKLIST_TAMAMLAMA_ID);
+    if (!kayit) { alert('Bakım kaydı bulunamadı.'); return; }
+
+    try {
+      await updateDoc(doc(db, 'bakimlar', G_CHECKLIST_TAMAMLAMA_ID), {
+        durum: 'tamamlandi',
+        tamamlanmaTarihi: serverTimestamp(),
+        checklistMaddeleri: yapilanMaddeler,
+        checklistToplam: BAKIM_CHECKLIST_MADDELERI.length,
+        notlar: not || kayit.notlar || 'Kontrol listesi dolduruldu.'
+      });
+
+      closeModal('mBakimChecklist');
+      G_CHECKLIST_TAMAMLAMA_ID = null;
+
+      await downloadBakimFisiPDF({ bina: kayit.bina, kabin: kayit.kabin || '' }, yapilanMaddeler, not, new Date(), currentUserData?.ad);
+    } catch(e) {
+      alert('Hata: ' + e.message);
+    }
+    return;
+  }
+
+  // ── YENİ KAYIT MODU (QR ile sahadan ilk kez doldurma) ──
+  const asansor = G_QR_AKTIF_ASANSOR;
+  if (!asansor) return;
+
   const ayKey = new Date().toISOString().slice(0,7);
   const bugun = new Date();
 
@@ -2554,6 +2682,7 @@ window.checklistTamamla = async () => {
 
     // Bakım fişini otomatik PDF olarak indir
     await downloadBakimFisiPDF(asansor, yapilanMaddeler, not, bugun, currentUserData?.ad);
+
 
   } catch(e) {
     alert('Hata: ' + e.message);
@@ -4635,9 +4764,27 @@ window.saveBakim = async () => {
   } catch(e) { alert('Hata: ' + e.message); }
 };
 
-window.completeBakim = async (id) => {
-  if (!baglantiKontrolEt()) return;
-  await updateDoc(doc(db, 'bakimlar', id), { durum: 'tamamlandi', tamamlanmaTarihi: serverTimestamp() });
+window.completeBakim = (id) => {
+  const kayit = G_BAKIMLAR.find(b => b.id === id);
+  if (!kayit) { alert('Bakım kaydı bulunamadı.'); return; }
+
+  G_CHECKLIST_TAMAMLAMA_ID = id;
+  G_CHECKLIST_DUZENLEME_ID = null;
+  G_CHECKLIST_ISARETLI = new Set();
+
+  document.getElementById('checklistBinaAdi').textContent = `${kayit.bina}${kayit.kabin ? ' — '+kayit.kabin : ''}`;
+  document.getElementById('checklistNot').value = '';
+
+  const liste = document.getElementById('checklistMaddeleri');
+  liste.innerHTML = BAKIM_CHECKLIST_MADDELERI.map((madde, i) => `
+    <label data-idx="${i}" onclick="checklistMaddeToggle(${i})" class="checklist-satir">
+      <span class="checklist-kutu">​</span>
+      <span class="checklist-metin">${madde}</span>
+    </label>`).join('');
+
+  checklistIlerlemeGuncelle();
+  document.getElementById('checklistTamamlaBtn').textContent = '✓ Bakımı Tamamla ve Kaydet';
+  openModal('mBakimChecklist');
 };
 
 window.deleteBakim = async (id) => {
@@ -4937,7 +5084,18 @@ window.openModal  = (id) => {
     }
   }
 };
-window.closeModal = (id) => { document.getElementById('modal-'+id).classList.remove('open'); };
+window.closeModal = (id) => {
+  document.getElementById('modal-'+id).classList.remove('open');
+  // Checklist modalı (kaydetmeden) kapatılırsa, düzenleme/tamamlama
+  // modu durumu sıfırlanır — yoksa sonraki bir QR taramasında
+  // yanlışlıkla bu moda girebilir.
+  if (id === 'mBakimChecklist') {
+    G_CHECKLIST_DUZENLEME_ID = null;
+    G_CHECKLIST_TAMAMLAMA_ID = null;
+    const btn = document.getElementById('checklistTamamlaBtn');
+    if (btn) btn.textContent = '✓ Bakımı Tamamla ve Kaydet';
+  }
+};
 window.openMobileSidebar  = () => { document.getElementById('dbSidebar').classList.add('open'); document.getElementById('sidebarOverlay').style.display='block'; };
 window.closeMobileSidebar = () => { document.getElementById('dbSidebar').classList.remove('open'); document.getElementById('sidebarOverlay').style.display='none'; };
 
@@ -5027,6 +5185,9 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
   animation: popIn .22s cubic-bezier(.34,1.56,.64,1);
 }
 @keyframes popIn { from{opacity:0;transform:scale(.94) translateY(12px)} to{opacity:1;transform:scale(1)} }
+@keyframes shakeError { 0%,100%{transform:translateX(0)} 15%{transform:translateX(-10px)} 30%{transform:translateX(8px)} 45%{transform:translateX(-6px)} 60%{transform:translateX(4px)} 75%{transform:translateX(-2px)} 90%{transform:translateX(1px)} }
+.login-shake { animation: shakeError .5s cubic-bezier(.36,.07,.19,.97); }
+.login-input-error { border-color: #EF4444 !important; box-shadow: 0 0 0 3px rgba(239,68,68,.15) !important; }
 
 .l-input {
   background: rgba(8,12,20,.8); border: 1px solid rgba(51,65,85,.8);
