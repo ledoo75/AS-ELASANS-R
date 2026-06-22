@@ -162,6 +162,22 @@ const AUTO_PROFILES = {
   // Yeni kullanıcı ekleyince buraya da ekleyin
 };
 
+// "Beni Hatırla" ile kaydedilmiş kullanıcı adı/şifre varsa, giriş
+// formu açıldığında otomatik doldurur ve checkbox'ı işaretler.
+(function girisFormunuOnDoldur() {
+  try {
+    const kayitli = localStorage.getItem('asel_beni_hatirla');
+    if (!kayitli) return;
+    const { u, p } = JSON.parse(kayitli);
+    const luEl = document.getElementById('lu');
+    const lpEl = document.getElementById('lp');
+    const checkboxEl = document.getElementById('luBeniHatirla');
+    if (luEl) luEl.value = u || '';
+    if (lpEl) lpEl.value = p || '';
+    if (checkboxEl) checkboxEl.checked = true;
+  } catch(e) { /* bozuk veri varsa sessizce geç */ }
+})();
+
 onAuthStateChanged(auth, async (user) => {
   qrDebugGoster(`onAuthStateChanged tetiklendi. user: ${user ? user.email : '(giriş yapılmamış)'}`);
   if (user) {
@@ -286,8 +302,22 @@ window.doLogin = async () => {
   const pass     = document.getElementById('lp').value;
   const btn      = document.getElementById('loginBtn');
   const err      = document.getElementById('loginErr');
+  const beniHatirla = document.getElementById('luBeniHatirla')?.checked;
 
   if (!username || !pass) { showLoginError('Kullanıcı adı ve şifre giriniz.'); return; }
+
+  // "Beni Hatırla" işaretliyse kullanıcı adı/şifreyi tarayıcıda sakla,
+  // işaretli değilse önceden kaydedilmiş olabilecek bilgiyi temizle.
+  // Not: Bu bilgi düz metin olarak localStorage'da tutulur — yalnızca
+  // kullanıcının kendi isteğiyle (riski bilerek) etkinleştirdiği bir
+  // kolaylık özelliğidir.
+  if (beniHatirla) {
+    try {
+      localStorage.setItem('asel_beni_hatirla', JSON.stringify({ u: username, p: pass }));
+    } catch(e) { /* localStorage kullanılamıyorsa sessizce geç */ }
+  } else {
+    try { localStorage.removeItem('asel_beni_hatirla'); } catch(e) {}
+  }
 
   const email = username.includes('@') ? username : usernameToFakeEmail(username);
 
@@ -3531,6 +3561,23 @@ function maliOzetVerisiHesapla() {
     if (bakiye < 0) { bekleyenTahsilat += Math.abs(bakiye); borcluCariSayisi++; }
   });
 
+  // ── GEÇİCİ TEŞHİS ──
+  // Gerçek cariBakiyeMap içeriğini ve ham G_BORCLAR/G_ODEMELER bina
+  // adlarını ekranda görünür şekilde gösterir, hangi isimlerin neden
+  // ayrı sayıldığını net olarak ortaya çıkarmak için.
+  if (currentUserData?.rol === 'admin') {
+    let panel = document.getElementById('maliTeshisPaneli');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'maliTeshisPaneli';
+      panel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:999999;background:#7C3AED;color:#fff;font-size:10px;font-family:monospace;padding:8px 12px;max-height:200px;overflow-y:auto;white-space:pre-wrap;';
+      document.body.appendChild(panel);
+    }
+    const borclarBinaListesi = G_BORCLAR.map(b => `"${b.bina}"`).join(', ');
+    const odemelerBinaListesi = G_ODEMELER.map(o => `"${o.bina}"`).join(', ');
+    panel.textContent = `[MALİ TEŞHİS]\ncariBakiyeMap (${Object.keys(cariBakiyeMap).length} anahtar): ${JSON.stringify(cariBakiyeMap)}\nG_BORCLAR bina adları (${G_BORCLAR.length}): ${borclarBinaListesi}\nG_ODEMELER bina adları (${G_ODEMELER.length}): ${odemelerBinaListesi}`;
+  }
+
   return { toplamGelir, toplamGider, toplamGiderFirma, toplamAvans, netKar, gelirKirilim, giderKirilim, ayFiltre, bekleyenTahsilat, borcluCariSayisi };
 }
 
@@ -5910,6 +5957,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           <button onclick="toggleLP()" style="position:absolute;right:11px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#475569;display:flex;"><svg viewBox="0 0 24 24" style="width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
         </div>
       </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:18px;cursor:pointer;user-select:none;">
+        <input id="luBeniHatirla" type="checkbox" style="width:16px;height:16px;accent-color:#00ADB5;cursor:pointer;"/>
+        <span style="font-size:12px;color:#94A3B8;">Beni hatırla</span>
+      </label>
       <button id="loginBtn" class="btn-login" onclick="doLogin()">Giriş Yap</button>
     </div>
     <div style="padding:14px 26px 22px;margin-top:14px;border-top:1px solid rgba(30,41,59,.5);text-align:center;">
