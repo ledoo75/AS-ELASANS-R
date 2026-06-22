@@ -460,6 +460,16 @@ function aramaEslesir(terim, ...degerler) {
   return degerler.some(d => normalize(d).includes(t));
 }
 
+// İki bina adının, harf büyüklüğü ve baştaki/sondaki boşluk farkına
+// bakılmaksızın AYNI cari olup olmadığını kontrol eder. Bina adı
+// birden çok koleksiyonda (borclar, odemeler, bakimlar, vb.) serbest
+// metin olarak tutulduğu için, "Karadağ Apartman" ile "KARADAĞ APARTMAN"
+// gibi farklı yazımlar olmadan bu fonksiyon kullanılmadan yapılan ===
+// karşılaştırması aynı cariyi farklı carilermiş gibi ikiye böler.
+function binaAdiEslesir(ad1, ad2) {
+  return (ad1 || '').trim().toLocaleLowerCase('tr-TR') === (ad2 || '').trim().toLocaleLowerCase('tr-TR');
+}
+
 window.aramaGuncelle = (sayfa, terim) => {
   G_ARAMA[sayfa] = terim;
   const renderMap = {
@@ -1017,10 +1027,10 @@ async function otomatikAylikBakimOlustur() {
   const ayKey = `${bugun.getFullYear()}-${String(bugun.getMonth()+1).padStart(2,'0')}`;
 
   for (const bina of G_BINALAR) {
-    const sozlesme = G_SOZLESMELER.find(s => s.bina === bina.ad);
+    const sozlesme = G_SOZLESMELER.find(s => binaAdiEslesir(s.bina, bina.ad));
     if (sozlesme?.tip === 'Sadece Arıza Hizmeti') continue; // periyodik bakımı olmayan bina
 
-    const mevcut = G_AYLIK_BAKIMLAR.find(a => a.bina === bina.ad && a.ayKey === ayKey);
+    const mevcut = G_AYLIK_BAKIMLAR.find(a => binaAdiEslesir(a.bina, bina.ad) && a.ayKey === ayKey);
     if (mevcut) continue; // bu ay için zaten var
 
     try {
@@ -1086,7 +1096,7 @@ window.aylikDurumDegistir = async (id, yeniDurum, binaAdi) => {
     // otomatik olarak o teknisyen adıyla somut bir bakım kaydı da oluştur
     // (Bakım Takibi geçmişinde ve teknisyen performansında görünsün).
     if (yeniDurum === 'yapildi' && binaAdi) {
-      const bina = G_BINALAR.find(b => b.ad === binaAdi);
+      const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, binaAdi));
       const teknisyenAd = bina?.sorumluTeknisyenAd || currentUserData?.ad || '—';
       await addDoc(collection(db, 'bakimlar'), {
         bina: binaAdi, kabin: '', tip: 'Aylık Periyodik',
@@ -1151,7 +1161,7 @@ function renderAylikTakip() {
   const binaAdlari = new Set(kayitlar.map(k => k.bina));
   G_BINALAR.forEach(b => {
     if (binaAdlari.has(b.ad)) return;
-    const sozlesme = G_SOZLESMELER.find(s => s.bina === b.ad);
+    const sozlesme = G_SOZLESMELER.find(s => binaAdiEslesir(s.bina, b.ad));
     if (sozlesme?.tip === 'Sadece Arıza Hizmeti') return;
     kayitlar.push({ id: null, bina: b.ad, ayKey, durum: 'kayitYok' });
   });
@@ -1236,7 +1246,7 @@ function renderAylikTakip() {
         <div style="font-size:11px;color:${renk};font-weight:600;margin-top:2px;">
           ${yapildiMi ? `✓ Bu ay bakımı yapıldı ${k.yapanKisi ? '— '+k.yapanKisi : ''}` : '✗ Bu ay henüz bakım yapılmadı'}
         </div>
-        ${(() => { const b = G_BINALAR.find(x => x.ad === k.bina); return b?.sorumluTeknisyenAd ? `<div style="font-size:10px;color:#475569;margin-top:2px;">👤 Sorumlu: ${b.sorumluTeknisyenAd}</div>` : ''; })()}
+        ${(() => { const b = G_BINALAR.find(x => binaAdiEslesir(x.ad, k.bina)); return b?.sorumluTeknisyenAd ? `<div style="font-size:10px;color:#475569;margin-top:2px;">👤 Sorumlu: ${b.sorumluTeknisyenAd}</div>` : ''; })()}
       </div>
       ${isAdminTeknisyen ? `
         ${k.id ? `
@@ -1728,7 +1738,7 @@ function renderBinaDashboard() {
 
   // Bu ayın bakım durumu (Aylık Bakım Takibi verisinden)
   const ayKey = new Date().toISOString().slice(0,7);
-  const buAyinKaydi = G_AYLIK_BAKIMLAR.find(a => a.bina === binaAdi && a.ayKey === ayKey);
+  const buAyinKaydi = G_AYLIK_BAKIMLAR.find(a => binaAdiEslesir(a.bina, binaAdi) && a.ayKey === ayKey);
   const bakimIkon = document.getElementById('bina-dash-bakimDurum');
   const bakimMetin = document.getElementById('bina-dash-bakimMetin');
   if (bakimIkon && bakimMetin) {
@@ -2067,7 +2077,7 @@ async function downloadSozlesmePDF(s) {
     return;
   }
 
-  const bina = G_BINALAR.find(b => b.ad === s.bina);
+  const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, s.bina));
   const baslikMap = { 'Bakım': 'ASANSÖR BAKIM SÖZLEŞMESİ', 'Montaj': 'ASANSÖR MONTAJ SÖZLEŞMESİ', 'Revizyon': 'ASANSÖR REVİZYON SÖZLEŞMESİ' };
 
   document.getElementById('ps-sozNo').textContent = 'SOZ-' + (s.id || Date.now().toString()).slice(0,8).toUpperCase();
@@ -2106,7 +2116,7 @@ async function downloadAnaSozlesmePDF(s) {
     return;
   }
 
-  const bina = G_BINALAR.find(b => b.ad === s.bina);
+  const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, s.bina));
   const bugunStr = new Date().toLocaleDateString('tr-TR');
   const baslangicStr = s.baslangicTarihi ? new Date(s.baslangicTarihi).toLocaleDateString('tr-TR') : bugunStr;
 
@@ -2518,7 +2528,7 @@ function qrHizliEkraniDoldur(asansor) {
   document.getElementById('qrHizliKabinAdi').textContent = asansor.kabin || '';
 
   const ayKey = new Date().toISOString().slice(0,7);
-  const buAyinKaydi = G_AYLIK_BAKIMLAR.find(a => a.bina === asansor.bina && a.ayKey === ayKey);
+  const buAyinKaydi = G_AYLIK_BAKIMLAR.find(a => binaAdiEslesir(a.bina, asansor.bina) && a.ayKey === ayKey);
 
   const durumKutu = document.getElementById('qrHizliDurumKutu');
   const durumMetin = document.getElementById('qrHizliDurumMetin');
@@ -2735,7 +2745,7 @@ window.checklistTamamla = async () => {
   const bugun = new Date();
 
   try {
-    const mevcutKayit = G_AYLIK_BAKIMLAR.find(a => a.bina === asansor.bina && a.ayKey === ayKey);
+    const mevcutKayit = G_AYLIK_BAKIMLAR.find(a => binaAdiEslesir(a.bina, asansor.bina) && a.ayKey === ayKey);
     if (mevcutKayit) {
       await updateDoc(doc(db, 'aylikBakimlar', mevcutKayit.id), {
         durum: 'yapildi', yapilmaTarihi: serverTimestamp(), yapanKisi: currentUserData?.ad || '—'
@@ -3506,9 +3516,15 @@ function maliOzetVerisiHesapla() {
   // çünkü bu "şu anki güncel açık bakiye" anlamına gelir, belirli bir aya ait değildir.
   // Her cari için: toplam borç - toplam tahsilat = o carinin açık bakiyesi.
   // Sadece borçlu (negatif net bakiyesi olan) cariler toplanır.
+  // ÖNEMLİ: anahtar olarak NORMALİZE EDİLMİŞ (küçük harf + trim) bina adı
+  // kullanılır — aynı carinin "Karadağ Apartman" / "KARADAĞ APARTMAN" gibi
+  // farklı harf büyüklüğüyle yazılmış kayıtları yanlışlıkla İKİ AYRI cari
+  // gibi sayılıp mükerrer borç oluşturmasın diye (bu olmadan toplam tutar
+  // ve cari sayısı gerçekte olduğundan fazla çıkar).
+  const normalizeBinaAdi = (ad) => (ad || '').trim().toLocaleLowerCase('tr-TR');
   const cariBakiyeMap = {};
-  G_BORCLAR.forEach(b => { cariBakiyeMap[b.bina] = (cariBakiyeMap[b.bina]||0) - (b.tutar||0); });
-  G_ODEMELER.forEach(o => { cariBakiyeMap[o.bina] = (cariBakiyeMap[o.bina]||0) + (o.tutar||0); });
+  G_BORCLAR.forEach(b => { const k = normalizeBinaAdi(b.bina); cariBakiyeMap[k] = (cariBakiyeMap[k]||0) - (b.tutar||0); });
+  G_ODEMELER.forEach(o => { const k = normalizeBinaAdi(o.bina); cariBakiyeMap[k] = (cariBakiyeMap[k]||0) + (o.tutar||0); });
   let bekleyenTahsilat = 0;
   let borcluCariSayisi = 0;
   Object.values(cariBakiyeMap).forEach(bakiye => {
@@ -4691,9 +4707,9 @@ function renderMusteriCariListesi() {
   }
 
   tbody.innerHTML = binalarFiltreli.map(b => {
-    const borclar = G_BORCLAR.filter(x => x.bina === b.ad);
+    const borclar = G_BORCLAR.filter(x => binaAdiEslesir(x.bina, b.ad));
     const toplamBorc = borclar.reduce((s,x) => s + (x.tutar||0), 0);
-    const tahsilatlar = G_ODEMELER.filter(o => o.bina === b.ad);
+    const tahsilatlar = G_ODEMELER.filter(o => binaAdiEslesir(o.bina, b.ad));
     const toplamTahsilat = tahsilatlar.reduce((s,o) => s + (o.tutar||0), 0);
     const netBakiye = toplamTahsilat - toplamBorc; // pozitif: cari alacaklı/dengeli, negatif: borçlu
 
@@ -4721,9 +4737,9 @@ window.renderMusteriCariDetay = () => {
   const detayEl = document.getElementById('musteriCariDetay');
   if (!binaAdi) { detayEl.style.display = 'none'; return; }
 
-  const bina = G_BINALAR.find(b => b.ad === binaAdi);
-  const borclar = G_BORCLAR.filter(x => x.bina === binaAdi);
-  const tahsilatlar = G_ODEMELER.filter(o => o.bina === binaAdi);
+  const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, binaAdi));
+  const borclar = G_BORCLAR.filter(x => binaAdiEslesir(x.bina, binaAdi));
+  const tahsilatlar = G_ODEMELER.filter(o => binaAdiEslesir(o.bina, binaAdi));
   const toplamBorc = borclar.reduce((s,x) => s + (x.tutar||0), 0);
   const toplamTahsilat = tahsilatlar.reduce((s,o) => s + (o.tutar||0), 0);
   const netBakiye = toplamTahsilat - toplamBorc;
@@ -4797,9 +4813,9 @@ window.downloadMusteriEkstresi = async (binaAdi) => {
     return;
   }
 
-  const bina = G_BINALAR.find(b => b.ad === binaAdi);
-  const borclar = G_BORCLAR.filter(x => x.bina === binaAdi);
-  const tahsilatlar = G_ODEMELER.filter(o => o.bina === binaAdi);
+  const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, binaAdi));
+  const borclar = G_BORCLAR.filter(x => binaAdiEslesir(x.bina, binaAdi));
+  const tahsilatlar = G_ODEMELER.filter(o => binaAdiEslesir(o.bina, binaAdi));
   const toplamBorc = borclar.reduce((s,x) => s + (x.tutar||0), 0);
   const toplamTahsilat = tahsilatlar.reduce((s,o) => s + (o.tutar||0), 0);
   const netBakiye = toplamTahsilat - toplamBorc;
@@ -4854,9 +4870,9 @@ window.downloadMusteriEkstresi = async (binaAdi) => {
 // Müşteri Cari Ekstresi'ni gerçek bir .xlsx dosyası olarak indirir
 // (PDF'in Excel karşılığı — aynı veriden üretilir).
 window.downloadMusteriEkstresiExcel = (binaAdi) => {
-  const bina = G_BINALAR.find(b => b.ad === binaAdi);
-  const borclar = G_BORCLAR.filter(x => x.bina === binaAdi);
-  const tahsilatlar = G_ODEMELER.filter(o => o.bina === binaAdi);
+  const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, binaAdi));
+  const borclar = G_BORCLAR.filter(x => binaAdiEslesir(x.bina, binaAdi));
+  const tahsilatlar = G_ODEMELER.filter(o => binaAdiEslesir(o.bina, binaAdi));
   const toplamBorc = borclar.reduce((s,x) => s + (x.tutar||0), 0);
   const toplamTahsilat = tahsilatlar.reduce((s,o) => s + (o.tutar||0), 0);
   const netBakiye = toplamTahsilat - toplamBorc;
@@ -5052,7 +5068,7 @@ window.sendBakimReminder = (bakimId) => {
   const b = G_BAKIMLAR.find(x => x.id === bakimId);
   if (!b) return;
 
-  const bina = G_BINALAR.find(x => x.ad === b.bina);
+  const bina = G_BINALAR.find(x => binaAdiEslesir(x.ad, b.bina));
   const tel = bina?.telefon ? bina.telefon.replace(/[^0-9]/g, '') : '';
 
   const tarihStr = (() => {
