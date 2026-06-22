@@ -1440,6 +1440,28 @@ window.saveBina = async () => {
         });
       }
 
+      // YENİ CARİ → Otomatik Sözleşme (sozlesmeler) oluştur
+      const bugunTarih = new Date();
+      const baslangicTarihi = bugunTarih.toISOString().slice(0,10);
+      const bitisDate = new Date(bugunTarih);
+      bitisDate.setMonth(bitisDate.getMonth() + 12); // Varsayılan 12 ay süreli sözleşme
+      const bitisTarihi = bitisDate.toISOString().slice(0,10);
+
+      await addDoc(collection(db, 'sozlesmeler'), {
+        bina: ad,
+        tip: anlasmaTipi || 'Bakım',
+        tutar: anlasmaTutar || 0,
+        odemeGunu: 5, // Varsayılan ödeme günü
+        baslangicTarihi: baslangicTarihi,
+        sureAy: 12,
+        bitisTarihi: bitisTarihi,
+        sonOdemeTarihi: '',
+        durum: 'bekliyor',
+        not: 'Cari oluşturulurken sistem tarafından otomatik tanımlanmıştır.',
+        olusturuldu: serverTimestamp(),
+        guncellendi: serverTimestamp()
+      });
+
       // YENİ CARİ → otomatik olarak bu ayın Aylık Bakım Takibi kaydını hemen aç.
       // "Sadece Arıza Hizmeti" sözleşmesi seçilmediyse periyodik bakımı var demektir.
       if (sozlesme !== 'Sadece Arıza Hizmeti') {
