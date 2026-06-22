@@ -490,14 +490,17 @@ function aramaEslesir(terim, ...degerler) {
   return degerler.some(d => normalize(d).includes(t));
 }
 
-// İki bina adının, harf büyüklüğü ve baştaki/sondaki boşluk farkına
-// bakılmaksızın AYNI cari olup olmadığını kontrol eder. Bina adı
-// birden çok koleksiyonda (borclar, odemeler, bakimlar, vb.) serbest
-// metin olarak tutulduğu için, "Karadağ Apartman" ile "KARADAĞ APARTMAN"
-// gibi farklı yazımlar olmadan bu fonksiyon kullanılmadan yapılan ===
-// karşılaştırması aynı cariyi farklı carilermiş gibi ikiye böler.
+// İki bina adının, harf büyüklüğü ve fazladan/baştaki/sondaki boşluk
+// farkına bakılmaksızın AYNI cari olup olmadığını kontrol eder. Bina
+// adı birden çok koleksiyonda (borclar, odemeler, bakimlar, vb.) serbest
+// metin olarak tutulduğu için, "Karadağ Apartman" ile "KARADAĞ  APARTMAN"
+// (fazladan boşluklu) gibi farklı yazımlar bu fonksiyon kullanılmadan
+// yapılan === karşılaştırmasıyla aynı cariyi farklı carilermiş gibi ikiye böler.
+function binaAdiNormalize(ad) {
+  return (ad || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('tr-TR');
+}
 function binaAdiEslesir(ad1, ad2) {
-  return (ad1 || '').trim().toLocaleLowerCase('tr-TR') === (ad2 || '').trim().toLocaleLowerCase('tr-TR');
+  return binaAdiNormalize(ad1) === binaAdiNormalize(ad2);
 }
 
 window.aramaGuncelle = (sayfa, terim) => {
@@ -537,30 +540,15 @@ window.bakimBinaAramaGuncelle = (terim) => {
 function subscribeAll() {
   const role = currentUserData?.rol;
   const bina = currentUserData?.bina || null;
-  // Bina adı karşılaştırmaları büyük/küçük harf ve baştaki/sondaki boşluk
-  // farklarına karşı dayanıklı olsun diye normalize edilmiş hali de
-  // hazırlanır. Firestore'daki kullanıcı kaydında "bina" alanı yanlışlıkla
-  // farklı harf büyüklüğüyle girilse bile (örn. "KARADAĞ APARTMAN" vs
+  // Bina adı karşılaştırmaları büyük/küçük harf, fazladan/baştaki/sondaki
+  // boşluk farklarına karşı dayanıklı olsun diye normalize edilmiş hali de
+  // hazırlanır (paylaşılan binaAdiNormalize fonksiyonu kullanılır).
+  // Firestore'daki kullanıcı kaydında "bina" alanı yanlışlıkla farklı
+  // harf büyüklüğüyle girilse bile (örn. "KARADAĞ APARTMAN" vs
   // "Karadağ Apartman"), eşleştirme yine doğru çalışır — bu, veri
   // tutarsızlığının ciddi bir gizlilik açığına dönüşmesini önler.
-  const binaNorm = (bina || '').trim().toLocaleLowerCase('tr-TR');
-  const binaEslesir = (deger) => (deger || '').trim().toLocaleLowerCase('tr-TR') === binaNorm;
-
-  // ── GEÇİCİ TEŞHİS PANELİ ──
-  // Bina rolündeki kullanıcılar için, ekranın üstünde her zaman görünen
-  // küçük bir bilgi şeridi gösterir: gerçek rol, gerçek "bina" değeri ve
-  // bu kod sürümünün çalıştığına dair bir işaret. Sorun çözülünce
-  // kaldırılacaktır.
-  if (role === 'bina') {
-    let panel = document.getElementById('binaTeshisPaneli');
-    if (!panel) {
-      panel = document.createElement('div');
-      panel.id = 'binaTeshisPaneli';
-      panel.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;background:#7C3AED;color:#fff;font-size:11px;font-family:monospace;padding:6px 12px;text-align:center;';
-      document.body.prepend(panel);
-    }
-    panel.textContent = `[TEŞHİS v2] rol="${role}" | bina="${bina}" | binaNorm="${binaNorm}"`;
-  }
+  const binaNorm = binaAdiNormalize(bina);
+  const binaEslesir = (deger) => binaAdiNormalize(deger) === binaNorm;
 
   // Müşteri Talepleri (site iletişim formu) — sadece admin/teknisyen görür
   if (role === 'admin' || role === 'teknisyen') {
@@ -3549,34 +3537,29 @@ function maliOzetVerisiHesapla() {
   // ÖNEMLİ: anahtar olarak NORMALİZE EDİLMİŞ (küçük harf + trim) bina adı
   // kullanılır — aynı carinin "Karadağ Apartman" / "KARADAĞ APARTMAN" gibi
   // farklı harf büyüklüğüyle yazılmış kayıtları yanlışlıkla İKİ AYRI cari
-  // gibi sayılıp mükerrer borç oluşturmasın diye (bu olmadan toplam tutar
-  // ve cari sayısı gerçekte olduğundan fazla çıkar).
-  const normalizeBinaAdi = (ad) => (ad || '').trim().toLocaleLowerCase('tr-TR');
+  // gibi sayılıp mükerrer borç oluşturmasın diye.
+  // AYRICA: sadece Cari Yönetimi'nde HÂLÂ KAYITLI olan binalar sayılır —
+  // silinmiş/kayıtsız bir cariye ait eski borç/ödeme kaydı varsa (Firestore'da
+  // veri kaybı önlemek için silinmiyor), bu artık "bekleyen tahsilat"a
+  // dahil edilmez; çünkü o cari artık panelde yönetilen, gerçek bir
+  // müşteri değildir.
+  const kayitliBinaAdlariNormalize = new Set(G_BINALAR.map(b => binaAdiNormalize(b.ad)));
   const cariBakiyeMap = {};
-  G_BORCLAR.forEach(b => { const k = normalizeBinaAdi(b.bina); cariBakiyeMap[k] = (cariBakiyeMap[k]||0) - (b.tutar||0); });
-  G_ODEMELER.forEach(o => { const k = normalizeBinaAdi(o.bina); cariBakiyeMap[k] = (cariBakiyeMap[k]||0) + (o.tutar||0); });
+  G_BORCLAR.forEach(b => {
+    const k = binaAdiNormalize(b.bina);
+    if (!kayitliBinaAdlariNormalize.has(k)) return; // kayıtsız/silinmiş cari, atla
+    cariBakiyeMap[k] = (cariBakiyeMap[k]||0) - (b.tutar||0);
+  });
+  G_ODEMELER.forEach(o => {
+    const k = binaAdiNormalize(o.bina);
+    if (!kayitliBinaAdlariNormalize.has(k)) return; // kayıtsız/silinmiş cari, atla
+    cariBakiyeMap[k] = (cariBakiyeMap[k]||0) + (o.tutar||0);
+  });
   let bekleyenTahsilat = 0;
   let borcluCariSayisi = 0;
   Object.values(cariBakiyeMap).forEach(bakiye => {
     if (bakiye < 0) { bekleyenTahsilat += Math.abs(bakiye); borcluCariSayisi++; }
   });
-
-  // ── GEÇİCİ TEŞHİS ──
-  // Gerçek cariBakiyeMap içeriğini ve ham G_BORCLAR/G_ODEMELER bina
-  // adlarını ekranda görünür şekilde gösterir, hangi isimlerin neden
-  // ayrı sayıldığını net olarak ortaya çıkarmak için.
-  if (currentUserData?.rol === 'admin') {
-    let panel = document.getElementById('maliTeshisPaneli');
-    if (!panel) {
-      panel = document.createElement('div');
-      panel.id = 'maliTeshisPaneli';
-      panel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:999999;background:#7C3AED;color:#fff;font-size:10px;font-family:monospace;padding:8px 12px;max-height:200px;overflow-y:auto;white-space:pre-wrap;';
-      document.body.appendChild(panel);
-    }
-    const borclarBinaListesi = G_BORCLAR.map(b => `"${b.bina}"`).join(', ');
-    const odemelerBinaListesi = G_ODEMELER.map(o => `"${o.bina}"`).join(', ');
-    panel.textContent = `[MALİ TEŞHİS]\ncariBakiyeMap (${Object.keys(cariBakiyeMap).length} anahtar): ${JSON.stringify(cariBakiyeMap)}\nG_BORCLAR bina adları (${G_BORCLAR.length}): ${borclarBinaListesi}\nG_ODEMELER bina adları (${G_ODEMELER.length}): ${odemelerBinaListesi}`;
-  }
 
   return { toplamGelir, toplamGider, toplamGiderFirma, toplamAvans, netKar, gelirKirilim, giderKirilim, ayFiltre, bekleyenTahsilat, borcluCariSayisi };
 }
@@ -4729,18 +4712,6 @@ function doldurMusteriSecimi() {
 function renderMusteriCariListesi() {
   const tbody = document.getElementById('musteriCariTableBody');
   if (!tbody) return;
-
-  // GEÇİCİ TEŞHİS: G_BINALAR'da gerçekte kaç kayıt var, hangi binalar
-  if (currentUserData?.rol === 'bina') {
-    let panel2 = document.getElementById('binaTeshisPaneli2');
-    if (!panel2) {
-      panel2 = document.createElement('div');
-      panel2.id = 'binaTeshisPaneli2';
-      panel2.style.cssText = 'position:fixed;top:26px;left:0;right:0;z-index:999999;background:#DC2626;color:#fff;font-size:11px;font-family:monospace;padding:6px 12px;text-align:center;';
-      document.body.prepend(panel2);
-    }
-    panel2.textContent = `[TEŞHİS v2] G_BINALAR.length=${G_BINALAR.length} | binalar=[${G_BINALAR.map(b=>b.ad).join(', ')}]`;
-  }
 
   if (!G_BINALAR.length) {
     tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz bina kaydı yok.</td></tr>`;
