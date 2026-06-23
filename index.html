@@ -895,6 +895,7 @@ function renderBinalar(data) {
       <td style="padding:12px;">${durumBadge(b.durum || 'ok')}</td>
       <td style="padding:12px;">
         <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+          <button onclick="binaYolTarifiAc(${b.lat ?? 'null'}, ${b.lng ?? 'null'}, '${(b.adres||'').replace(/'/g,"\\'")}', '${b.ad.replace(/'/g,"\\'")}')" title="Yol Tarifi Al" style="font-size:13px;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🧭</button>
           <button onclick="hizliBakimEkle('${b.ad.replace(/'/g,"\\'")}')" title="Bakım Ekle" class="admin-only" style="font-size:13px;background:rgba(16,185,129,.12);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🔧</button>
           <button onclick="hizliArizaEkle('${b.ad.replace(/'/g,"\\'")}')" title="Arıza Bildir" style="font-size:13px;background:rgba(239,68,68,.12);color:#EF4444;border:1px solid rgba(239,68,68,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">⚠️</button>
           <button onclick="hizliOdemeEkle('${b.ad.replace(/'/g,"\\'")}')" title="Ödeme Kaydet" class="admin-only" style="font-size:13px;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">💰</button>
@@ -1380,6 +1381,10 @@ window.saveBina = async () => {
   const ad              = document.getElementById('f-bina-ad').value.trim();
   const cariKodu        = document.getElementById('f-bina-cariKodu').value.trim();
   const adres           = document.getElementById('f-bina-adres').value.trim();
+  const latRaw          = document.getElementById('f-bina-lat').value.trim();
+  const lngRaw          = document.getElementById('f-bina-lng').value.trim();
+  const lat             = latRaw ? parseFloat(latRaw.replace(',', '.')) : null;
+  const lng             = lngRaw ? parseFloat(lngRaw.replace(',', '.')) : null;
   const yetkili         = document.getElementById('f-bina-yetkili').value.trim();
   const telefon         = document.getElementById('f-bina-telefon').value.trim();
   const vergiNo         = document.getElementById('f-bina-vergiNo').value.trim();
@@ -1410,6 +1415,8 @@ window.saveBina = async () => {
 
   const data = {
     ad, cariKodu: finalCariKodu, adres, yetkili, telefon, vergiNo,
+    lat: (lat !== null && !isNaN(lat)) ? lat : null,
+    lng: (lng !== null && !isNaN(lng)) ? lng : null,
     asansorSayisi: asansor, sozlesme, durum,
     sorumluTeknisyenId, sorumluTeknisyenAd,
     anlasmaTipi, anlasmaTutar, anlasmaPeriyodik,
@@ -1512,6 +1519,11 @@ window.editBina = async (id) => {
   document.getElementById('f-bina-ad').value               = b.ad || '';
   document.getElementById('f-bina-cariKodu').value         = b.cariKodu || '';
   document.getElementById('f-bina-adres').value             = b.adres || '';
+  document.getElementById('f-bina-lat').value                = (b.lat !== undefined && b.lat !== null) ? b.lat : '';
+  document.getElementById('f-bina-lng').value                = (b.lng !== undefined && b.lng !== null) ? b.lng : '';
+  document.getElementById('f-bina-konumDurum').textContent   = (b.lat && b.lng)
+    ? 'ℹ️ Bu bina için konum kayıtlı. Teknisyenler tek dokunuşla yol tarifi alabilir.'
+    : 'ℹ️ Binadayken "Şu Anki Konumumu Kullan" butonuna basarsanız konum otomatik doldurulur. Teknisyenler daha sonra bu binaya tek dokunuşla yol tarifi alabilir.';
   document.getElementById('f-bina-yetkili').value           = b.yetkili || '';
   document.getElementById('f-bina-telefon').value           = b.telefon || '';
   document.getElementById('f-bina-vergiNo').value           = b.vergiNo || '';
@@ -1534,13 +1546,74 @@ window.deleteBina = async (id, ad) => {
 
 window.resetBinaForm = function() {
   binaSorumluTeknisyenSeciciDoldur();
-  ['f-bina-ad','f-bina-cariKodu','f-bina-adres','f-bina-yetkili','f-bina-telefon','f-bina-vergiNo','f-bina-asansor','f-bina-anlasmaTutar'].forEach(id => document.getElementById(id).value = '');
+  ['f-bina-ad','f-bina-cariKodu','f-bina-adres','f-bina-lat','f-bina-lng','f-bina-yetkili','f-bina-telefon','f-bina-vergiNo','f-bina-asansor','f-bina-anlasmaTutar'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-bina-konumDurum').textContent = 'ℹ️ Binadayken "Şu Anki Konumumu Kullan" butonuna basarsanız konum otomatik doldurulur. Teknisyenler daha sonra bu binaya tek dokunuşla yol tarifi alabilir.';
   document.getElementById('f-bina-sorumluTeknisyen').value = '';
   document.getElementById('f-bina-anlasmaTipi').value = '';
   document.getElementById('f-bina-anlasmaPeriyodik').checked = false;
   document.getElementById('f-bina-editId').value = '';
   document.getElementById('mBinaTitle').textContent = 'Yeni Cari Ekle';
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   KONUM — Bina formuna GPS ile konum doldurma
+   "Şu Anki Konumumu Kullan" butonuna basıldığında tarayıcının
+   GPS'i ile o anki enlem/boylamı alıp forma yazar. Bina sahasında
+   (binanın önünde) iken kaydedilirse, daha sonra teknisyenler
+   tek dokunuşla bu binaya yol tarifi alabilir.
+═══════════════════════════════════════════════════════════════ */
+window.binaKonumumuKullan = function() {
+  const btn = document.getElementById('f-bina-konumBtn');
+  const durumEl = document.getElementById('f-bina-konumDurum');
+  if (!navigator.geolocation) {
+    durumEl.textContent = '⚠️ Tarayıcınız konum özelliğini desteklemiyor. Koordinatları manuel girebilirsiniz.';
+    durumEl.style.color = '#EF4444';
+    return;
+  }
+  const eskiMetin = btn.textContent;
+  btn.textContent = '📍 Konum alınıyor...';
+  btn.disabled = true;
+  durumEl.style.color = '#64748B';
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      document.getElementById('f-bina-lat').value = pos.coords.latitude.toFixed(6);
+      document.getElementById('f-bina-lng').value = pos.coords.longitude.toFixed(6);
+      durumEl.textContent = '✅ Konum alındı. "Kaydet" butonuna basarak bu binaya kaydedebilirsiniz.';
+      durumEl.style.color = '#10B981';
+      btn.textContent = eskiMetin;
+      btn.disabled = false;
+    },
+    (err) => {
+      let mesaj = 'Konum alınamadı. Lütfen tekrar deneyin veya koordinatları manuel girin.';
+      if (err.code === err.PERMISSION_DENIED) mesaj = '⚠️ Konum izni verilmedi. Tarayıcı ayarlarından konum iznini açıp tekrar deneyin.';
+      durumEl.textContent = mesaj;
+      durumEl.style.color = '#EF4444';
+      btn.textContent = eskiMetin;
+      btn.disabled = false;
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   YOL TARİFİ — Teknisyenin binayı kolayca bulması için
+   Kayıtlı enlem/boylam varsa onunla, yoksa adres metniyle
+   Google Maps'te yol tarifi/arama açar (yeni sekme/uygulama).
+═══════════════════════════════════════════════════════════════ */
+window.binaYolTarifiAc = function(lat, lng, adres, ad) {
+  let url;
+  const hasCoords = lat !== null && lat !== undefined && lat !== '' && !isNaN(parseFloat(lat))
+                  && lng !== null && lng !== undefined && lng !== '' && !isNaN(parseFloat(lng));
+  if (hasCoords) {
+    url = `https://www.google.com/maps/dir/?api=1&destination=${parseFloat(lat)},${parseFloat(lng)}&travelmode=driving`;
+  } else if (adres) {
+    url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(adres + ', ' + (ad||''))}&travelmode=driving`;
+  } else {
+    alert(`"${ad||'Bu bina'}" için kayıtlı konum veya adres bulunamadı.\n\nLütfen önce Carileri Düzenle'den adres veya konum ekleyin.`);
+    return;
+  }
+  window.open(url, '_blank');
+};
 
 // ── CARİ LİSTESİNDEN HIZLI İŞLEM KISAYOLLARI ──────────────────
 // Cari satırındaki 🔧/⚠️/💰 butonları tıklanınca ilgili modali,
@@ -1897,16 +1970,20 @@ function renderGunlukGorevler() {
         </div>
       </div>
       <div>
-        ${gorevler.map((g, i) => `
+        ${gorevler.map((g, i) => {
+          const gBina = G_BINALAR.find(x => binaAdiEslesir(x.ad, g.bina));
+          return `
           <div style="padding:12px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.3);">
             <div style="width:22px;height:22px;border-radius:50%;background:rgba(0,173,181,.12);color:#00ADB5;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${i+1}</div>
             <div style="flex:1;min-width:0;">
               <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${g.bina}</div>
               <div style="font-size:11px;color:#475569;margin-top:1px;">${g.kabin||''} ${g.tip?'· '+g.tip:''}</div>
             </div>
+            <button onclick="binaYolTarifiAc(${gBina?.lat ?? 'null'}, ${gBina?.lng ?? 'null'}, '${(gBina?.adres||'').replace(/'/g,"\\'")}', '${(g.bina||'').replace(/'/g,"\\'")}')" title="Yol Tarifi Al" style="flex-shrink:0;font-size:13px;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🧭</button>
             <span class="sbadge" style="background:${renkMap[g.durum]}22;color:${renkMap[g.durum]};border:1px solid ${renkMap[g.durum]}44;flex-shrink:0;">${labelMap[g.durum]||g.durum}</span>
             ${g.durum==='bekliyor' ? `<button onclick="completeBakim('${g.id}')" style="flex-shrink:0;padding:7px 12px;font-size:11px;font-weight:700;background:linear-gradient(135deg,#10B981,#059669);color:#fff;border:none;border-radius:8px;cursor:pointer;">✓ Yapıldı</button>` : ''}
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>
     </div>`;
   }).join('');
@@ -6782,6 +6859,19 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Cari Kodu</label><input id="f-bina-cariKodu" type="text" class="db-input" placeholder="CR-0001" style="font-family:monospace;"/></div>
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Adres</label><input id="f-bina-adres" type="text" class="db-input" placeholder="Mahalle, İlçe, İstanbul"/></div>
+
+      <div class="card" style="padding:14px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.18);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <p style="font-size:11px;font-weight:700;color:#00ADB5;text-transform:uppercase;letter-spacing:.06em;">📍 Harita Konumu</p>
+          <button type="button" onclick="binaKonumumuKullan()" id="f-bina-konumBtn" style="font-size:11px;font-weight:700;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.3);border-radius:8px;padding:6px 12px;cursor:pointer;display:flex;align-items:center;gap:5px;">📍 Şu Anki Konumumu Kullan</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Enlem (lat)</label><input id="f-bina-lat" type="text" class="db-input" placeholder="Örn: 41.0345" style="font-family:monospace;"/></div>
+          <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Boylam (lng)</label><input id="f-bina-lng" type="text" class="db-input" placeholder="Örn: 28.6739" style="font-family:monospace;"/></div>
+        </div>
+        <p id="f-bina-konumDurum" style="font-size:10px;color:#64748B;margin-top:8px;">ℹ️ Binadayken "Şu Anki Konumumu Kullan" butonuna basarsanız konum otomatik doldurulur. Teknisyenler daha sonra bu binaya tek dokunuşla yol tarifi alabilir.</p>
+      </div>
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Yetkili Kişi</label><input id="f-bina-yetkili" type="text" class="db-input" placeholder="Yönetici / Site Yönetimi"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İletişim Telefonu</label><input id="f-bina-telefon" type="tel" class="db-input" placeholder="05XX XXX XX XX"/></div>
