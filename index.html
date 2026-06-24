@@ -917,7 +917,16 @@ function renderBinalar(data) {
         <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${b.ad}</div>
         ${b.cariKodu ? `<div style="font-size:10px;color:#00ADB5;font-family:monospace;margin-top:2px;">${b.cariKodu}</div>` : ''}
       </td>
-      <td style="padding:12px;font-size:12px;color:#64748B;">${b.adres || '—'}</td>
+      <td style="padding:12px;font-size:12px;color:#64748B;max-width:220px;">
+        <div>${b.adres || '—'}</div>
+        ${(b.lat && b.lng) ? `
+          <img src="https://staticmap.openstreetmap.de/staticmap.php?center=${b.lat},${b.lng}&zoom=15&size=140x70&markers=${b.lat},${b.lng},red-pushpin"
+               loading="lazy" alt="Konum önizleme"
+               onclick="binaYolTarifiAc(${b.lat}, ${b.lng}, '${(b.adres||'').replace(/'/g,"\\'")}', '${b.ad.replace(/'/g,"\\'")}')"
+               style="margin-top:5px;width:140px;height:70px;border-radius:6px;border:1px solid rgba(0,173,181,.25);cursor:pointer;display:block;object-fit:cover;"
+               onerror="this.style.display='none';"/>
+        ` : `<span class="sbadge" style="background:rgba(245,158,11,.12);color:#F59E0B;border:1px solid rgba(245,158,11,.3);margin-top:5px;display:inline-flex;">⚠️ Konum eksik</span>`}
+      </td>
       <td style="padding:12px;font-size:12px;color:#94A3B8;">${b.yetkili || '—'}</td>
       <td style="padding:12px;font-size:12px;color:#CBD5E1;">${b.asansorSayisi || 0} adet</td>
       <td style="padding:12px;font-size:11px;color:#64748B;font-family:monospace;">${b.sozlesme || '—'}</td>
@@ -1642,19 +1651,29 @@ window.binaKonumumuKullan = function() {
    Kayıtlı enlem/boylam varsa onunla, yoksa adres metniyle
    Google Maps'te yol tarifi/arama açar (yeni sekme/uygulama).
 ═══════════════════════════════════════════════════════════════ */
+// iOS cihaz tespiti — Apple Maps linklerinin doğru açılması için.
+function iosCihazMi() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS Safari, masaüstü gibi raporlanır
+}
+
 window.binaYolTarifiAc = function(lat, lng, adres, ad) {
-  let url;
   const hasCoords = lat !== null && lat !== undefined && lat !== '' && !isNaN(parseFloat(lat))
                   && lng !== null && lng !== undefined && lng !== '' && !isNaN(parseFloat(lng));
-  if (hasCoords) {
-    url = `https://www.google.com/maps/dir/?api=1&destination=${parseFloat(lat)},${parseFloat(lng)}&travelmode=driving`;
-  } else if (adres) {
-    url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(adres + ', ' + (ad||''))}&travelmode=driving`;
-  } else {
+  if (!hasCoords && !adres) {
     alert(`"${ad||'Bu bina'}" için kayıtlı konum veya adres bulunamadı.\n\nLütfen önce Carileri Düzenle'den adres veya konum ekleyin.`);
     return;
   }
-  window.open(url, '_blank');
+
+  const hedef = hasCoords ? `${parseFloat(lat)},${parseFloat(lng)}` : encodeURIComponent(adres + ', ' + (ad||''));
+
+  if (iosCihazMi()) {
+    // iPhone/iPad'de Apple Maps yüklüyse direkt onu açar; uygulama
+    // yoksa Safari otomatik olarak Apple Maps web sürümüne yönlendirir.
+    window.open(`https://maps.apple.com/?daddr=${hedef}&dirflg=d`, '_blank');
+  } else {
+    window.open(`https://www.google.com/maps/dir/?api=1&destination=${hedef}&travelmode=driving`, '_blank');
+  }
 };
 
 // ── CARİ LİSTESİNDEN HIZLI İŞLEM KISAYOLLARI ──────────────────
@@ -2020,6 +2039,7 @@ function renderGunlukGorevler() {
             <div style="flex:1;min-width:0;">
               <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${g.bina}</div>
               <div style="font-size:11px;color:#475569;margin-top:1px;">${g.kabin||''} ${g.tip?'· '+g.tip:''}</div>
+              ${!(gBina?.lat && gBina?.lng) ? `<div style="font-size:9px;color:#F59E0B;margin-top:2px;">⚠️ Konum eksik</div>` : ''}
             </div>
             <button onclick="binaYolTarifiAc(${gBina?.lat ?? 'null'}, ${gBina?.lng ?? 'null'}, '${(gBina?.adres||'').replace(/'/g,"\\'")}', '${(g.bina||'').replace(/'/g,"\\'")}')" title="Yol Tarifi Al" style="flex-shrink:0;font-size:13px;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🧭</button>
             <span class="sbadge" style="background:${renkMap[g.durum]}22;color:${renkMap[g.durum]};border:1px solid ${renkMap[g.durum]}44;flex-shrink:0;">${labelMap[g.durum]||g.durum}</span>
