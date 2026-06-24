@@ -454,6 +454,7 @@ function closeDashboard() {
 // Global veri önbelleği — takvim, performans gibi sayfalar bunları kullanır
 let G_BAKIMLAR = [];
 let G_ARIZALAR = [];
+let G_COZUM_PARCA_SAYAC = 0; // Arıza çözüm modalındaki parça satırları için sayaç
 let G_SOZLESMELER = [];
 let G_BINALAR = [];
 let G_ODEMELER = [];
@@ -1341,6 +1342,12 @@ function renderArizalar(data) {
           </div>
           <p style="font-size:12px;color:#64748B;margin-bottom:5px;">${a.aciklama||'—'}</p>
           <div style="font-size:10px;color:#334155;font-family:monospace;">${tarihStr(a.tarih)} · ${a.tip||''}</div>
+          ${a.durum==='kapali' && (a.toplamMaliyet > 0 || a.parcalar?.length) ? `
+          <div style="margin-top:6px;font-size:11px;color:#10B981;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.18);border-radius:6px;padding:6px 9px;">
+            🔧 ${a.parcalar?.length ? a.parcalar.map(p=>`${p.ad||'Parça'}×${p.adet}`).join(', ') : 'Parça yok'}
+            ${a.iscilikTutari>0 ? ` · İşçilik ${a.iscilikTutari.toLocaleString('tr-TR')}₺` : ''}
+            · <strong>Toplam ${(a.toplamMaliyet||0).toLocaleString('tr-TR')} ₺</strong>
+          </div>` : ''}
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;">
           ${a.durum==='acik'?`<button onclick="closeAriza('${a.id}')" class="btn-sm" style="padding:5px 10px;font-size:10px;">✓ Çözüldü</button>`:''}
@@ -5264,14 +5271,120 @@ window.saveAriza = async () => {
   } catch(e) { alert('Hata: ' + e.message); }
 };
 
-window.closeAriza = async (id) => {
-  const teknisyen = prompt('Arızayı çözen teknisyenin adını girin (performans takibi için):', currentUserData?.ad || '');
-  if (teknisyen === null) return; // iptal edildi
-  await updateDoc(doc(db, 'arizalar', id), {
+// "Çözüldü" butonuna basıldığında — basit bir prompt yerine, parça/işçilik
+// maliyetini girip carinin hesabına otomatik borç işlenmesini sağlayan
+// modalı açar.
+window.closeAriza = (id) => {
+  const ariza = G_ARIZALAR.find(a => a.id === id);
+  if (!ariza) return;
+  document.getElementById('f-cozum-arizaId').value = id;
+  document.getElementById('f-cozum-binaInfo').textContent = `${ariza.bina}${ariza.kabin ? ' — '+ariza.kabin : ''} · ${ariza.tip || 'Arıza'}`;
+  document.getElementById('f-cozum-teknisyen').value = currentUserData?.ad || '';
+  document.getElementById('f-cozum-iscilik').value = '';
+  document.getElementById('f-cozum-not').value = '';
+  document.getElementById('f-cozum-borcOlustur').checked = true;
+  document.getElementById('f-cozum-parcaListesi').innerHTML = '';
+  G_COZUM_PARCA_SAYAC = 0;
+  cozumParcaEkle(); // en az 1 boş satırla başlat, kullanıcı isterse silebilir
+  cozumToplamGuncelle();
+  openModal('mArizaCozum');
+};
+
+window.cozumParcaEkle = () => {
+  const rowId = `cp-${G_COZUM_PARCA_SAYAC++}`;
+  const wrap = document.getElementById('f-cozum-parcaListesi');
+  const row = document.createElement('div');
+  row.id = rowId;
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 56px 76px 26px;gap:6px;align-items:center;';
+  row.innerHTML = `
+    <input type="text" class="db-input cp-ad" placeholder="Parça adı (örn. Kapı Kontaktörü)" style="font-size:12px;padding:7px 9px;" oninput="cozumToplamGuncelle()"/>
+    <input type="number" class="db-input cp-adet" placeholder="Adet" min="1" value="1" style="font-size:12px;padding:7px 6px;" oninput="cozumToplamGuncelle()"/>
+    <input type="number" class="db-input cp-fiyat" placeholder="Birim ₺" min="0" step="0.01" style="font-size:12px;padding:7px 6px;" oninput="cozumToplamGuncelle()"/>
+    <button type="button" onclick="document.getElementById('${rowId}').remove(); cozumToplamGuncelle();" style="color:#EF4444;background:none;border:none;cursor:pointer;font-size:16px;line-height:1;">×</button>`;
+  wrap.appendChild(row);
+};
+
+
+
+// Parça satırlarını okuyup { ad, adet, birimFiyat, tutar } listesi döner
+function cozumParcalariOku() {
+  return [...document.querySelectorAll('#f-cozum-parcaListesi > div')].map(row => {
+    const ad = row.querySelector('.cp-ad').value.trim();
+    const adet = parseFloat(row.querySelector('.cp-adet').value) || 0;
+    const birimFiyat = parseFloat(row.querySelector('.cp-fiyat').value) || 0;
+    return { ad, adet, birimFiyat, tutar: adet * birimFiyat };
+  }).filter(p => p.ad || p.tutar > 0); // tamamen boş satırları sayma
+}
+
+window.cozumToplamGuncelle = () => {
+  const parcalar = cozumParcalariOku();
+  const parcaToplam = parcalar.reduce((s,p) => s + p.tutar, 0);
+  const iscilik = parseFloat(document.getElementById('f-cozum-iscilik').value) || 0;
+  const genelToplam = parcaToplam + iscilik;
+  document.getElementById('f-cozum-parcaToplam').textContent = `${parcaToplam.toLocaleString('tr-TR')} ₺`;
+  document.getElementById('f-cozum-iscilikGoster').textContent = `${iscilik.toLocaleString('tr-TR')} ₺`;
+  document.getElementById('f-cozum-genelToplam').textContent = `${genelToplam.toLocaleString('tr-TR')} ₺`;
+};
+
+window.cozumKaydet = async () => {
+  const id = document.getElementById('f-cozum-arizaId').value;
+  const ariza = G_ARIZALAR.find(a => a.id === id);
+  if (!ariza) { closeModal('mArizaCozum'); return; }
+
+  const teknisyen = document.getElementById('f-cozum-teknisyen').value.trim() || currentUserData?.ad || '—';
+  const parcalar = cozumParcalariOku();
+  const iscilik = parseFloat(document.getElementById('f-cozum-iscilik').value) || 0;
+  const not = document.getElementById('f-cozum-not').value.trim();
+  const parcaToplam = parcalar.reduce((s,p) => s + p.tutar, 0);
+  const genelToplam = parcaToplam + iscilik;
+  const borcOlustur = document.getElementById('f-cozum-borcOlustur').checked;
+
+  // Onay/özet adımı — kaydetmeden önce kullanıcıya net toplamı göster
+  if (genelToplam > 0) {
+    const parcaSatirlari = parcalar.length
+      ? parcalar.map(p => `• ${p.ad || 'Parça'} × ${p.adet} = ${p.tutar.toLocaleString('tr-TR')} ₺`).join('\n')
+      : '(parça yok)';
+    const ozet = `"${ariza.bina}" için işlem özeti:\n\n${parcaSatirlari}\nİşçilik: ${iscilik.toLocaleString('tr-TR')} ₺\n\nTOPLAM: ${genelToplam.toLocaleString('tr-TR')} ₺` +
+      (borcOlustur ? `\n\nBu tutar carinin borcuna işlenecek. Onaylıyor musunuz?` : `\n\nNot: "Borca işle" işaretli değil, sadece arıza kaydına not olarak eklenecek, cariye borç yazılmayacak. Onaylıyor musunuz?`);
+    if (!confirm(ozet)) return;
+  }
+
+  const guncelleme = {
     durum: 'kapali',
     cozumTarihi: serverTimestamp(),
-    cozenTeknisyen: teknisyen.trim() || currentUserData?.ad || '—'
-  });
+    cozenTeknisyen: teknisyen,
+    parcalar,
+    iscilikTutari: iscilik,
+    toplamMaliyet: genelToplam,
+    cozumNotu: not || null
+  };
+  await updateDoc(doc(db, 'arizalar', id), guncelleme);
+
+  if (borcOlustur && genelToplam > 0) {
+    const bina = G_BINALAR.find(b => binaKaydaEslesir(ariza, b));
+    const parcaAciklama = parcalar.length
+      ? parcalar.map(p => `${p.ad || 'Parça'} (${p.adet}x${p.birimFiyat.toLocaleString('tr-TR')}₺)`).join(', ')
+      : null;
+    const aciklamaParcalari = [
+      `Arıza onarımı${ariza.kabin ? ' — '+ariza.kabin : ''} (${ariza.tip || 'Arıza'})`,
+      parcaAciklama ? `Parçalar: ${parcaAciklama}` : null,
+      iscilik > 0 ? `İşçilik: ${iscilik.toLocaleString('tr-TR')} ₺` : null
+    ].filter(Boolean).join(' · ');
+
+    await addDoc(collection(db, 'borclar'), {
+      bina: ariza.bina,
+      binaCariKodu: bina?.cariKodu || ariza.binaCariKodu || null,
+      tutar: genelToplam,
+      tip: 'Arıza Onarımı',
+      tarih: new Date().toISOString().slice(0,10),
+      ayKey: new Date().toISOString().slice(0,7),
+      aciklama: aciklamaParcalari,
+      arizaId: id,
+      olusturuldu: serverTimestamp()
+    });
+  }
+
+  closeModal('mArizaCozum');
 };
 
 window.deleteAriza = async (id) => {
@@ -7000,7 +7113,53 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
   </div>
 </div>
 
-<!-- Sözleşme Modal -->
+<!-- Arıza Çözüm Modalı — Parça & İşçilik Maliyeti -->
+<div id="modal-mArizaCozum" class="modal-wrap" onclick="if(event.target===this)closeModal('mArizaCozum')">
+  <div class="modal-box" style="max-width:480px;">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">✓ Arızayı Çözüldü İşaretle</h3>
+      <button onclick="closeModal('mArizaCozum')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <input type="hidden" id="f-cozum-arizaId"/>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:14px;max-height:65vh;overflow-y:auto;">
+
+      <div id="f-cozum-binaInfo" style="font-size:12px;color:#64748B;background:rgba(0,173,181,.06);border:1px solid rgba(0,173,181,.15);border-radius:8px;padding:8px 12px;"></div>
+
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Çözen Teknisyen</label>
+        <input id="f-cozum-teknisyen" type="text" class="db-input" placeholder="Teknisyen adı"/></div>
+
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <label style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">🔧 Kullanılan Parçalar</label>
+          <button type="button" onclick="cozumParcaEkle()" style="font-size:11px;font-weight:700;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.3);border-radius:6px;padding:4px 10px;cursor:pointer;">+ Parça Ekle</button>
+        </div>
+        <div id="f-cozum-parcaListesi" style="display:flex;flex-direction:column;gap:6px;"></div>
+        <p style="font-size:10px;color:#475569;margin-top:6px;">Hiç parça değiştirilmediyse boş bırakabilirsiniz.</p>
+      </div>
+
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İşçilik / Servis Ücreti (₺)</label>
+        <input id="f-cozum-iscilik" type="number" min="0" step="0.01" class="db-input" placeholder="0" oninput="cozumToplamGuncelle()"/></div>
+
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not (opsiyonel)</label>
+        <textarea id="f-cozum-not" rows="2" class="db-input" style="resize:none;" placeholder="Yapılan işlemle ilgili ek not..."></textarea></div>
+
+      <div class="card" style="padding:12px 14px;background:rgba(16,185,129,.06);border-color:rgba(16,185,129,.2);">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#64748B;margin-bottom:3px;"><span>Parça Toplamı</span><span id="f-cozum-parcaToplam">0 ₺</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#64748B;margin-bottom:6px;"><span>İşçilik</span><span id="f-cozum-iscilikGoster">0 ₺</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;color:#10B981;border-top:1px solid rgba(16,185,129,.2);padding-top:6px;"><span>Toplam (Cariye İşlenecek)</span><span id="f-cozum-genelToplam">0 ₺</span></div>
+      </div>
+
+      <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:#64748B;cursor:pointer;">
+        <input type="checkbox" id="f-cozum-borcOlustur" checked style="width:15px;height:15px;accent-color:#00ADB5;"/>
+        Bu tutarı otomatik olarak carinin borcuna işle
+      </label>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mArizaCozum')" class="btn-ghost">İptal</button>
+      <button onclick="cozumKaydet()" style="padding:8px 16px;background:#10B981;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">✓ Çözüldü İşaretle</button>
+    </div>
+  </div>
+</div>
 <div id="modal-mSozlesme" class="modal-wrap" onclick="if(event.target===this)closeModal('mSozlesme')">
   <div class="modal-box">
     <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
