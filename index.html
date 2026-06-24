@@ -1351,7 +1351,9 @@ function renderArizalar(data) {
           </div>` : ''}
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;">
-          ${a.durum==='acik'?`<button onclick="closeAriza('${a.id}')" class="btn-sm" style="padding:5px 10px;font-size:10px;">✓ Çözüldü</button>`:''}
+          ${a.durum==='acik'
+            ?`<button onclick="closeAriza('${a.id}')" class="btn-sm" style="padding:5px 10px;font-size:10px;">✓ Çözüldü</button>`
+            :`<button onclick="closeAriza('${a.id}')" class="btn-ghost" style="padding:5px 10px;font-size:10px;">✏️ Düzenle</button>`}
           <button onclick="deleteAriza('${a.id}')" class="btn-ghost admin-only" style="padding:5px 10px;font-size:10px;">Sil</button>
         </div>
       </div>
@@ -4903,8 +4905,8 @@ window.renderMusteriCariDetay = () => {
 
   // Borç ve tahsilatları tarihe göre birleştir (eskiden yeniye, kümülatif bakiye için)
   const hareketler = [
-    ...borclar.map(x => ({ tarih: x.tarih, tip:'borc', aciklama: x.aciklama || x.tip || 'Anlaşma bedeli', tutar: x.tutar })),
-    ...tahsilatlar.map(o => ({ tarih: o.tarih, tip:'tahsilat', aciklama: o.aciklama || o.tur || 'Ödeme', tutar: o.tutar }))
+    ...borclar.map(x => ({ id: x.id, koleksiyon:'borclar', tarih: x.tarih, tip:'borc', aciklama: x.aciklama || x.tip || 'Anlaşma bedeli', tutar: x.tutar })),
+    ...tahsilatlar.map(o => ({ id: o.id, koleksiyon:'odemeler', tarih: o.tarih, tip:'tahsilat', aciklama: o.aciklama || o.tur || 'Ödeme', tutar: o.tutar }))
   ].sort((a,b) => (a.tarih||'').localeCompare(b.tarih||''));
 
   let kumulatif = 0;
@@ -4960,6 +4962,10 @@ window.renderMusteriCariDetay = () => {
             <div style="font-size:13px;font-weight:700;color:${renk};">${isaret}${h.tutar.toLocaleString('tr-TR')} ₺</div>
             <div style="font-size:10px;color:${h.bakiye<0?'#EF4444':'#475569'};margin-top:1px;">Bakiye: ${h.bakiye.toLocaleString('tr-TR')} ₺</div>
           </div>
+          <div class="admin-only" style="display:flex;gap:4px;flex-shrink:0;">
+            <button onclick="cariHareketDuzenle('${h.koleksiyon}','${h.id}')" title="Düzenle" style="font-size:13px;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">✏️</button>
+            <button onclick="cariHareketSil('${h.koleksiyon}','${h.id}')" title="Sil" style="font-size:13px;background:rgba(239,68,68,.12);color:#EF4444;border:1px solid rgba(239,68,68,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🗑️</button>
+          </div>
         </div>`;
       }).join('') : `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Henüz hareket kaydı yok.</div>`}
     </div>`;
@@ -4967,6 +4973,64 @@ window.renderMusteriCariDetay = () => {
   document.querySelectorAll('.admin-only').forEach(el => {
     el.style.display = currentUserData?.rol === 'admin' ? '' : 'none';
   });
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   CARİ HAREKETLERİ — Düzenle / Sil
+   Müşteri Cari ekranındaki borç veya tahsilat satırını silmek veya
+   tutar/açıklamasını hızlıca düzeltmek için.
+═══════════════════════════════════════════════════════════════ */
+window.cariHareketSil = async (koleksiyon, id) => {
+  if (!confirm('Bu kaydı silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.')) return;
+  try {
+    // Bu borç bir arızadan otomatik oluşmuşsa, arıza kaydındaki borç
+    // referansını da temizle — yoksa arıza sonradan düzenlenirken var
+    // olmayan bir borcu güncellemeye çalışır.
+    if (koleksiyon === 'borclar') {
+      const borc = G_BORCLAR.find(x => x.id === id);
+      if (borc?.arizaId) {
+        await updateDoc(doc(db, 'arizalar', borc.arizaId), { arizaBorcuId: null }).catch(() => {});
+      }
+    }
+    await deleteDoc(doc(db, koleksiyon, id));
+  } catch(e) {
+    alert('Silinemedi: ' + e.message);
+  }
+};
+
+window.cariHareketDuzenle = async (koleksiyon, id) => {
+  const liste = koleksiyon === 'borclar' ? G_BORCLAR : G_ODEMELER;
+  const kayit = liste.find(x => x.id === id);
+  if (!kayit) { alert('Kayıt bulunamadı.'); return; }
+
+  const yeniTutarStr = prompt('Tutar (₺):', kayit.tutar ?? 0);
+  if (yeniTutarStr === null) return; // iptal
+  const yeniTutar = parseFloat(String(yeniTutarStr).replace(',', '.'));
+  if (isNaN(yeniTutar) || yeniTutar < 0) { alert('Geçerli bir tutar girin.'); return; }
+
+  const yeniAciklama = prompt('Açıklama:', kayit.aciklama ?? '');
+  if (yeniAciklama === null) return; // iptal
+
+  const yeniTarih = prompt('Tarih (YYYY-AA-GG):', kayit.tarih ?? new Date().toISOString().slice(0,10));
+  if (yeniTarih === null) return; // iptal
+
+  try {
+    await updateDoc(doc(db, koleksiyon, id), {
+      tutar: yeniTutar,
+      aciklama: yeniAciklama.trim(),
+      tarih: yeniTarih.trim(),
+      ayKey: yeniTarih.trim().slice(0,7),
+      guncellendi: serverTimestamp()
+    });
+
+    // Bu borç bir arızadan otomatik oluşmuşsa, ilgili arıza kaydındaki
+    // toplam maliyeti de güncel tutarla senkron tut.
+    if (koleksiyon === 'borclar' && kayit.arizaId) {
+      await updateDoc(doc(db, 'arizalar', kayit.arizaId), { toplamMaliyet: yeniTutar }).catch(() => {});
+    }
+  } catch(e) {
+    alert('Güncellenemedi: ' + e.message);
+  }
 };
 
 window.downloadMusteriEkstresi = async (binaAdi) => {
@@ -5277,38 +5341,53 @@ window.saveAriza = async () => {
   } catch(e) { alert('Hata: ' + e.message); }
 };
 
-// "Çözüldü" butonuna basıldığında — basit bir prompt yerine, parça/işçilik
-// maliyetini girip carinin hesabına otomatik borç işlenmesini sağlayan
-// modalı açar.
+// "Çözüldü" butonuna basıldığında (yeni çözüm) veya "Düzenle" butonuna
+// basıldığında (zaten kapalı bir arızanın parça/maliyet bilgisini sonradan
+// değiştirmek için) aynı modal açılır — mevcut veriler varsa önceden doldurulur.
 window.closeAriza = (id) => {
   const ariza = G_ARIZALAR.find(a => a.id === id);
   if (!ariza) return;
   document.getElementById('f-cozum-arizaId').value = id;
   document.getElementById('f-cozum-binaInfo').textContent = `${ariza.bina}${ariza.kabin ? ' — '+ariza.kabin : ''} · ${ariza.tip || 'Arıza'}`;
-  document.getElementById('f-cozum-teknisyen').value = currentUserData?.ad || '';
-  document.getElementById('f-cozum-iscilik').value = '';
-  document.getElementById('f-cozum-not').value = '';
-  document.getElementById('f-cozum-borcOlustur').checked = true;
+  document.getElementById('f-cozum-teknisyen').value = ariza.cozenTeknisyen || currentUserData?.ad || '';
+  document.getElementById('f-cozum-iscilik').value = ariza.iscilikTutari || '';
+  document.getElementById('f-cozum-not').value = ariza.cozumNotu || '';
+  document.getElementById('f-cozum-borcOlustur').checked = !ariza.arizaBorcuId; // zaten borç oluşmuşsa varsayılan işaretli kalmasın, güncellenecek
   document.getElementById('f-cozum-parcaListesi').innerHTML = '';
   G_COZUM_PARCA_SAYAC = 0;
-  cozumParcaEkle(); // en az 1 boş satırla başlat, kullanıcı isterse silebilir
+  if (ariza.parcalar?.length) {
+    ariza.parcalar.forEach(p => cozumParcaEkle(p));
+  } else {
+    cozumParcaEkle(); // en az 1 boş satırla başlat, kullanıcı isterse silebilir
+  }
   cozumToplamGuncelle();
+
+  const modalTitle = document.getElementById('mArizaCozumTitle');
+  if (modalTitle) modalTitle.textContent = ariza.durum === 'kapali' ? '✏️ Parça / Maliyet Düzenle' : '✓ Arızayı Çözüldü İşaretle';
+  const kaydetBtn = document.getElementById('cozumKaydetBtn');
+  if (kaydetBtn) kaydetBtn.textContent = ariza.durum === 'kapali' ? '💾 Değişiklikleri Kaydet' : '✓ Çözüldü İşaretle';
+
   openModal('mArizaCozum');
 };
 
-window.cozumParcaEkle = () => {
+window.cozumParcaEkle = (mevcut) => {
   const rowId = `cp-${G_COZUM_PARCA_SAYAC++}`;
   const wrap = document.getElementById('f-cozum-parcaListesi');
   const row = document.createElement('div');
   row.id = rowId;
   row.style.cssText = 'display:grid;grid-template-columns:1fr 56px 76px 26px;gap:6px;align-items:center;';
+  const ad = mevcut?.ad ? mevcut.ad.replace(/"/g,'&quot;') : '';
+  const adet = mevcut?.adet ?? 1;
+  const fiyat = mevcut?.birimFiyat ?? '';
   row.innerHTML = `
-    <input type="text" class="db-input cp-ad" placeholder="Parça adı (örn. Kapı Kontaktörü)" style="font-size:12px;padding:7px 9px;" oninput="cozumToplamGuncelle()"/>
-    <input type="number" class="db-input cp-adet" placeholder="Adet" min="1" value="1" style="font-size:12px;padding:7px 6px;" oninput="cozumToplamGuncelle()"/>
-    <input type="number" class="db-input cp-fiyat" placeholder="Birim ₺" min="0" step="0.01" style="font-size:12px;padding:7px 6px;" oninput="cozumToplamGuncelle()"/>
+    <input type="text" class="db-input cp-ad" value="${ad}" placeholder="Parça adı (örn. Kapı Kontaktörü)" style="font-size:12px;padding:7px 9px;color:#fff;" oninput="cozumToplamGuncelle()"/>
+    <input type="number" class="db-input cp-adet" value="${adet}" placeholder="Adet" min="1" style="font-size:12px;padding:7px 6px;color:#fff;" oninput="cozumToplamGuncelle()"/>
+    <input type="number" class="db-input cp-fiyat" value="${fiyat}" placeholder="Birim ₺" min="0" step="0.01" style="font-size:12px;padding:7px 6px;color:#fff;" oninput="cozumToplamGuncelle()"/>
     <button type="button" onclick="document.getElementById('${rowId}').remove(); cozumToplamGuncelle();" style="color:#EF4444;background:none;border:none;cursor:pointer;font-size:16px;line-height:1;">×</button>`;
   wrap.appendChild(row);
 };
+
+
 
 
 
@@ -5344,53 +5423,75 @@ window.cozumKaydet = async () => {
   const parcaToplam = parcalar.reduce((s,p) => s + p.tutar, 0);
   const genelToplam = parcaToplam + iscilik;
   const borcOlustur = document.getElementById('f-cozum-borcOlustur').checked;
+  const duzenlemeModu = ariza.durum === 'kapali';
 
   // Onay/özet adımı — kaydetmeden önce kullanıcıya net toplamı göster
-  if (genelToplam > 0) {
+  if (genelToplam > 0 || duzenlemeModu) {
     const parcaSatirlari = parcalar.length
       ? parcalar.map(p => `• ${p.ad || 'Parça'} × ${p.adet} = ${p.tutar.toLocaleString('tr-TR')} ₺`).join('\n')
       : '(parça yok)';
     const ozet = `"${ariza.bina}" için işlem özeti:\n\n${parcaSatirlari}\nİşçilik: ${iscilik.toLocaleString('tr-TR')} ₺\n\nTOPLAM: ${genelToplam.toLocaleString('tr-TR')} ₺` +
-      (borcOlustur ? `\n\nBu tutar carinin borcuna işlenecek. Onaylıyor musunuz?` : `\n\nNot: "Borca işle" işaretli değil, sadece arıza kaydına not olarak eklenecek, cariye borç yazılmayacak. Onaylıyor musunuz?`);
+      (borcOlustur ? `\n\nBu tutar carinin borcuna işlenecek/güncellenecek. Onaylıyor musunuz?` : `\n\nNot: "Borca işle" işaretli değil; mevcut borç kaydı varsa silinecek, cariye borç yazılmayacak. Onaylıyor musunuz?`);
     if (!confirm(ozet)) return;
   }
 
   const guncelleme = {
     durum: 'kapali',
-    cozumTarihi: serverTimestamp(),
+    cozumTarihi: ariza.cozumTarihi || serverTimestamp(),
     cozenTeknisyen: teknisyen,
-    parcalar,
+    parcalar: parcalar.map(p => ({ ad: p.ad || '', adet: p.adet || 0, birimFiyat: p.birimFiyat || 0, tutar: p.tutar || 0 })),
     iscilikTutari: iscilik,
     toplamMaliyet: genelToplam,
     cozumNotu: not || null
   };
-  await updateDoc(doc(db, 'arizalar', id), guncelleme);
 
-  if (borcOlustur && genelToplam > 0) {
-    const bina = G_BINALAR.find(b => binaKaydaEslesir(ariza, b));
-    const parcaAciklama = parcalar.length
-      ? parcalar.map(p => `${p.ad || 'Parça'} (${p.adet}x${p.birimFiyat.toLocaleString('tr-TR')}₺)`).join(', ')
-      : null;
-    const aciklamaParcalari = [
-      `Arıza onarımı${ariza.kabin ? ' — '+ariza.kabin : ''} (${ariza.tip || 'Arıza'})`,
-      parcaAciklama ? `Parçalar: ${parcaAciklama}` : null,
-      iscilik > 0 ? `İşçilik: ${iscilik.toLocaleString('tr-TR')} ₺` : null
-    ].filter(Boolean).join(' · ');
+  try {
+    const mevcutBorcId = ariza.arizaBorcuId || null;
 
-    await addDoc(collection(db, 'borclar'), {
-      bina: ariza.bina,
-      binaCariKodu: bina?.cariKodu || ariza.binaCariKodu || null,
-      tutar: genelToplam,
-      tip: 'Arıza Onarımı',
-      tarih: new Date().toISOString().slice(0,10),
-      ayKey: new Date().toISOString().slice(0,7),
-      aciklama: aciklamaParcalari,
-      arizaId: id,
-      olusturuldu: serverTimestamp()
-    });
+    if (borcOlustur && genelToplam > 0) {
+      const bina = G_BINALAR.find(b => binaKaydaEslesir(ariza, b));
+      const parcaAciklama = parcalar.length
+        ? parcalar.map(p => `${p.ad || 'Parça'} (${p.adet}x${p.birimFiyat.toLocaleString('tr-TR')}₺)`).join(', ')
+        : null;
+      const aciklamaParcalari = [
+        `Arıza onarımı${ariza.kabin ? ' — '+ariza.kabin : ''} (${ariza.tip || 'Arıza'})`,
+        parcaAciklama ? `Parçalar: ${parcaAciklama}` : null,
+        iscilik > 0 ? `İşçilik: ${iscilik.toLocaleString('tr-TR')} ₺` : null
+      ].filter(Boolean).join(' · ');
+
+      if (mevcutBorcId) {
+        // Daha önce oluşmuş borç kaydı varsa, yeni borç açmak yerine onu güncelle
+        await updateDoc(doc(db, 'borclar', mevcutBorcId), {
+          tutar: genelToplam,
+          aciklama: aciklamaParcalari,
+          guncellendi: serverTimestamp()
+        });
+        guncelleme.arizaBorcuId = mevcutBorcId;
+      } else {
+        const yeniBorc = await addDoc(collection(db, 'borclar'), {
+          bina: ariza.bina,
+          binaCariKodu: bina?.cariKodu || ariza.binaCariKodu || null,
+          tutar: genelToplam,
+          tip: 'Arıza Onarımı',
+          tarih: new Date().toISOString().slice(0,10),
+          ayKey: new Date().toISOString().slice(0,7),
+          aciklama: aciklamaParcalari,
+          arizaId: id,
+          olusturuldu: serverTimestamp()
+        });
+        guncelleme.arizaBorcuId = yeniBorc.id;
+      }
+    } else if (mevcutBorcId) {
+      // "Borca işle" işaretli değil ama önceden oluşmuş bir borç varsa — kaldır
+      await deleteDoc(doc(db, 'borclar', mevcutBorcId));
+      guncelleme.arizaBorcuId = null;
+    }
+
+    await updateDoc(doc(db, 'arizalar', id), guncelleme);
+    closeModal('mArizaCozum');
+  } catch(e) {
+    alert('Kaydedilemedi: ' + e.message);
   }
-
-  closeModal('mArizaCozum');
 };
 
 window.deleteAriza = async (id) => {
@@ -5424,9 +5525,9 @@ window.cpbParcaEkle = () => {
   row.id = rowId;
   row.style.cssText = 'display:grid;grid-template-columns:1fr 56px 76px 26px;gap:6px;align-items:center;';
   row.innerHTML = `
-    <input type="text" class="db-input cpb-ad" placeholder="Parça adı (örn. Kapı Kontaktörü)" style="font-size:12px;padding:7px 9px;" oninput="cpbToplamGuncelle()"/>
-    <input type="number" class="db-input cpb-adet" placeholder="Adet" min="1" value="1" style="font-size:12px;padding:7px 6px;" oninput="cpbToplamGuncelle()"/>
-    <input type="number" class="db-input cpb-fiyat" placeholder="Birim ₺" min="0" step="0.01" style="font-size:12px;padding:7px 6px;" oninput="cpbToplamGuncelle()"/>
+    <input type="text" class="db-input cpb-ad" placeholder="Parça adı (örn. Kapı Kontaktörü)" style="font-size:12px;padding:7px 9px;color:#fff;" oninput="cpbToplamGuncelle()"/>
+    <input type="number" class="db-input cpb-adet" placeholder="Adet" min="1" value="1" style="font-size:12px;padding:7px 6px;color:#fff;" oninput="cpbToplamGuncelle()"/>
+    <input type="number" class="db-input cpb-fiyat" placeholder="Birim ₺" min="0" step="0.01" style="font-size:12px;padding:7px 6px;color:#fff;" oninput="cpbToplamGuncelle()"/>
     <button type="button" onclick="document.getElementById('${rowId}').remove(); cpbToplamGuncelle();" style="color:#EF4444;background:none;border:none;cursor:pointer;font-size:16px;line-height:1;">×</button>`;
   wrap.appendChild(row);
 };
@@ -5468,6 +5569,10 @@ window.cpbKaydet = async () => {
   const ozet = `"${binaAdi}" carisine işlenecek:\n\n${parcaSatirlari}\nİşçilik: ${iscilik.toLocaleString('tr-TR')} ₺\n\nTOPLAM BORÇ: ${genelToplam.toLocaleString('tr-TR')} ₺\n\nOnaylıyor musunuz?`;
   if (!confirm(ozet)) return;
 
+  await tryCpbKaydet(binaAdi, tarih, baslik, not, parcalar, iscilik, genelToplam);
+};
+
+async function tryCpbKaydet(binaAdi, tarih, baslik, not, parcalar, iscilik, genelToplam) {
   const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, binaAdi));
   const parcaAciklama = parcalar.length
     ? parcalar.map(p => `${p.ad || 'Parça'} (${p.adet}x${p.birimFiyat.toLocaleString('tr-TR')}₺)`).join(', ')
@@ -5479,21 +5584,25 @@ window.cpbKaydet = async () => {
     not ? `Not: ${not}` : null
   ].filter(Boolean).join(' · ');
 
-  await addDoc(collection(db, 'borclar'), {
-    bina: binaAdi,
-    binaCariKodu: bina?.cariKodu || null,
-    tutar: genelToplam,
-    tip: 'Parça / Onarım',
-    tarih,
-    ayKey: tarih.slice(0,7),
-    aciklama: aciklamaParcalari,
-    parcalar,
-    iscilikTutari: iscilik,
-    olusturuldu: serverTimestamp()
-  });
-
-  closeModal('mCariParcaBorc');
-};
+  try {
+    await addDoc(collection(db, 'borclar'), {
+      bina: binaAdi,
+      binaCariKodu: bina?.cariKodu || null,
+      tutar: genelToplam,
+      tip: 'Parça / Onarım',
+      tarih,
+      ayKey: tarih.slice(0,7),
+      aciklama: aciklamaParcalari,
+      parcalar: parcalar.map(p => ({ ad: p.ad || '', adet: p.adet || 0, birimFiyat: p.birimFiyat || 0, tutar: p.tutar || 0 })),
+      iscilikTutari: iscilik,
+      olusturuldu: serverTimestamp()
+    });
+    closeModal('mCariParcaBorc');
+    renderMusteriCariDetay();
+  } catch(e) {
+    alert('Borç kaydedilemedi: ' + e.message);
+  }
+}
 
 /* ═══════════════════════════════════════════════════════════════
    KULLANICI OLUŞTUR (Admin paneli üzerinden)
@@ -7220,7 +7329,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 <div id="modal-mArizaCozum" class="modal-wrap" onclick="if(event.target===this)closeModal('mArizaCozum')">
   <div class="modal-box" style="max-width:480px;">
     <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
-      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">✓ Arızayı Çözüldü İşaretle</h3>
+      <h3 id="mArizaCozumTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">✓ Arızayı Çözüldü İşaretle</h3>
       <button onclick="closeModal('mArizaCozum')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
     </div>
     <input type="hidden" id="f-cozum-arizaId"/>
@@ -7229,7 +7338,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div id="f-cozum-binaInfo" style="font-size:12px;color:#64748B;background:rgba(0,173,181,.06);border:1px solid rgba(0,173,181,.15);border-radius:8px;padding:8px 12px;"></div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Çözen Teknisyen</label>
-        <input id="f-cozum-teknisyen" type="text" class="db-input" placeholder="Teknisyen adı"/></div>
+        <input id="f-cozum-teknisyen" type="text" class="db-input" style="color:#fff;" placeholder="Teknisyen adı"/></div>
 
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -7241,10 +7350,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       </div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İşçilik / Servis Ücreti (₺)</label>
-        <input id="f-cozum-iscilik" type="number" min="0" step="0.01" class="db-input" placeholder="0" oninput="cozumToplamGuncelle()"/></div>
+        <input id="f-cozum-iscilik" type="number" min="0" step="0.01" class="db-input" style="color:#fff;" placeholder="0" oninput="cozumToplamGuncelle()"/></div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not (opsiyonel)</label>
-        <textarea id="f-cozum-not" rows="2" class="db-input" style="resize:none;" placeholder="Yapılan işlemle ilgili ek not..."></textarea></div>
+        <textarea id="f-cozum-not" rows="2" class="db-input" style="resize:none;color:#fff;" placeholder="Yapılan işlemle ilgili ek not..."></textarea></div>
 
       <div class="card" style="padding:12px 14px;background:rgba(16,185,129,.06);border-color:rgba(16,185,129,.2);">
         <div style="display:flex;justify-content:space-between;font-size:11px;color:#64748B;margin-bottom:3px;"><span>Parça Toplamı</span><span id="f-cozum-parcaToplam">0 ₺</span></div>
@@ -7259,7 +7368,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mArizaCozum')" class="btn-ghost">İptal</button>
-      <button onclick="cozumKaydet()" style="padding:8px 16px;background:#10B981;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">✓ Çözüldü İşaretle</button>
+      <button onclick="cozumKaydet()" id="cozumKaydetBtn" style="padding:8px 16px;background:#10B981;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">✓ Çözüldü İşaretle</button>
     </div>
   </div>
 </div>
@@ -7277,10 +7386,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div id="f-cpb-binaInfo" style="font-size:12px;font-weight:700;color:#00ADB5;background:rgba(0,173,181,.06);border:1px solid rgba(0,173,181,.15);border-radius:8px;padding:8px 12px;"></div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İşlem Tarihi</label>
-        <input id="f-cpb-tarih" type="date" class="db-input"/></div>
+        <input id="f-cpb-tarih" type="date" class="db-input" style="color:#fff;"/></div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kabin / Açıklama (opsiyonel)</label>
-        <input id="f-cpb-baslik" type="text" class="db-input" placeholder="Örn: Kabin #1 — Kapı mekanizması arızası"/></div>
+        <input id="f-cpb-baslik" type="text" class="db-input" style="color:#fff;" placeholder="Örn: Kabin #1 — Kapı mekanizması arızası"/></div>
 
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -7292,10 +7401,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       </div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İşçilik / Servis Ücreti (₺)</label>
-        <input id="f-cpb-iscilik" type="number" min="0" step="0.01" class="db-input" placeholder="0" oninput="cpbToplamGuncelle()"/></div>
+        <input id="f-cpb-iscilik" type="number" min="0" step="0.01" class="db-input" style="color:#fff;" placeholder="0" oninput="cpbToplamGuncelle()"/></div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not (opsiyonel)</label>
-        <textarea id="f-cpb-not" rows="2" class="db-input" style="resize:none;" placeholder="Ek not..."></textarea></div>
+        <textarea id="f-cpb-not" rows="2" class="db-input" style="resize:none;color:#fff;" placeholder="Ek not..."></textarea></div>
 
       <div class="card" style="padding:12px 14px;background:rgba(239,68,68,.06);border-color:rgba(239,68,68,.2);">
         <div style="display:flex;justify-content:space-between;font-size:11px;color:#64748B;margin-bottom:3px;"><span>Parça Toplamı</span><span id="f-cpb-parcaToplam">0 ₺</span></div>
