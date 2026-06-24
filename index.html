@@ -3938,6 +3938,20 @@ window.yillikRaporPDF = async () => {
 /* ═══════════════════════════════════════════════════════════════
    MUHASEBE — ÖDEME KAYITLARI
 ═══════════════════════════════════════════════════════════════ */
+// Müşteri Cari ekranından, binayı elle yazmadan, doğrudan o binanın
+// üzerine tek tıkla tahsilat (ödeme) girebilmek için "Hızlı Tahsilat".
+// Aynı Ödeme Kaydet modalını kullanır, sadece bina adı ve tarihi
+// önceden doldurur.
+window.hizliTahsilatAc = (binaAdi) => {
+  document.getElementById('f-odeme-bina').value = binaAdi;
+  document.getElementById('f-odeme-tutar').value = '';
+  document.getElementById('f-odeme-tarih').value = new Date().toISOString().slice(0,10);
+  document.getElementById('f-odeme-tur').value = 'Nakit';
+  document.getElementById('f-odeme-aciklama').value = '';
+  openModal('mOdeme');
+  setTimeout(() => document.getElementById('f-odeme-tutar')?.focus(), 150);
+};
+
 window.saveOdeme = async () => {
   const bina      = document.getElementById('f-odeme-bina').value.trim();
   const tutar     = Math.max(0, parseFloat(document.getElementById('f-odeme-tutar').value) || 0);
@@ -4926,6 +4940,7 @@ window.renderMusteriCariDetay = () => {
           <p style="font-size:11px;color:#475569;margin-top:3px;">Anlaşma: ${bina?.anlasmaTipi || 'Yok'} ${bina?.anlasmaTutar ? '· '+bina.anlasmaTutar.toLocaleString('tr-TR')+' ₺'+(bina.anlasmaPeriyodik?'/ay (otomatik)':' (tek seferlik)') : ''}</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button onclick="hizliTahsilatAc('${binaAdi.replace(/'/g,"\\'")}')" class="btn-sm" style="padding:9px 16px;background:linear-gradient(135deg,#10B981,#059669);">💰 Hızlı Tahsilat</button>
           <button onclick="cpbAc('${binaAdi.replace(/'/g,"\\'")}')" class="btn-sm admin-only" style="padding:9px 16px;background:rgba(239,68,68,.12);color:#fff !important;border:1px solid rgba(239,68,68,.3);">🔧 Parça/Onarım Borcu Ekle</button>
           <button onclick="downloadMusteriEkstresi('${binaAdi.replace(/'/g,"\\'")}')" class="btn-sm" style="padding:9px 16px;">📄 Ekstre PDF İndir</button>
           <button onclick="downloadMusteriEkstresiExcel('${binaAdi.replace(/'/g,"\\'")}')" class="btn-ghost" style="padding:9px 16px;">⬇ Excel İndir</button>
