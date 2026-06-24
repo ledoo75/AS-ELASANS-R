@@ -652,6 +652,7 @@ function subscribeAll() {
     if (role === 'bina' && bina) data = data.filter(o => binaEslesir(o.bina));
     G_ODEMELER = data;
     if (document.getElementById('pg-muhasebe')?.classList.contains('active')) renderMuhasebe();
+    if (document.getElementById('musteriCariDetay')?.style.display === 'block') renderMusteriCariDetay();
     rebuildBildirimler();
   }));
 
@@ -683,6 +684,7 @@ function subscribeAll() {
     if (role === 'bina' && bina) data = data.filter(b => binaEslesir(b.bina));
     G_BORCLAR = data;
     if (document.getElementById('muhTab-musteri')?.style.display !== 'none') renderMusteriCariListesi();
+    if (document.getElementById('musteriCariDetay')?.style.display === 'block') renderMusteriCariDetay();
   }));
 
   // Giderler (firma masrafları — HASSAS, sadece admin)
