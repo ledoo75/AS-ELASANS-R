@@ -1569,6 +1569,25 @@ window.saveBina = async () => {
     let binaId = editId;
     if (editId) {
       await updateDoc(doc(db, 'binalar', editId), data);
+
+      // Mevcut bir cari düzenlenirken anlaşma periyodik+tutarlı hale
+      // getirildiyse (veya tutar değiştiyse) ve bu ay için henüz borç
+      // oluşturulmadıysa, "Yeni Cari" akışındaki gibi hemen bu ayın
+      // borcunu da açıyoruz — yoksa otomatik borçlandırma sadece sayfa
+      // açılışında çalıştığı için kullanıcı sayfayı yenileyene kadar
+      // hiç borç görünmüyordu.
+      const editEdilenBina = G_BINALAR.find(b => b.id === editId);
+      const ayKeyZatenIslendi = editEdilenBina?.sonBorcAyKey === buAyKey;
+      if (anlasmaPeriyodik && anlasmaTutar > 0 && !ayKeyZatenIslendi) {
+        await addDoc(collection(db, 'borclar'), {
+          bina: ad, binaCariKodu: finalCariKodu, tutar: anlasmaTutar, tip: anlasmaTipi || 'Bakım',
+          tarih: new Date().toISOString().slice(0,10),
+          ayKey: buAyKey,
+          aciklama: `${anlasmaTipi || 'Bakım'} anlaşma bedeli — ${buAyKey} dönemi (otomatik)`,
+          olusturuldu: serverTimestamp()
+        });
+        await updateDoc(doc(db, 'binalar', editId), { sonBorcAyKey: buAyKey });
+      }
     } else {
       data.olusturuldu = serverTimestamp();
       data.sonBorcAyKey = anlasmaPeriyodik && anlasmaTutar > 0 ? buAyKey : null;
@@ -5031,7 +5050,9 @@ function renderMusteriCariListesi() {
     const netBakiye = toplamTahsilat - toplamBorc; // pozitif: cari alacaklı/dengeli, negatif: borçlu
 
     let durum, durumRenk;
-    if (toplamBorc === 0) { durum = 'Anlaşma Yok'; durumRenk = '#475569'; }
+    const anlasmaliBina = b.anlasmaPeriyodik && b.anlasmaTutar > 0;
+    if (toplamBorc === 0 && !anlasmaliBina) { durum = 'Anlaşma Yok'; durumRenk = '#475569'; }
+    else if (toplamBorc === 0 && anlasmaliBina) { durum = 'Borç Bekleniyor'; durumRenk = '#F59E0B'; }
     else if (netBakiye < 0) { durum = 'Borçlu'; durumRenk = '#EF4444'; }
     else { durum = 'Güncel'; durumRenk = '#10B981'; }
 
