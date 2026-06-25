@@ -416,6 +416,7 @@ function openDashboard() {
   subscribeAll();
   temaYukle();
   modYukle();
+  bildirimPanelScrollGuvenligiBagla();
   document.getElementById('pageDate').textContent = new Date().toLocaleDateString('tr-TR',
     { weekday:'long', year:'numeric', month:'long', day:'numeric' });
   // Sadece admin/teknisyen girişinde, bu ayın otomatik bakım kayıtlarını oluştur
@@ -912,6 +913,11 @@ window.showPage = (name, btn) => {
   const pg = document.getElementById('pg-' + name);
   if (pg) pg.classList.add('active');
   if (btn) btn.classList.add('active');
+
+  // Sayfa değişiminde bildirim paneli açık kalmış olabilir — her sayfa
+  // geçişinde garanti olarak kapatıyoruz, "yapışık" görünmesin.
+  const bp = document.getElementById('bildirimPanel');
+  if (bp) bp.style.display = 'none';
   const titles = {
     dashboard:'Genel Bakış', binalar:'Cari Yönetimi', bakimlar:'Bakım Takibi',
     arizalar:'Arıza Kayıtları', kullanicilar:'Kullanıcı Yönetimi',
@@ -3514,6 +3520,21 @@ window.addEventListener('resize', () => {
   const panel = document.getElementById('bildirimPanel');
   if (panel) panel.style.display = 'none';
 });
+
+// Sayfa içeriği kaydırılırken panel açık kalmışsa, "yapışık" görünmesin
+// diye kapatıyoruz (panel fixed konumlu olduğu için içerikle birlikte
+// kaymaz, dolayısıyla içerik onun üstünden geçip garip görünebilir).
+let G_BILDIRIM_SCROLL_BAGLI = false;
+function bildirimPanelScrollGuvenligiBagla() {
+  if (G_BILDIRIM_SCROLL_BAGLI) return; // birden fazla kez bağlanmasın
+  const contentArea = document.getElementById('dbContentArea');
+  if (!contentArea) return;
+  contentArea.addEventListener('scroll', () => {
+    const panel = document.getElementById('bildirimPanel');
+    if (panel && panel.style.display === 'block') panel.style.display = 'none';
+  });
+  G_BILDIRIM_SCROLL_BAGLI = true;
+}
 
 /* ═══════════════════════════════════════════════════════════════
    EXCEL / CSV DIŞA AKTARMA
@@ -6614,7 +6635,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
             <span id="notifBadge" style="display:none;position:absolute;top:-3px;right:-3px;background:#EF4444;color:#fff;font-size:9px;font-weight:800;width:16px;height:16px;border-radius:50%;align-items:center;justify-content:center;line-height:1;"></span>
           </button>
-          <div id="bildirimPanel" style="display:none;position:fixed;top:64px;right:20px;width:320px;max-width:calc(100vw - 40px);max-height:70vh;overflow-y:auto;background:#0D1629;border:1px solid rgba(0,173,181,.2);border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.5);z-index:9999;">
+          <div id="bildirimPanel" style="display:none;position:fixed;top:64px;right:20px;width:280px;max-width:calc(100vw - 32px);max-height:320px;overflow-y:auto;background:#0D1629;border:1px solid rgba(0,173,181,.2);border-radius:12px;box-shadow:0 20px 50px rgba(0,0,0,.5);z-index:9999;">
             <div style="padding:12px 16px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
               <span style="font-size:12px;font-weight:700;color:#E2E8F0;">Bildirimler</span>
               <button onclick="tumunuOkunduYap()" style="font-size:10px;color:#00ADB5;background:none;border:none;cursor:pointer;">Tümünü Okundu Yap</button>
@@ -6630,7 +6651,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       </div>
     </div>
 
-    <div class="db-content">
+    <div class="db-content" id="dbContentArea">
 
       <!-- GENEL BAKIŞ -->
       <div id="pg-dashboard" class="db-page active">
