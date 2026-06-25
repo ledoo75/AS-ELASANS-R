@@ -206,6 +206,15 @@ onAuthStateChanged(auth, async (user) => {
       currentUser     = user;
       closeLogin();
       openDashboard();
+
+      // Kullanıcının kendi profili (rol, izinliSayfalar, bina ataması vb.)
+      // admin tarafından sonradan değiştirilirse, sayfadan çıkıp girmeye
+      // gerek kalmadan sidebar/erişim anında güncellensin diye canlı dinle.
+      unsubscribers.push(onSnapshot(userRef, (liveSnap) => {
+        if (!liveSnap.exists()) return;
+        currentUserData = liveSnap.data();
+        setupUI(); // sidebar menüsünü güncel izinlerle yeniden çiz
+      }));
     } catch (e) {
       // Firestore okuma/yazma hatası (çoğunlukla Security Rules izin vermiyor)
       showLoginError('Firestore hatası: ' + (e.code || e.message));
@@ -458,6 +467,66 @@ let G_COZUM_PARCA_SAYAC = 0; // Arıza çözüm modalındaki parça satırları 
 let G_CPB_PARCA_SAYAC = 0;   // Cari ekranı "Parça/Onarım Borcu Ekle" modalındaki sayaç
 let G_SOZLESMELER = [];
 let G_BINALAR = [];
+
+/* ═══════════════════════════════════════════════════════════════
+   NAV_DEFS — Roller bazında varsayılan menü/sayfa tanımları.
+   Hem sidebar render'ında hem de admin'in kullanıcı bazlı sayfa
+   yetkilerini açıp kapatabildiği "🔐 Yetkiler" modalında kullanılır.
+   Not: 'dashboard' her zaman herkese açıktır, yetki listesine dahil
+   edilmez (kapatılamaz — uygulamanın giriş noktasıdır).
+═══════════════════════════════════════════════════════════════ */
+const NAV_DEFS = {
+  admin: [
+    { id:'dashboard',   icon:'grid',     label:'Genel Bakış' },
+    { id:'talepler',    icon:'inbox',    label:'Müşteri Talepleri' },
+    { id:'gorevler',    icon:'route',    label:'Bugünün Görevleri' },
+    { id:'takvim',      icon:'calendar', label:'Bakım Takvimi' },
+    { id:'aylik',       icon:'checklist',label:'Aylık Bakım Takibi' },
+    { id:'binalar',     icon:'building', label:'Cari Yönetimi' },
+    { id:'asansorler',  icon:'elevator', label:'Asansör Dosyası' },
+    { id:'bakimlar',    icon:'tool',     label:'Bakım Takibi' },
+    { id:'arizalar',    icon:'alert',    label:'Arıza Kayıtları' },
+    { id:'sozlesmeler', icon:'file',     label:'Sözleşme & Fatura' },
+    { id:'muhasebe',    icon:'cash',     label:'Muhasebe' },
+    { id:'performans',  icon:'chart',    label:'Teknisyen Performans' },
+    { id:'kullanicilar',icon:'users',    label:'Kullanıcılar' },
+  ],
+  teknisyen: [
+    { id:'dashboard', icon:'grid',     label:'Genel Bakış' },
+    { id:'talepler',  icon:'inbox',    label:'Müşteri Talepleri' },
+    { id:'gorevler',  icon:'route',    label:'Bugünün Görevleri' },
+    { id:'takvim',    icon:'calendar', label:'Bakım Takvimi' },
+    { id:'aylik',     icon:'checklist',label:'Aylık Bakım Takibi' },
+    { id:'binalar',   icon:'building', label:'Cariler' },
+    { id:'asansorler',icon:'elevator', label:'Asansör Dosyası' },
+    { id:'bakimlar',  icon:'tool',     label:'Bakım Takibi' },
+    { id:'arizalar',  icon:'alert',    label:'Arıza Kayıtları' },
+  ],
+  bina: [
+    { id:'dashboard', icon:'grid',  label:'Genel Bakış' },
+    { id:'asansorler',icon:'elevator', label:'Asansörlerim' },
+    { id:'bakimlar',  icon:'tool',  label:'Bakım Durumu' },
+    { id:'arizalar',  icon:'alert', label:'Arıza Bildir' },
+    { id:'sozlesmeler', icon:'file', label:'Sözleşmem' },
+    { id:'muhasebe',    icon:'cash', label:'Ödemelerim' },
+  ],
+};
+
+// Bir kullanıcının erişebileceği sayfa id'lerini döner.
+// - admin → her zaman tüm sayfalara erişir (kısıtlanamaz).
+// - izinliSayfalar tanımlıysa (admin tarafından özelleştirilmişse) → onu kullanır.
+// - tanımlı değilse (eski/varsayılan kullanıcı) → rolün tüm varsayılan sayfaları.
+function kullaniciIzinliSayfalar(userData) {
+  const role = userData?.rol;
+  const tumSayfalar = (NAV_DEFS[role] || NAV_DEFS.bina).map(x => x.id);
+  if (role === 'admin') return tumSayfalar; // admin asla kısıtlanmaz
+  if (Array.isArray(userData?.izinliSayfalar)) {
+    // 'dashboard' her zaman dahildir, admin yanlışlıkla kaldırsa da korunur
+    const set = new Set([...userData.izinliSayfalar, 'dashboard']);
+    return tumSayfalar.filter(id => set.has(id));
+  }
+  return tumSayfalar; // özelleştirme yapılmamış → varsayılan tüm sayfalar açık
+}
 let G_ODEMELER = [];
 let G_ASANSORLER = [];
 let G_BILDIRIMLER = [];
@@ -773,43 +842,8 @@ function setupUI() {
     if (binaGorunum) binaGorunum.style.display = 'none';
   }
 
-  // Sidebar nav
-  const navDefs = {
-    admin: [
-      { id:'dashboard',   icon:'grid',     label:'Genel Bakış' },
-      { id:'talepler',    icon:'inbox',    label:'Müşteri Talepleri' },
-      { id:'gorevler',    icon:'route',    label:'Bugünün Görevleri' },
-      { id:'takvim',      icon:'calendar', label:'Bakım Takvimi' },
-      { id:'aylik',       icon:'checklist',label:'Aylık Bakım Takibi' },
-      { id:'binalar',     icon:'building', label:'Cari Yönetimi' },
-      { id:'asansorler',  icon:'elevator', label:'Asansör Dosyası' },
-      { id:'bakimlar',    icon:'tool',     label:'Bakım Takibi' },
-      { id:'arizalar',    icon:'alert',    label:'Arıza Kayıtları' },
-      { id:'sozlesmeler', icon:'file',     label:'Sözleşme & Fatura' },
-      { id:'muhasebe',    icon:'cash',     label:'Muhasebe' },
-      { id:'performans',  icon:'chart',    label:'Teknisyen Performans' },
-      { id:'kullanicilar',icon:'users',    label:'Kullanıcılar' },
-    ],
-    teknisyen: [
-      { id:'dashboard', icon:'grid',     label:'Genel Bakış' },
-      { id:'talepler',  icon:'inbox',    label:'Müşteri Talepleri' },
-      { id:'gorevler',  icon:'route',    label:'Bugünün Görevleri' },
-      { id:'takvim',    icon:'calendar', label:'Bakım Takvimi' },
-      { id:'aylik',     icon:'checklist',label:'Aylık Bakım Takibi' },
-      { id:'binalar',   icon:'building', label:'Cariler' },
-      { id:'asansorler',icon:'elevator', label:'Asansör Dosyası' },
-      { id:'bakimlar',  icon:'tool',     label:'Bakım Takibi' },
-      { id:'arizalar',  icon:'alert',    label:'Arıza Kayıtları' },
-    ],
-    bina: [
-      { id:'dashboard', icon:'grid',  label:'Genel Bakış' },
-      { id:'asansorler',icon:'elevator', label:'Asansörlerim' },
-      { id:'bakimlar',  icon:'tool',  label:'Bakım Durumu' },
-      { id:'arizalar',  icon:'alert', label:'Arıza Bildir' },
-      { id:'sozlesmeler', icon:'file', label:'Sözleşmem' },
-      { id:'muhasebe',    icon:'cash', label:'Ödemelerim' },
-    ],
-  };
+  // Sidebar nav — NAV_DEFS'ten, kullanıcının izinli olduğu sayfalarla filtrelenmiş
+  const izinliSet = new Set(kullaniciIzinliSayfalar(u));
 
   const ICONS = {
     grid:     `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>`,
@@ -828,7 +862,7 @@ function setupUI() {
     inbox:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>`,
   };
 
-  const items  = navDefs[role] || navDefs.bina;
+  const items  = (NAV_DEFS[role] || NAV_DEFS.bina).filter(item => izinliSet.has(item.id));
   const navEl  = document.getElementById('sidebarNav');
   navEl.innerHTML = items.map((item, i) => `
     <div class="nav-item${i===0?' active':''}" data-page="${item.id}" onclick="showPage('${item.id}',this)">
@@ -856,17 +890,19 @@ function setupUI() {
 /* ═══════════════════════════════════════════════════════════════
    NAVİGASYON
 ═══════════════════════════════════════════════════════════════ */
-// Sayfa bazlı erişim kısıtlaması — UI'da gizli olsa da konsoldan zorlanmaya karşı
+// Sayfa bazlı erişim kısıtlaması — UI'da gizli olsa da konsoldan zorlanmaya karşı.
+// Artık kullaniciIzinliSayfalar() üzerinden, admin'in kullanıcıya özel
+// ayarladığı (veya rol varsayılanı) izinli sayfa listesine bakılıyor.
 const ADMIN_ONLY_PAGES = ['kullanicilar'];
-const BINA_ROLE_YASAKLI_PAGES = ['aylik']; // bina yöneticisi bu sayfaları hiç görmemeli
 
 window.showPage = (name, btn) => {
   const role = currentUserData?.rol;
-  if (ADMIN_ONLY_PAGES.includes(name) && role !== 'admin') {
+  const izinliSayfalar = kullaniciIzinliSayfalar(currentUserData);
+  if (!izinliSayfalar.includes(name)) {
     alert('Bu sayfaya erişim yetkiniz yok.');
     return;
   }
-  if (BINA_ROLE_YASAKLI_PAGES.includes(name) && role === 'bina') {
+  if (ADMIN_ONLY_PAGES.includes(name) && role !== 'admin') {
     alert('Bu sayfaya erişim yetkiniz yok.');
     return;
   }
@@ -1398,7 +1434,8 @@ function renderKullanicilar(data) {
     const kurucuBadge = u.kurucu ? '<span style="margin-left:6px;font-size:9px;background:rgba(245,158,11,.15);color:#F59E0B;border:1px solid rgba(245,158,11,.25);padding:1px 6px;border-radius:4px;font-weight:700;">🔒 KURUCU</span>' : '';
     const actionCell = u.kurucu
       ? '<span style="font-size:10px;color:#F59E0B;font-family:monospace;">Korumalı</span>'
-      : `<div style="display:flex;gap:10px;">
+      : `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+           ${u.rol !== 'admin' ? `<button onclick="yetkiModalAc('${u.id}','${(u.ad||'').replace(/'/g,"\\'")}','${u.rol}')" style="font-size:11px;color:#F59E0B;background:none;border:none;cursor:pointer;" class="admin-only">🔐 Yetkiler</button>` : ''}
            <button onclick="resetKullaniciSifre('${u.id}','${u.email}','${(u.ad||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;" class="admin-only">Şifre Sıfırla</button>
            <button onclick="deleteKullanici('${u.id}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
          </div>`;
@@ -1419,6 +1456,53 @@ function renderKullanicilar(data) {
   const role = currentUserData?.rol;
   document.querySelectorAll('.admin-only').forEach(el => { el.style.display = role === 'admin' ? '' : 'none'; });
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   YETKİ YÖNETİMİ — Admin, bir kullanıcının erişebileceği sayfaları
+   (sidebar menüsünü) buradan kullanıcıya özel açıp kapatabilir.
+   Veri 'kullanicilar/{id}'.izinliSayfalar dizisinde Firebase'de
+   tutulur — tanımlı değilse (varsayılan) rolün tüm sayfaları açıktır.
+═══════════════════════════════════════════════════════════════ */
+window.yetkiModalAc = (kulId, kulAd, kulRol) => {
+  document.getElementById('f-yetki-kulId').value = kulId;
+  document.getElementById('f-yetki-kulInfo').textContent = `${kulAd} — ${ {admin:'Yönetici', teknisyen:'Teknisyen', bina:'Bina Yöneticisi'}[kulRol] || kulRol }`;
+
+  const kullanici = G_KULLANICILAR.find(k => k.id === kulId);
+  const tumSayfalar = NAV_DEFS[kulRol] || NAV_DEFS.bina;
+  const izinliSet = new Set(
+    Array.isArray(kullanici?.izinliSayfalar)
+      ? kullanici.izinliSayfalar
+      : tumSayfalar.map(x => x.id) // özelleştirilmemişse varsayılan: hepsi açık
+  );
+
+  document.getElementById('f-yetki-sayfaListesi').innerHTML = tumSayfalar.map(item => {
+    const dashboardMu = item.id === 'dashboard';
+    return `
+    <label style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:7px;cursor:${dashboardMu?'default':'pointer'};background:rgba(255,255,255,.02);">
+      <input type="checkbox" class="yetki-sayfa-cb" value="${item.id}" ${izinliSet.has(item.id)?'checked':''} ${dashboardMu?'checked disabled':''} style="width:16px;height:16px;accent-color:#00ADB5;"/>
+      <span style="font-size:13px;color:#E2E8F0;">${item.label}${dashboardMu?' <span style=\"color:#475569;font-size:10px;\">(her zaman açık)</span>':''}</span>
+    </label>`;
+  }).join('');
+
+  openModal('mYetki');
+};
+
+window.yetkiTumunuSec = (durum) => {
+  document.querySelectorAll('.yetki-sayfa-cb').forEach(cb => {
+    if (!cb.disabled) cb.checked = durum;
+  });
+};
+
+window.yetkiKaydet = async () => {
+  const kulId = document.getElementById('f-yetki-kulId').value;
+  const secililer = [...document.querySelectorAll('.yetki-sayfa-cb')].filter(cb => cb.checked).map(cb => cb.value);
+  try {
+    await updateDoc(doc(db, 'kullanicilar', kulId), { izinliSayfalar: secililer });
+    closeModal('mYetki');
+  } catch(e) {
+    alert('Yetkiler kaydedilemedi: ' + e.message);
+  }
+};
 
 // Not: deleteKullanici fonksiyonu artık API üzerinden çalışıyor (aşağıda tanımlı).
 // Burada Firestore'dan silmek Auth hesabını silmeyeceği için API versiyonu kullanılıyor.
@@ -7232,6 +7316,31 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mKullanici')" class="btn-ghost">İptal</button>
       <button id="kulSaveBtn" onclick="createKullanici()" class="btn-sm">Kullanıcı Oluştur</button>
+    </div>
+  </div>
+</div>
+
+<!-- Yetki Yönetimi Modalı — Admin, bir kullanıcının hangi sayfaları
+     görebileceğini/açabileceğini buradan açıp kapatabilir. -->
+<div id="modal-mYetki" class="modal-wrap" onclick="if(event.target===this)closeModal('mYetki')">
+  <div class="modal-box" style="max-width:420px;">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">🔐 Sayfa Yetkileri</h3>
+      <button onclick="closeModal('mYetki')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <input type="hidden" id="f-yetki-kulId"/>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;max-height:65vh;overflow-y:auto;">
+      <div id="f-yetki-kulInfo" style="font-size:12px;font-weight:700;color:#00ADB5;background:rgba(0,173,181,.06);border:1px solid rgba(0,173,181,.15);border-radius:8px;padding:8px 12px;"></div>
+      <p style="font-size:11px;color:#64748B;line-height:1.5;">Bu kullanıcının sidebar menüsünde göreceği ve açabileceği sayfaları işaretleyin. "Genel Bakış" her zaman açıktır, kapatılamaz.</p>
+      <div id="f-yetki-sayfaListesi" style="display:flex;flex-direction:column;gap:4px;"></div>
+      <div style="display:flex;gap:8px;margin-top:4px;">
+        <button type="button" onclick="yetkiTumunuSec(true)" class="btn-ghost" style="flex:1;font-size:11px;padding:7px;">Tümünü Seç</button>
+        <button type="button" onclick="yetkiTumunuSec(false)" class="btn-ghost" style="flex:1;font-size:11px;padding:7px;">Tümünü Kaldır</button>
+      </div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mYetki')" class="btn-ghost">İptal</button>
+      <button onclick="yetkiKaydet()" style="padding:8px 16px;background:#00ADB5;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">💾 Kaydet</button>
     </div>
   </div>
 </div>
