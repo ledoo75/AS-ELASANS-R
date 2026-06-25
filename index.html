@@ -3505,18 +3505,38 @@ window.toggleBildirimPanel = () => {
   const panel = document.getElementById('bildirimPanel');
   const isAcik = panel.style.display === 'block';
   if (!isAcik) {
-    // Panel "fixed" konumlu olduğu için, zilin gerçek ekran konumuna göre
-    // top/right değerlerini her açılışta yeniden hesaplıyoruz — böylece
-    // topbar yüksekliği cihaza/ekrana göre değişse de panel hep zilin
-    // tam altında, doğru yerde açılır (sayfa kaydırmasından etkilenmez).
-    const btn = document.getElementById('notifBellBtn');
-    const r = btn.getBoundingClientRect();
-    panel.style.top = `${r.bottom + 8}px`;
-    panel.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+    bildirimPanelKonumlandir();
     renderBildirimPanel();
+    panel.style.display = 'block';
+    // Panel açık olduğu sürece konumunu sürekli (200ms'de bir) zilin
+    // gerçek ekran konumuna göre tazeliyoruz. Bu, sayfa kaydırma,
+    // pencere boyutu değişimi veya farklı bir scroll konteynerinden
+    // kaynaklanabilecek her türlü senkronizasyon kaybına karşı en
+    // garantili çözüm — panel asla "yanlış yerde donmuş" kalamaz.
+    if (G_BILDIRIM_KONUM_INTERVAL) clearInterval(G_BILDIRIM_KONUM_INTERVAL);
+    G_BILDIRIM_KONUM_INTERVAL = setInterval(() => {
+      if (panel.style.display !== 'block') {
+        clearInterval(G_BILDIRIM_KONUM_INTERVAL);
+        G_BILDIRIM_KONUM_INTERVAL = null;
+        return;
+      }
+      bildirimPanelKonumlandir();
+    }, 200);
+  } else {
+    panel.style.display = 'none';
+    if (G_BILDIRIM_KONUM_INTERVAL) { clearInterval(G_BILDIRIM_KONUM_INTERVAL); G_BILDIRIM_KONUM_INTERVAL = null; }
   }
-  panel.style.display = isAcik ? 'none' : 'block';
 };
+
+let G_BILDIRIM_KONUM_INTERVAL = null;
+function bildirimPanelKonumlandir() {
+  const panel = document.getElementById('bildirimPanel');
+  const btn = document.getElementById('notifBellBtn');
+  if (!panel || !btn) return;
+  const r = btn.getBoundingClientRect();
+  panel.style.top = `${r.bottom + 8}px`;
+  panel.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+}
 
 window.tumunuOkunduYap = () => {
   const tumIdler = G_BILDIRIMLER.map(b => b.id);
