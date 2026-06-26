@@ -424,9 +424,6 @@ function openDashboard() {
     setTimeout(otomatikAylikBakimOlustur, 1500); // binalar verisinin gelmesi için kısa bekleme
     setTimeout(otomatikPeriyodikBorcOlustur, 1700);
   }
-  if (currentUserData?.rol === 'admin') {
-    setTimeout(otomatikSabitGiderOlustur, 1900);
-  }
 
   // QR kod ile gelindiyse, sayfa ilk yüklenirken sabitlenen G_QR_ASANSOR_ID
   // kullanılır (window.location.search'e tekrar bakmıyoruz — login akışı
@@ -541,7 +538,6 @@ let G_KULLANICILAR = [];      // personel listesi (avans dropdown'u için)
 let G_AYLIK_BAKIMLAR = [];     // her bina için aylık bakım yapıldı/yapılmadı kaydı
 let G_BORCLAR = [];            // cari borç kayıtları (anlaşma bedeli üzerinden otomatik/manuel)
 let G_GIDERLER = [];            // firma giderleri (yakıt, malzeme, kira vb.)
-let G_GIDER_SABLONLARI = [];    // tekrarlayan/sabit gider şablonları (kira, sigorta vb. — her ay otomatik gider açar)
 let G_TALEPLER = [];            // site iletişim formundan gelen müşteri talepleri
 let G_BAKIM_BINA_ARAMA = '';    // Bakım Takibi'ndeki bina adına özel arama (tarih filtresinden bağımsız)
 let G_MAASLAR = [];             // personel sabit aylık maaş tanımları
@@ -768,13 +764,6 @@ function subscribeAll() {
       G_GIDERLER = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (document.getElementById('muhTab-giderler')?.style.display !== 'none') renderGiderler();
       if (document.getElementById('muhTab-ozet')?.style.display !== 'none') renderMaliOzet();
-    }));
-
-    // Tekrarlayan/Sabit Gider Şablonları (kira, sigorta vb.)
-    const giderSablonQ = query(collection(db, 'giderSablonlari'));
-    unsubscribers.push(onSnapshot(giderSablonQ, snap => {
-      G_GIDER_SABLONLARI = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (document.getElementById('muhTab-giderler')?.style.display !== 'none') renderGiderSablonlari();
     }));
   }
 
@@ -1190,42 +1179,6 @@ async function otomatikPeriyodikBorcOlustur() {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   SABİT/TEKRARLAYAN GİDERLER — Otomatik Oluşturma
-   Kira, sigorta, sabit fatura gibi her ay aynı tutarda tekrar eden
-   giderler için kullanıcı bir "şablon" tanımlar (giderSablonlari
-   koleksiyonu). Bu fonksiyon, şablonun belirttiği güne gelindiğinde
-   ve bu ay için henüz oluşturulmadıysa, otomatik bir gider kaydı açar.
-   Mantık, bina anlaşma bedeli otomasyonuyla birebir aynıdır.
-═══════════════════════════════════════════════════════════════ */
-async function otomatikSabitGiderOlustur() {
-  if (!G_GIDER_SABLONLARI.length) return;
-
-  const bugun = new Date();
-  const ayKey = `${bugun.getFullYear()}-${String(bugun.getMonth()+1).padStart(2,'0')}`;
-  const bugunGun = bugun.getDate();
-
-  for (const sablon of G_GIDER_SABLONLARI) {
-    if (sablon.aktif === false) continue; // kullanıcı durdurmuş
-    if (sablon.sonOlusturulanAyKey === ayKey) continue; // bu ay için zaten oluşturuldu
-    if (bugunGun < (sablon.tekrarGun || 1)) continue; // henüz o günü gelmedi
-
-    try {
-      await addDoc(collection(db, 'giderler'), {
-        kategori: sablon.kategori, tutar: sablon.tutar, odemeYontemi: sablon.odemeYontemi,
-        aciklama: `${sablon.aciklama || sablon.kategori} — ${ayKey} dönemi (otomatik/sabit gider)`,
-        tarih: bugun.toISOString().slice(0,10),
-        kaydeden: 'Sistem (Otomatik)',
-        sablonId: sablon.id,
-        olusturuldu: serverTimestamp()
-      });
-      await updateDoc(doc(db, 'giderSablonlari', sablon.id), { sonOlusturulanAyKey: ayKey });
-    } catch (e) {
-      console.warn('Otomatik sabit gider oluşturulamadı:', sablon.kategori, e.message);
-    }
-  }
-}
-
 window.aylikAyShift = (delta, buAy) => {
   if (buAy) aylikSeciliTarih = new Date();
   else aylikSeciliTarih.setMonth(aylikSeciliTarih.getMonth() + delta);
@@ -1301,10 +1254,23 @@ function renderAylikTakip() {
   // carilere ait olanları göster. Bir cari silindiğinde, ona ait geçmiş
   // aylikBakimlar kaydı Firestore'da kalır (veri kaybı önlenir), ama bu
   // listede artık görünmemesi gerekir.
-  const kayitliBinaAdlari = new Set(G_BINALAR.map(b => b.ad));
-  const kayitliBinaKodlari = new Set(G_BINALAR.map(b => b.cariKodu).filter(Boolean));
-  let kayitlar = G_AYLIK_BAKIMLAR.filter(a => a.ayKey === ayKey &&
-    (a.binaCariKodu ? kayitliBinaKodlari.has(a.binaCariKodu) : kayitliBinaAdlari.has(a.bina)));
+  //
+  // NOT: Sadece koda (binaCariKodu) bakmak yeterli değildir — eğer silinen
+  // bir carinin kodu (örn. CR-0004) daha sonra YENİ bir cariye otomatik
+  // numaralandırmayla yeniden verilmişse, eski cariye ait stale kayıt
+  // yanlışlıkla "hâlâ kayıtlı" sayılıp yeni carinin altında belirir. Bunu
+  // önlemek için kod eşleşse bile binanın GÜNCEL ADI ile kayıttaki ad da
+  // (normalize edilerek) karşılaştırılır; ikisi de tutmuyorsa kayıt
+  // artık geçersiz/eskidir ve listeye dahil edilmez.
+  let kayitlar = G_AYLIK_BAKIMLAR.filter(a => {
+    if (a.ayKey !== ayKey) return false;
+    const sahipBina = G_BINALAR.find(b => binaKaydaEslesir(a, b));
+    if (!sahipBina) return false;
+    // kod üzerinden eşleşti ama isimler birbirini tutmuyorsa (kod yeniden
+    // kullanılmış demektir) — geçersiz say.
+    if (a.binaCariKodu && binaAdiNormalize(a.bina) !== binaAdiNormalize(sahipBina.ad)) return false;
+    return true;
+  });
 
   // Eğer bu ay için hiç kayıt yoksa (örn. geçmiş bir aya bakılıyor ve oluşturulmamışsa)
   // binalar listesinden sanal satırlar oluştur (sadece görüntüleme, henüz Firestore'a yazılmaz)
@@ -1588,11 +1554,27 @@ window.saveBina = async () => {
   if (!ad) { alert('Bina / cari adı zorunludur.'); return; }
 
   // Cari kodu girilmediyse otomatik üret (CR-0001, CR-0002 ...)
+  // ÖNEMLİ: sadece ŞU AN kayıtlı binalardaki kodlara değil, geçmişte
+  // kullanılmış (silinmiş cariler dahil) TÜM kodlara bakılır. Aksi halde
+  // bir cari silindiğinde onun kodu (örn. CR-0004) "boşa çıkar" ve sonraki
+  // yeni cariye yeniden verilebilir — bu da o eski cariye ait geçmiş
+  // aylikBakimlar/bakım/borç/ödeme kayıtlarının (Firestore'da veri kaybı
+  // önlemek için silinmeyip duran) yanlışlıkla YENİ cariye ait gibi
+  // görünmesine yol açar (örn. Aylık Bakım Takibi'nde silinmiş bir binanın
+  // tekrar belirmesi).
   let finalCariKodu = cariKodu;
   if (!finalCariKodu) {
-    const mevcutKodlar = G_BINALAR.map(b => b.cariKodu).filter(Boolean);
     let maxNo = 0;
-    mevcutKodlar.forEach(k => {
+    const kodKaynaklari = [
+      ...G_BINALAR.map(b => b.cariKodu),
+      ...G_AYLIK_BAKIMLAR.map(a => a.binaCariKodu),
+      ...G_BORCLAR.map(b => b.binaCariKodu),
+      ...G_ODEMELER.map(o => o.binaCariKodu),
+      ...G_BAKIMLAR.map(b => b.binaCariKodu),
+      ...G_ARIZALAR.map(a => a.binaCariKodu),
+      ...G_SOZLESMELER.map(s => s.binaCariKodu),
+    ].filter(Boolean);
+    kodKaynaklari.forEach(k => {
       const m = k.match(/CR-(\d+)/);
       if (m) maxNo = Math.max(maxNo, parseInt(m[1]));
     });
@@ -1894,12 +1876,9 @@ window.hizliArizaEkle = (binaAdi) => {
 };
 
 window.hizliOdemeEkle = (binaAdi) => {
-  document.getElementById('f-odeme-editId').value = '';
   document.getElementById('f-odeme-bina').value = binaAdi;
   document.getElementById('f-odeme-tutar').value = '';
   document.getElementById('f-odeme-tarih').value = new Date().toISOString().slice(0,10);
-  document.getElementById('mOdemeTitle').textContent = 'Ödeme Kaydet';
-  document.getElementById('odemeSaveBtn').textContent = 'Kaydet';
   openModal('mOdeme');
 };
 
@@ -3808,121 +3787,31 @@ window.exportBakimlarCSV = () => {
    MUHASEBE — GİDER YÖNETİMİ (Firma Masrafları)
 ═══════════════════════════════════════════════════════════════ */
 window.saveGider = async () => {
-  const editId    = document.getElementById('f-gider-editId').value;
   const kategori  = document.getElementById('f-gider-kategori').value;
   const tutar     = Math.max(0, parseFloat(document.getElementById('f-gider-tutar').value) || 0);
   const tarih     = document.getElementById('f-gider-tarih').value;
   const odemeYontemi = document.getElementById('f-gider-odemeYontemi').value;
   const aciklama  = document.getElementById('f-gider-aciklama').value.trim();
-  const tekrarla  = document.getElementById('f-gider-tekrarla').checked;
-  const tekrarGun = parseInt(document.getElementById('f-gider-tekrarGun').value) || null;
 
   if (!tutar || !tarih) { alert('Tutar ve tarih zorunludur.'); return; }
-  if (tekrarla && !tekrarGun) { alert('Tekrarlayan gider için "her ay hangi gün" alanını doldurmalısınız.'); return; }
 
   try {
-    if (editId) {
-      await updateDoc(doc(db, 'giderler', editId), {
-        kategori, tutar, tarih, odemeYontemi, aciklama,
-        guncellendi: serverTimestamp()
-      });
-    } else {
-      await addDoc(collection(db, 'giderler'), {
-        kategori, tutar, tarih, odemeYontemi, aciklama,
-        kaydeden: currentUserData?.ad || '—',
-        olusturuldu: serverTimestamp()
-      });
-
-      // Tekrarlayan gider işaretliyse, ayrı bir "şablon" kaydı da
-      // oluşturuyoruz — bu şablon her ay otomatik yeni gider açar
-      // (bina anlaşma bedeli sistemindeki sonBorcAyKey mantığının aynısı).
-      if (tekrarla) {
-        await addDoc(collection(db, 'giderSablonlari'), {
-          kategori, tutar, odemeYontemi, aciklama, tekrarGun,
-          sonOlusturulanAyKey: tarih.slice(0,7), // bu ayın gideri zaten elle girildi, tekrar oluşturulmasın
-          aktif: true,
-          olusturuldu: serverTimestamp()
-        });
-      }
-    }
+    await addDoc(collection(db, 'giderler'), {
+      kategori, tutar, tarih, odemeYontemi, aciklama,
+      kaydeden: currentUserData?.ad || '—',
+      olusturuldu: serverTimestamp()
+    });
     closeModal('mGider');
-    resetGiderForm();
+    document.getElementById('f-gider-tutar').value = '';
+    document.getElementById('f-gider-tarih').value = '';
+    document.getElementById('f-gider-odemeYontemi').value = 'Nakit';
+    document.getElementById('f-gider-aciklama').value = '';
   } catch(e) { alert('Hata: ' + e.message); }
-};
-
-function resetGiderForm() {
-  document.getElementById('f-gider-editId').value = '';
-  document.getElementById('f-gider-tutar').value = '';
-  document.getElementById('f-gider-tarih').value = '';
-  document.getElementById('f-gider-odemeYontemi').value = 'Nakit';
-  document.getElementById('f-gider-aciklama').value = '';
-  document.getElementById('f-gider-tekrarla').checked = false;
-  document.getElementById('f-gider-tekrarGun').value = '';
-  document.getElementById('f-gider-tekrarGunWrap').style.display = 'none';
-  document.getElementById('f-gider-tekrarBlok').style.display = 'block';
-  document.getElementById('mGiderTitle').textContent = 'Gider Ekle';
-  document.getElementById('giderSaveBtn').textContent = 'Kaydet';
-}
-
-// Giderler listesinden bir kaydı düzenlemek için modali doldurup açar.
-// Not: Düzenleme modunda tekrarlama seçeneği gösterilmez — tekrarlayan
-// şablonlar artık "Sabit Giderler" sekmesinden ayrıca yönetilir.
-window.editGider = (id) => {
-  const g = G_GIDERLER.find(x => x.id === id);
-  if (!g) return;
-  document.getElementById('f-gider-editId').value = id;
-  document.getElementById('f-gider-kategori').value = g.kategori || 'Diğer';
-  document.getElementById('f-gider-tutar').value = g.tutar || '';
-  document.getElementById('f-gider-tarih').value = g.tarih || '';
-  document.getElementById('f-gider-odemeYontemi').value = g.odemeYontemi || 'Nakit';
-  document.getElementById('f-gider-aciklama').value = g.aciklama || '';
-  document.getElementById('f-gider-tekrarBlok').style.display = 'none'; // düzenlerken tekrar şablonu oluşturulmaz
-  document.getElementById('mGiderTitle').textContent = '✏️ Gider Kaydını Düzenle';
-  document.getElementById('giderSaveBtn').textContent = '💾 Güncelle';
-  openModal('mGider');
 };
 
 window.deleteGider = async (id, kategori) => {
   if (!confirm(`"${kategori}" gider kaydını silmek istediğinizden emin misiniz?`)) return;
   await deleteDoc(doc(db, 'giderler', id));
-};
-
-/* ═══════════════════════════════════════════════════════════════
-   SABİT / TEKRARLAYAN GİDER ŞABLONLARI — Listeleme ve Yönetim
-═══════════════════════════════════════════════════════════════ */
-window.renderGiderSablonlari = function() {
-  const listEl = document.getElementById('sabitGiderlerListesi');
-  const kartEl = document.getElementById('sabitGiderlerKart');
-  if (!listEl) return;
-
-  if (!G_GIDER_SABLONLARI.length) {
-    kartEl.style.display = 'none';
-    return;
-  }
-  kartEl.style.display = 'block';
-
-  listEl.innerHTML = G_GIDER_SABLONLARI.map(s => `
-    <div style="padding:11px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.4);${s.aktif===false?'opacity:.5;':''}">
-      <span style="font-size:16px;flex-shrink:0;">${GIDER_IKON[s.kategori]||'📦'}</span>
-      <div style="flex:1;min-width:0;">
-        <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${s.kategori}${s.aciklama ? ' — '+s.aciklama : ''}</div>
-        <div style="font-size:11px;color:#475569;margin-top:1px;">Her ayın ${s.tekrarGun}. günü · ${s.odemeYontemi||'Nakit'} ${s.aktif===false?'· <span style="color:#F59E0B;">Durduruldu</span>':''}</div>
-      </div>
-      <div style="font-size:13px;font-weight:700;color:#EF4444;flex-shrink:0;">-${(s.tutar||0).toLocaleString('tr-TR')} ₺</div>
-      <button onclick="toggleGiderSablonAktif('${s.id}', ${s.aktif===false})" title="${s.aktif===false?'Yeniden Başlat':'Durdur'}" style="flex-shrink:0;font-size:11px;color:${s.aktif===false?'#10B981':'#F59E0B'};background:none;border:none;cursor:pointer;">${s.aktif===false?'▶ Başlat':'⏸ Durdur'}</button>
-      <button onclick="deleteGiderSablon('${s.id}')" title="Şablonu Sil" style="flex-shrink:0;font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;">Sil</button>
-    </div>`).join('');
-};
-
-window.toggleGiderSablonAktif = async (id, yeniDurum) => {
-  try {
-    await updateDoc(doc(db, 'giderSablonlari', id), { aktif: yeniDurum });
-  } catch(e) { alert('Hata: ' + e.message); }
-};
-
-window.deleteGiderSablon = async (id) => {
-  if (!confirm('Bu sabit gider şablonunu silmek istediğinizden emin misiniz?\n\nNot: Bu işlem geçmişte zaten oluşturulmuş gider kayıtlarını silmez, sadece bundan sonraki otomatik oluşturmayı durdurur.')) return;
-  await deleteDoc(doc(db, 'giderSablonlari', id));
 };
 
 const GIDER_IKON = { 'Yakıt':'⛽', 'Malzeme':'🔧', 'Kira':'🏢', 'Maaş':'💼', 'Fatura':'📄', 'Araç':'🚗', 'Diğer':'📦' };
@@ -3945,8 +3834,7 @@ window.renderGiderler = function() {
         <td style="padding:12px;"><span class="sbadge badge-err-sm">${GIDER_IKON[g.kategori]||'📦'} ${g.kategori}</span></td>
         <td style="padding:12px;font-size:12px;color:#94A3B8;">${g.aciklama || '—'}</td>
         <td style="padding:12px;text-align:right;font-size:13px;color:#EF4444;font-weight:700;">-${(g.tutar||0).toLocaleString('tr-TR')} ₺</td>
-        <td style="padding:12px;text-align:right;display:flex;gap:8px;justify-content:flex-end;">
-          <button onclick="editGider('${g.id}')" style="font-size:11px;color:#F59E0B;background:none;border:none;cursor:pointer;">✏️ Düzenle</button>
+        <td style="padding:12px;text-align:right;">
           <button onclick="deleteGider('${g.id}','${(g.kategori||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;">Sil</button>
         </td>
       </tr>`).join('');
@@ -4429,20 +4317,16 @@ window.yillikRaporPDF = async () => {
 // Aynı Ödeme Kaydet modalını kullanır, sadece bina adı ve tarihi
 // önceden doldurur.
 window.hizliTahsilatAc = (binaAdi) => {
-  document.getElementById('f-odeme-editId').value = '';
   document.getElementById('f-odeme-bina').value = binaAdi;
   document.getElementById('f-odeme-tutar').value = '';
   document.getElementById('f-odeme-tarih').value = new Date().toISOString().slice(0,10);
   document.getElementById('f-odeme-tur').value = 'Nakit';
   document.getElementById('f-odeme-aciklama').value = '';
-  document.getElementById('mOdemeTitle').textContent = 'Ödeme Kaydet';
-  document.getElementById('odemeSaveBtn').textContent = 'Kaydet';
   openModal('mOdeme');
   setTimeout(() => document.getElementById('f-odeme-tutar')?.focus(), 150);
 };
 
 window.saveOdeme = async () => {
-  const editId    = document.getElementById('f-odeme-editId').value;
   const bina      = document.getElementById('f-odeme-bina').value.trim();
   const tutar     = Math.max(0, parseFloat(document.getElementById('f-odeme-tutar').value) || 0);
   const tarih     = document.getElementById('f-odeme-tarih').value;
@@ -4452,47 +4336,17 @@ window.saveOdeme = async () => {
   if (!bina || !tutar || !tarih) { alert('Bina, tutar ve tarih zorunludur.'); return; }
 
   try {
-    if (editId) {
-      await updateDoc(doc(db, 'odemeler', editId), {
-        bina, binaCariKodu: binaCariKoduBul(bina), tutar, tarih, tur, aciklama,
-        guncellendi: serverTimestamp()
-      });
-    } else {
-      await addDoc(collection(db, 'odemeler'), {
-        bina, binaCariKodu: binaCariKoduBul(bina), tutar, tarih, tur, aciklama,
-        kaydeden: currentUserData?.ad || '—',
-        olusturuldu: serverTimestamp()
-      });
-    }
+    await addDoc(collection(db, 'odemeler'), {
+      bina, binaCariKodu: binaCariKoduBul(bina), tutar, tarih, tur, aciklama,
+      kaydeden: currentUserData?.ad || '—',
+      olusturuldu: serverTimestamp()
+    });
     closeModal('mOdeme');
-    resetOdemeForm();
+    document.getElementById('f-odeme-bina').value = '';
+    document.getElementById('f-odeme-tutar').value = '';
+    document.getElementById('f-odeme-tarih').value = '';
+    document.getElementById('f-odeme-aciklama').value = '';
   } catch(e) { alert('Hata: ' + e.message); }
-};
-
-function resetOdemeForm() {
-  document.getElementById('f-odeme-editId').value = '';
-  document.getElementById('f-odeme-bina').value = '';
-  document.getElementById('f-odeme-tutar').value = '';
-  document.getElementById('f-odeme-tarih').value = '';
-  document.getElementById('f-odeme-tur').value = 'Nakit';
-  document.getElementById('f-odeme-aciklama').value = '';
-  document.getElementById('mOdemeTitle').textContent = 'Ödeme Kaydet';
-  document.getElementById('odemeSaveBtn').textContent = 'Kaydet';
-}
-
-// Ödemeler listesinden bir kaydı düzenlemek için modali doldurup açar.
-window.editOdeme = (id) => {
-  const o = G_ODEMELER.find(x => x.id === id);
-  if (!o) return;
-  document.getElementById('f-odeme-editId').value = id;
-  document.getElementById('f-odeme-bina').value = o.bina || '';
-  document.getElementById('f-odeme-tutar').value = o.tutar || '';
-  document.getElementById('f-odeme-tarih').value = o.tarih || '';
-  document.getElementById('f-odeme-tur').value = o.tur || 'Nakit';
-  document.getElementById('f-odeme-aciklama').value = o.aciklama || '';
-  document.getElementById('mOdemeTitle').textContent = '✏️ Ödeme Kaydını Düzenle';
-  document.getElementById('odemeSaveBtn').textContent = '💾 Güncelle';
-  openModal('mOdeme');
 };
 
 window.deleteOdeme = async (id, bina) => {
@@ -4528,10 +4382,9 @@ window.renderMuhasebe = function() {
         <td style="padding:12px;font-size:13px;color:#10B981;font-weight:700;">${(o.tutar||0).toLocaleString('tr-TR')} ₺</td>
         <td style="padding:12px;"><span class="sbadge badge-info-sm">${o.tur||'—'}</span></td>
         <td style="padding:12px;font-size:12px;color:#64748B;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${o.aciklama||'—'}</td>
-        <td style="padding:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <td style="padding:12px;display:flex;gap:8px;">
           <button onclick="downloadMakbuz('${o.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">📄 Makbuz</button>
-          <button onclick="downloadMakbuzExcel('${o.id}')" style="font-size:11px;color:#10B981;background:none;border:none;cursor:pointer;">⬇ Excel</button>
-          <button onclick="editOdeme('${o.id}')" style="font-size:11px;color:#F59E0B;background:none;border:none;cursor:pointer;" class="admin-only">✏️ Düzenle</button>
+          <button onclick="downloadMakbuzExcel('${o.id}')" style="font-size:11px;color:#10B981;background:none;border:none;cursor:pointer;margin-left:6px;">⬇ Excel</button>
           <button onclick="deleteOdeme('${o.id}','${(o.bina||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
         </td>
       </tr>`).join('');
@@ -4589,7 +4442,7 @@ window.switchMuhasebeTab = (tab, btn) => {
 
   if (tab === 'personel') renderPersonelCari();
   if (tab === 'musteri') { doldurMusteriSecimi(); renderMusteriCariListesi(); }
-  if (tab === 'giderler') { renderGiderler(); renderGiderSablonlari(); }
+  if (tab === 'giderler') renderGiderler();
   if (tab === 'ozet') renderMaliOzet();
   if (tab === 'maas') renderMaaslar();
   if (tab === 'mesai') renderMesai();
@@ -7446,7 +7299,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             </div>
             <div style="display:flex;gap:8px;">
               <button onclick="exportOdemelerCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
-              <button onclick="resetOdemeForm(); openModal('mOdeme')" class="btn-sm admin-only">+ Ödeme Kaydet</button>
+              <button onclick="openModal('mOdeme')" class="btn-sm admin-only">+ Ödeme Kaydet</button>
             </div>
           </div>
 
@@ -7596,7 +7449,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <p style="font-size:11px;color:#475569;">Yakıt, malzeme, kira gibi firma giderleri</p>
             <div style="display:flex;gap:8px;">
               <button onclick="exportGiderlerCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
-              <button onclick="resetGiderForm(); openModal('mGider')" class="btn-sm">+ Gider Ekle</button>
+              <button onclick="openModal('mGider')" class="btn-sm">+ Gider Ekle</button>
             </div>
           </div>
 
@@ -7607,15 +7460,6 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           </div>
 
           <div id="giderKategoriOzet" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;"></div>
-
-          <!-- Sabit / Tekrarlayan Giderler -->
-          <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;" id="sabitGiderlerKart">
-            <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">🔁 Sabit / Tekrarlayan Giderler</h3>
-              <span style="font-size:10px;color:#475569;">Kira, sigorta vb. — her ay otomatik oluşur</span>
-            </div>
-            <div id="sabitGiderlerListesi"></div>
-          </div>
 
           <div class="card" style="padding:0;overflow:hidden;">
             <div style="overflow-x:auto;">
@@ -8125,10 +7969,9 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 <div id="modal-mOdeme" class="modal-wrap" onclick="if(event.target===this)closeModal('mOdeme')">
   <div class="modal-box">
     <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
-      <h3 id="mOdemeTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">Ödeme Kaydet</h3>
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Ödeme Kaydet</h3>
       <button onclick="closeModal('mOdeme')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
     </div>
-    <input type="hidden" id="f-odeme-editId"/>
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label>
         <input id="f-odeme-bina" type="text" class="db-input" placeholder="Tuna Apartmanı" list="odemeBinaListesi"/>
@@ -8144,7 +7987,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mOdeme')" class="btn-ghost">İptal</button>
-      <button onclick="saveOdeme()" id="odemeSaveBtn" class="btn-sm">Kaydet</button>
+      <button onclick="saveOdeme()" class="btn-sm">Kaydet</button>
     </div>
   </div>
 </div>
@@ -8153,10 +7996,9 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 <div id="modal-mGider" class="modal-wrap" onclick="if(event.target===this)closeModal('mGider')">
   <div class="modal-box">
     <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
-      <h3 id="mGiderTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">Gider Ekle</h3>
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Gider Ekle</h3>
       <button onclick="closeModal('mGider')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
     </div>
-    <input type="hidden" id="f-gider-editId"/>
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kategori *</label>
         <select id="f-gider-kategori" class="db-input">
@@ -8176,22 +8018,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Yöntemi</label>
         <select id="f-gider-odemeYontemi" class="db-input"><option>Nakit</option><option>Havale/EFT</option><option>Kredi Kartı</option><option>Çek</option></select></div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Açıklama</label><input id="f-gider-aciklama" type="text" class="db-input" placeholder="Örn: Servis aracı yakıt dolumu"/></div>
-
-      <div class="card" id="f-gider-tekrarBlok" style="padding:12px 14px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.18);">
-        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#E2E8F0;cursor:pointer;font-weight:600;">
-          <input type="checkbox" id="f-gider-tekrarla" style="width:15px;height:15px;accent-color:#00ADB5;" onchange="document.getElementById('f-gider-tekrarGunWrap').style.display=this.checked?'block':'none';"/>
-          🔁 Bu gideri her ay otomatik tekrarla (kira, sigorta, sabit fatura vb.)
-        </label>
-        <div id="f-gider-tekrarGunWrap" style="display:none;margin-top:10px;">
-          <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Her ay hangi gün otomatik oluşsun?</label>
-          <input id="f-gider-tekrarGun" type="number" min="1" max="28" class="db-input" placeholder="Örn: 1" style="max-width:120px;"/>
-          <p style="font-size:10px;color:#64748B;margin-top:6px;">Sistem her ay bu günde, aynı kategori/tutar/açıklama ile otomatik yeni bir gider kaydı açar. İstediğiniz zaman bu kaydı (şablonu) silerek durdurabilirsiniz.</p>
-        </div>
-      </div>
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mGider')" class="btn-ghost">İptal</button>
-      <button onclick="saveGider()" id="giderSaveBtn" class="btn-sm">Kaydet</button>
+      <button onclick="saveGider()" class="btn-sm">Kaydet</button>
     </div>
   </div>
 </div>
