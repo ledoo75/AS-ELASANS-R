@@ -655,6 +655,7 @@ function subscribeAll() {
       G_TALEPLER = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (document.getElementById('pg-talepler')?.classList.contains('active')) renderTalepler();
       renderTaleplerSayac();
+      renderDashboardEkstraBloklar();
     }));
   }
 
@@ -676,6 +677,7 @@ function subscribeAll() {
     G_BINALAR = data;
     renderBinalar(data);
     renderBinaSayac(data.length);
+    renderDashboardEkstraBloklar();
   }));
 
   // Bakımlar
@@ -690,6 +692,7 @@ function subscribeAll() {
     if (document.getElementById('pg-performans')?.classList.contains('active')) renderPerformans();
     if (document.getElementById('pg-gorevler')?.classList.contains('active')) renderGunlukGorevler();
     if (role === 'bina') renderBinaDashboard();
+    renderDashboardEkstraBloklar();
   }));
 
   // Arızalar
@@ -704,6 +707,7 @@ function subscribeAll() {
     if (document.getElementById('pg-performans')?.classList.contains('active')) renderPerformans();
     rebuildBildirimler();
     if (role === 'bina') renderBinaDashboard();
+    renderDashboardEkstraBloklar();
   }));
 
   // Sözleşmeler
@@ -746,6 +750,7 @@ function subscribeAll() {
     G_AYLIK_BAKIMLAR = data;
     if (document.getElementById('pg-aylik')?.classList.contains('active')) renderAylikTakip();
     rebuildBildirimler();
+    renderDashboardEkstraBloklar();
   }));
 
   // Cari Borçlar (anlaşma bedeli üzerinden otomatik/manuel borçlandırma)
@@ -844,14 +849,17 @@ function setupUI() {
   // Bina yöneticisine sade dashboard, admin/teknisyene detaylı dashboard göster
   const adminGorunum1 = document.getElementById('dashboardAdminGorunum');
   const adminGorunum2 = document.getElementById('dashboardAdminGorunum2');
+  const ekstraBloklar = document.getElementById('dashboardEkstraBloklar');
   const binaGorunum = document.getElementById('dashboardBinaGorunum');
   if (role === 'bina') {
     if (adminGorunum1) adminGorunum1.style.display = 'none';
     if (adminGorunum2) adminGorunum2.style.display = 'none';
+    if (ekstraBloklar) ekstraBloklar.style.display = 'none';
     if (binaGorunum) binaGorunum.style.display = 'block';
   } else {
     if (adminGorunum1) adminGorunum1.style.display = 'grid';
     if (adminGorunum2) adminGorunum2.style.display = 'grid';
+    if (ekstraBloklar) { ekstraBloklar.style.display = 'grid'; renderDashboardEkstraBloklar(); }
     if (binaGorunum) binaGorunum.style.display = 'none';
   }
 
@@ -2738,12 +2746,12 @@ function renderSozlesmeler(data) {
 /* ═══════════════════════════════════════════════════════════════
    TEKNİSYEN PERFORMANSI
 ═══════════════════════════════════════════════════════════════ */
-function renderPerformans() {
-  const cardsEl = document.getElementById('performansCards');
-  const logEl   = document.getElementById('performansLog');
-  if (!cardsEl || !logEl) return;
-
-  // Teknisyen bazında bakım + arıza sayıları
+// Teknisyen bazında bakım + arıza istatistiklerini hesaplar (tüm zamanlar).
+// renderPerformans() ve dashboard'daki "Teknisyen Performansı" kayan şeridi
+// AYNI bu fonksiyonu kullanır — iki yerde aynı hesaplamayı tekrarlamak,
+// biri güncellenip diğeri unutulduğunda sessizce tutarsız sayılar gösterme
+// riski taşırdı.
+function teknisyenPerformansHesapla() {
   const stats = {};
   function ensureTeknisyen(name) {
     if (!name) name = '—';
@@ -2758,7 +2766,6 @@ function renderPerformans() {
   });
 
   G_ARIZALAR.forEach(a => {
-    // arızalarda doğrudan teknisyen alanı yoksa "bildiren" kullanılıyor olabilir, ikisini de dene
     const name = a.cozenTeknisyen || a.teknisyen || null;
     if (!name) return;
     const s = ensureTeknisyen(name);
@@ -2767,15 +2774,116 @@ function renderPerformans() {
   });
 
   const names = Object.keys(stats).filter(n => n !== '—');
-  if (!names.length) {
+  return names.map(n => ({ name: n, ...stats[n], toplam: stats[n].bakimTamam + stats[n].arizaCozum }))
+              .sort((a,b) => b.toplam - a.toplam);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   GENEL BAKIŞ — EK BLOKLAR (Aylık Bakım Takibi özeti, Müşteri
+   Talepleri ve Teknisyen Performansı kayan şeritleri)
+   Sadece admin/teknisyen rolünde görünür (dashboardEkstraBloklar
+   zaten admin-only class'ı taşıyor, görünürlüğü mevcut admin-only
+   mantığı hallediyor — burada sadece veri dolduruluyor).
+═══════════════════════════════════════════════════════════════ */
+function renderDashboardEkstraBloklar() {
+  const aylikEtiketEl = document.getElementById('dash-aylik-etiket');
+  if (!aylikEtiketEl) return; // sayfa henüz DOM'a basılmadıysa sessizce çık
+
+  // ── Aylık Bakım Takibi özeti ──
+  const ayAdlari = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+  const simdi = new Date();
+  aylikEtiketEl.textContent = `${ayAdlari[simdi.getMonth()]} ${simdi.getFullYear()}`;
+  // aylikSeciliTarih'i değiştirmeden, BU AYIN verisini hesaplamak için
+  // aylikTakipDisaAktarmaListesi() aynı mantığı aylikSeciliTarih üzerinden
+  // okuyor — dashboard her zaman "bu ay"ı göstermeli, kullanıcının Aylık
+  // Bakım Takibi sayfasında gezindiği farklı bir ay olabilir. Bu yüzden o
+  // fonksiyonu burada DOĞRUDAN kullanmıyoruz; aynı filtreleme mantığını
+  // bağımsız olarak (her zaman bugünün ayı için) uyguluyoruz.
+  const ayKey = `${simdi.getFullYear()}-${String(simdi.getMonth()+1).padStart(2,'0')}`;
+  let aylikKayitlar = G_AYLIK_BAKIMLAR.filter(a => {
+    if (a.ayKey !== ayKey) return false;
+    const sahipBina = G_BINALAR.find(b => binaKaydaEslesir(a, b));
+    if (!sahipBina) return false;
+    if (a.binaCariKodu && binaAdiNormalize(a.bina) !== binaAdiNormalize(sahipBina.ad)) return false;
+    return true;
+  });
+  G_BINALAR.forEach(b => {
+    if (aylikKayitlar.some(k => binaKaydaEslesir(k, b))) return;
+    const sozlesme = G_SOZLESMELER.find(s => binaKaydaEslesir(s, b));
+    if (sozlesme?.tip === 'Sadece Arıza Hizmeti') return;
+    aylikKayitlar.push({ durum: 'kayitYok' });
+  });
+  const aylikYapilan = aylikKayitlar.filter(k => k.durum === 'yapildi').length;
+  const aylikToplam = aylikKayitlar.length;
+  const aylikOran = aylikToplam ? Math.round((aylikYapilan/aylikToplam)*100) : 0;
+  document.getElementById('dash-aylik-oran').textContent = aylikToplam ? `${aylikOran}%` : '—';
+  document.getElementById('dash-aylik-bar').style.width = `${aylikOran}%`;
+  document.getElementById('dash-aylik-detay').textContent = aylikToplam
+    ? `${aylikYapilan} / ${aylikToplam} bina bu ay tamamlandı`
+    : 'Bu ay için bina kaydı yok';
+
+  // ── Müşteri Talepleri kayan şeridi ──
+  const talepEl = document.getElementById('dash-talepler-serit');
+  if (talepEl) {
+    const aktifTalepler = G_TALEPLER.filter(t => t.durum !== 'musteri' && t.durum !== 'kapandi')
+      .sort((a,b) => (b.tarih?.toMillis?.() || 0) - (a.tarih?.toMillis?.() || 0))
+      .slice(0, 8);
+    if (!aktifTalepler.length) {
+      talepEl.style.animation = 'none';
+      talepEl.innerHTML = `<div style="padding:24px 16px;text-align:center;color:#475569;font-size:11px;">Bekleyen talep yok 🎉</div>`;
+    } else {
+      const satirHtml = aktifTalepler.map(t => {
+        const bilgi = TALEP_DURUM_BILGI[t.durum] || TALEP_DURUM_BILGI.yeni;
+        return `
+        <div style="padding:9px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(30,41,59,.4);">
+          <span style="font-size:12px;color:#E2E8F0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t.ad || '—'}</span>
+          <span style="font-size:10px;color:${bilgi.renk};flex-shrink:0;">${bilgi.ikon} ${bilgi.etiket}</span>
+        </div>`;
+      }).join('');
+      // Liste İKİ KEZ art arda basılır — %50 kayınca CSS animasyonu
+      // sıfıra döner, bu yüzden dikiş/sıçrama görünmez (sonsuz döngü hissi).
+      talepEl.style.animation = '';
+      talepEl.innerHTML = satirHtml + satirHtml;
+    }
+  }
+
+  // ── Teknisyen Performansı kayan şeridi ──
+  const performansEl = document.getElementById('dash-performans-serit');
+  if (performansEl) {
+    const siraliTeknisyenler = teknisyenPerformansHesapla().slice(0, 8);
+    if (!siraliTeknisyenler.length) {
+      performansEl.style.animation = 'none';
+      performansEl.innerHTML = `<div style="padding:24px 16px;text-align:center;color:#475569;font-size:11px;">Henüz iş ataması yok</div>`;
+    } else {
+      const satirHtml = siraliTeknisyenler.map(t => {
+        const initials = t.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+        return `
+        <div style="padding:9px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(30,41,59,.4);">
+          <div style="display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;">
+            <div style="width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#00ADB5,#0891B2);display:flex;align-items:center;justify-content:center;color:#fff;font-size:9px;font-weight:800;flex-shrink:0;">${initials}</div>
+            <span style="font-size:12px;color:#E2E8F0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t.name}</span>
+          </div>
+          <span style="font-size:12px;font-weight:700;color:#10B981;flex-shrink:0;">${t.toplam} iş</span>
+        </div>`;
+      }).join('');
+      performansEl.style.animation = '';
+      performansEl.innerHTML = satirHtml + satirHtml;
+    }
+  }
+}
+
+function renderPerformans() {
+  const cardsEl = document.getElementById('performansCards');
+  const logEl   = document.getElementById('performansLog');
+  if (!cardsEl || !logEl) return;
+
+  const sorted = teknisyenPerformansHesapla();
+
+  if (!sorted.length) {
     cardsEl.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:#475569;font-size:13px;grid-column:1/-1;">Henüz teknisyen ataması yapılmış bakım/arıza yok.</div>`;
     logEl.innerHTML = '';
     return;
   }
-
-  // Toplam iş sayısına göre sırala
-  const sorted = names.map(n => ({ name: n, ...stats[n], toplam: stats[n].bakimTamam + stats[n].arizaCozum }))
-                       .sort((a,b) => b.toplam - a.toplam);
 
   const maxToplam = sorted[0]?.toplam || 1;
 
@@ -7119,6 +7227,22 @@ body.light-mode .bina-autocomplete-item:hover, body.light-mode .bina-autocomplet
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   GENEL BAKIŞ — KAYAN ŞERİT (TICKER) BLOKLARI
+   Müşteri Talepleri ve Teknisyen Performansı kartlarındaki satır
+   listesi, kart sabit kalırken kendi içinde yavaşça yukarı kayar
+   (sonsuz döngü — JS tarafından liste İKİ KEZ art arda basılır,
+   %50 kayınca sıfıra döner, böylece dikiş görünmez). Fareyle
+   üzerine gelince durur, böylece kullanıcı isterse durdurup okuyabilir.
+═══════════════════════════════════════════════════════════════ */
+@keyframes dashSeritKay { from { transform: translateY(0); } to { transform: translateY(-50%); } }
+.dash-serit-disari { height:128px; overflow:hidden; position:relative; }
+.dash-serit-icerik { position:absolute; width:100%; animation: dashSeritKay linear infinite; }
+.dash-serit-disari:hover .dash-serit-icerik { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .dash-serit-icerik { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
    MOBİLDE TABLO → KART GÖRÜNÜMÜ
    Cari Yönetimi, Sözleşmeler, Ödemeler, Maaşlar, Çek/Senet gibi
    sayfalardaki <table>'lar masaüstünde geniş oldukları için doğal
@@ -7636,7 +7760,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <div style="font-size:11px;color:#475569;margin-top:3px;">Çözüm bekliyor</div>
           </div>
         </div>
-        <div id="dashboardAdminGorunum2" style="display:grid;grid-template-columns:1.5fr 1fr;gap:12px;" class="hero-grid">
+        <div id="dashboardAdminGorunum2" style="display:grid;grid-template-columns:1.5fr 1fr;gap:12px;margin-bottom:12px;" class="hero-grid">
           <div class="card" style="padding:0;overflow:hidden;">
             <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;align-items:center;justify-content:space-between;">
               <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">Yaklaşan Bakımlar</h3>
@@ -7651,6 +7775,43 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
               <button onclick="openModal('mBakim')" class="btn-sm" style="padding:10px;font-size:12px;">+ Bakım Planla</button>
               <button onclick="openModal('mAriza')" style="padding:10px;font-size:12px;background:rgba(239,68,68,.15);color:#EF4444;border:1px solid rgba(239,68,68,.2);border-radius:8px;cursor:pointer;font-weight:600;">⚠ Arıza Bildir</button>
               <button onclick="openModal('mBina')" class="btn-ghost admin-only" style="padding:10px;font-size:12px;">+ Cari Ekle</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- EK BLOKLAR: Aylık Bakım Takibi özeti, Müşteri Talepleri ve Teknisyen Performansı (kayan şerit) -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;" id="dashboardEkstraBloklar">
+          <div class="card" style="padding:16px;cursor:pointer;" onclick="showPage('aylik',null)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+              <span style="font-size:12px;font-weight:700;color:#E2E8F0;">Aylık Bakım Takibi</span>
+              <span id="dash-aylik-etiket" style="font-size:10px;color:#475569;">—</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div id="dash-aylik-oran" style="font-size:24px;font-weight:900;color:#10B981;flex-shrink:0;">—</div>
+              <div class="prog-bar" style="flex:1;"><div id="dash-aylik-bar" class="prog-fill" style="width:0%"></div></div>
+            </div>
+            <div id="dash-aylik-detay" style="font-size:10.5px;color:#64748B;margin-top:8px;">Yükleniyor...</div>
+          </div>
+
+          <div class="card" style="padding:0;overflow:hidden;cursor:pointer;" onclick="showPage('talepler',null)">
+            <div style="padding:13px 16px;border-bottom:1px solid rgba(30,41,59,.5);">
+              <span style="font-size:12px;font-weight:700;color:#E2E8F0;">Müşteri Talepleri</span>
+            </div>
+            <div class="dash-serit-disari">
+              <div id="dash-talepler-serit" class="dash-serit-icerik" style="animation-duration:8s;">
+                <div style="padding:24px 16px;text-align:center;color:#475569;font-size:11px;">Yükleniyor...</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="padding:0;overflow:hidden;cursor:pointer;" onclick="showPage('performans',null)">
+            <div style="padding:13px 16px;border-bottom:1px solid rgba(30,41,59,.5);">
+              <span style="font-size:12px;font-weight:700;color:#E2E8F0;">Teknisyen Performansı</span>
+            </div>
+            <div class="dash-serit-disari">
+              <div id="dash-performans-serit" class="dash-serit-icerik" style="animation-duration:10s;">
+                <div style="padding:24px 16px;text-align:center;color:#475569;font-size:11px;">Yükleniyor...</div>
+              </div>
             </div>
           </div>
         </div>
