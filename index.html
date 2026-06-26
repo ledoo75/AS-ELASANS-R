@@ -424,6 +424,9 @@ function openDashboard() {
     setTimeout(otomatikAylikBakimOlustur, 1500); // binalar verisinin gelmesi için kısa bekleme
     setTimeout(otomatikPeriyodikBorcOlustur, 1700);
   }
+  if (currentUserData?.rol === 'admin') {
+    setTimeout(otomatikSabitGiderOlustur, 1900);
+  }
 
   // QR kod ile gelindiyse, sayfa ilk yüklenirken sabitlenen G_QR_ASANSOR_ID
   // kullanılır (window.location.search'e tekrar bakmıyoruz — login akışı
@@ -538,6 +541,7 @@ let G_KULLANICILAR = [];      // personel listesi (avans dropdown'u için)
 let G_AYLIK_BAKIMLAR = [];     // her bina için aylık bakım yapıldı/yapılmadı kaydı
 let G_BORCLAR = [];            // cari borç kayıtları (anlaşma bedeli üzerinden otomatik/manuel)
 let G_GIDERLER = [];            // firma giderleri (yakıt, malzeme, kira vb.)
+let G_GIDER_SABLONLARI = [];    // tekrarlayan/sabit gider şablonları (kira, sigorta vb. — her ay otomatik gider açar)
 let G_TALEPLER = [];            // site iletişim formundan gelen müşteri talepleri
 let G_BAKIM_BINA_ARAMA = '';    // Bakım Takibi'ndeki bina adına özel arama (tarih filtresinden bağımsız)
 let G_MAASLAR = [];             // personel sabit aylık maaş tanımları
@@ -764,6 +768,13 @@ function subscribeAll() {
       G_GIDERLER = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (document.getElementById('muhTab-giderler')?.style.display !== 'none') renderGiderler();
       if (document.getElementById('muhTab-ozet')?.style.display !== 'none') renderMaliOzet();
+    }));
+
+    // Tekrarlayan/Sabit Gider Şablonları (kira, sigorta vb.)
+    const giderSablonQ = query(collection(db, 'giderSablonlari'));
+    unsubscribers.push(onSnapshot(giderSablonQ, snap => {
+      G_GIDER_SABLONLARI = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (document.getElementById('muhTab-giderler')?.style.display !== 'none') renderGiderSablonlari();
     }));
   }
 
@@ -1175,6 +1186,42 @@ async function otomatikPeriyodikBorcOlustur() {
       await updateDoc(doc(db, 'binalar', bina.id), { sonBorcAyKey: ayKey });
     } catch (e) {
       console.warn('Otomatik periyodik borç oluşturulamadı:', bina.ad, e.message);
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SABİT/TEKRARLAYAN GİDERLER — Otomatik Oluşturma
+   Kira, sigorta, sabit fatura gibi her ay aynı tutarda tekrar eden
+   giderler için kullanıcı bir "şablon" tanımlar (giderSablonlari
+   koleksiyonu). Bu fonksiyon, şablonun belirttiği güne gelindiğinde
+   ve bu ay için henüz oluşturulmadıysa, otomatik bir gider kaydı açar.
+   Mantık, bina anlaşma bedeli otomasyonuyla birebir aynıdır.
+═══════════════════════════════════════════════════════════════ */
+async function otomatikSabitGiderOlustur() {
+  if (!G_GIDER_SABLONLARI.length) return;
+
+  const bugun = new Date();
+  const ayKey = `${bugun.getFullYear()}-${String(bugun.getMonth()+1).padStart(2,'0')}`;
+  const bugunGun = bugun.getDate();
+
+  for (const sablon of G_GIDER_SABLONLARI) {
+    if (sablon.aktif === false) continue; // kullanıcı durdurmuş
+    if (sablon.sonOlusturulanAyKey === ayKey) continue; // bu ay için zaten oluşturuldu
+    if (bugunGun < (sablon.tekrarGun || 1)) continue; // henüz o günü gelmedi
+
+    try {
+      await addDoc(collection(db, 'giderler'), {
+        kategori: sablon.kategori, tutar: sablon.tutar, odemeYontemi: sablon.odemeYontemi,
+        aciklama: `${sablon.aciklama || sablon.kategori} — ${ayKey} dönemi (otomatik/sabit gider)`,
+        tarih: bugun.toISOString().slice(0,10),
+        kaydeden: 'Sistem (Otomatik)',
+        sablonId: sablon.id,
+        olusturuldu: serverTimestamp()
+      });
+      await updateDoc(doc(db, 'giderSablonlari', sablon.id), { sonOlusturulanAyKey: ayKey });
+    } catch (e) {
+      console.warn('Otomatik sabit gider oluşturulamadı:', sablon.kategori, e.message);
     }
   }
 }
@@ -1847,9 +1894,12 @@ window.hizliArizaEkle = (binaAdi) => {
 };
 
 window.hizliOdemeEkle = (binaAdi) => {
+  document.getElementById('f-odeme-editId').value = '';
   document.getElementById('f-odeme-bina').value = binaAdi;
   document.getElementById('f-odeme-tutar').value = '';
   document.getElementById('f-odeme-tarih').value = new Date().toISOString().slice(0,10);
+  document.getElementById('mOdemeTitle').textContent = 'Ödeme Kaydet';
+  document.getElementById('odemeSaveBtn').textContent = 'Kaydet';
   openModal('mOdeme');
 };
 
@@ -3758,29 +3808,121 @@ window.exportBakimlarCSV = () => {
    MUHASEBE — GİDER YÖNETİMİ (Firma Masrafları)
 ═══════════════════════════════════════════════════════════════ */
 window.saveGider = async () => {
+  const editId    = document.getElementById('f-gider-editId').value;
   const kategori  = document.getElementById('f-gider-kategori').value;
   const tutar     = Math.max(0, parseFloat(document.getElementById('f-gider-tutar').value) || 0);
   const tarih     = document.getElementById('f-gider-tarih').value;
+  const odemeYontemi = document.getElementById('f-gider-odemeYontemi').value;
   const aciklama  = document.getElementById('f-gider-aciklama').value.trim();
+  const tekrarla  = document.getElementById('f-gider-tekrarla').checked;
+  const tekrarGun = parseInt(document.getElementById('f-gider-tekrarGun').value) || null;
 
   if (!tutar || !tarih) { alert('Tutar ve tarih zorunludur.'); return; }
+  if (tekrarla && !tekrarGun) { alert('Tekrarlayan gider için "her ay hangi gün" alanını doldurmalısınız.'); return; }
 
   try {
-    await addDoc(collection(db, 'giderler'), {
-      kategori, tutar, tarih, aciklama,
-      kaydeden: currentUserData?.ad || '—',
-      olusturuldu: serverTimestamp()
-    });
+    if (editId) {
+      await updateDoc(doc(db, 'giderler', editId), {
+        kategori, tutar, tarih, odemeYontemi, aciklama,
+        guncellendi: serverTimestamp()
+      });
+    } else {
+      await addDoc(collection(db, 'giderler'), {
+        kategori, tutar, tarih, odemeYontemi, aciklama,
+        kaydeden: currentUserData?.ad || '—',
+        olusturuldu: serverTimestamp()
+      });
+
+      // Tekrarlayan gider işaretliyse, ayrı bir "şablon" kaydı da
+      // oluşturuyoruz — bu şablon her ay otomatik yeni gider açar
+      // (bina anlaşma bedeli sistemindeki sonBorcAyKey mantığının aynısı).
+      if (tekrarla) {
+        await addDoc(collection(db, 'giderSablonlari'), {
+          kategori, tutar, odemeYontemi, aciklama, tekrarGun,
+          sonOlusturulanAyKey: tarih.slice(0,7), // bu ayın gideri zaten elle girildi, tekrar oluşturulmasın
+          aktif: true,
+          olusturuldu: serverTimestamp()
+        });
+      }
+    }
     closeModal('mGider');
-    document.getElementById('f-gider-tutar').value = '';
-    document.getElementById('f-gider-tarih').value = '';
-    document.getElementById('f-gider-aciklama').value = '';
+    resetGiderForm();
   } catch(e) { alert('Hata: ' + e.message); }
+};
+
+function resetGiderForm() {
+  document.getElementById('f-gider-editId').value = '';
+  document.getElementById('f-gider-tutar').value = '';
+  document.getElementById('f-gider-tarih').value = '';
+  document.getElementById('f-gider-odemeYontemi').value = 'Nakit';
+  document.getElementById('f-gider-aciklama').value = '';
+  document.getElementById('f-gider-tekrarla').checked = false;
+  document.getElementById('f-gider-tekrarGun').value = '';
+  document.getElementById('f-gider-tekrarGunWrap').style.display = 'none';
+  document.getElementById('f-gider-tekrarBlok').style.display = 'block';
+  document.getElementById('mGiderTitle').textContent = 'Gider Ekle';
+  document.getElementById('giderSaveBtn').textContent = 'Kaydet';
+}
+
+// Giderler listesinden bir kaydı düzenlemek için modali doldurup açar.
+// Not: Düzenleme modunda tekrarlama seçeneği gösterilmez — tekrarlayan
+// şablonlar artık "Sabit Giderler" sekmesinden ayrıca yönetilir.
+window.editGider = (id) => {
+  const g = G_GIDERLER.find(x => x.id === id);
+  if (!g) return;
+  document.getElementById('f-gider-editId').value = id;
+  document.getElementById('f-gider-kategori').value = g.kategori || 'Diğer';
+  document.getElementById('f-gider-tutar').value = g.tutar || '';
+  document.getElementById('f-gider-tarih').value = g.tarih || '';
+  document.getElementById('f-gider-odemeYontemi').value = g.odemeYontemi || 'Nakit';
+  document.getElementById('f-gider-aciklama').value = g.aciklama || '';
+  document.getElementById('f-gider-tekrarBlok').style.display = 'none'; // düzenlerken tekrar şablonu oluşturulmaz
+  document.getElementById('mGiderTitle').textContent = '✏️ Gider Kaydını Düzenle';
+  document.getElementById('giderSaveBtn').textContent = '💾 Güncelle';
+  openModal('mGider');
 };
 
 window.deleteGider = async (id, kategori) => {
   if (!confirm(`"${kategori}" gider kaydını silmek istediğinizden emin misiniz?`)) return;
   await deleteDoc(doc(db, 'giderler', id));
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   SABİT / TEKRARLAYAN GİDER ŞABLONLARI — Listeleme ve Yönetim
+═══════════════════════════════════════════════════════════════ */
+window.renderGiderSablonlari = function() {
+  const listEl = document.getElementById('sabitGiderlerListesi');
+  const kartEl = document.getElementById('sabitGiderlerKart');
+  if (!listEl) return;
+
+  if (!G_GIDER_SABLONLARI.length) {
+    kartEl.style.display = 'none';
+    return;
+  }
+  kartEl.style.display = 'block';
+
+  listEl.innerHTML = G_GIDER_SABLONLARI.map(s => `
+    <div style="padding:11px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.4);${s.aktif===false?'opacity:.5;':''}">
+      <span style="font-size:16px;flex-shrink:0;">${GIDER_IKON[s.kategori]||'📦'}</span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${s.kategori}${s.aciklama ? ' — '+s.aciklama : ''}</div>
+        <div style="font-size:11px;color:#475569;margin-top:1px;">Her ayın ${s.tekrarGun}. günü · ${s.odemeYontemi||'Nakit'} ${s.aktif===false?'· <span style="color:#F59E0B;">Durduruldu</span>':''}</div>
+      </div>
+      <div style="font-size:13px;font-weight:700;color:#EF4444;flex-shrink:0;">-${(s.tutar||0).toLocaleString('tr-TR')} ₺</div>
+      <button onclick="toggleGiderSablonAktif('${s.id}', ${s.aktif===false})" title="${s.aktif===false?'Yeniden Başlat':'Durdur'}" style="flex-shrink:0;font-size:11px;color:${s.aktif===false?'#10B981':'#F59E0B'};background:none;border:none;cursor:pointer;">${s.aktif===false?'▶ Başlat':'⏸ Durdur'}</button>
+      <button onclick="deleteGiderSablon('${s.id}')" title="Şablonu Sil" style="flex-shrink:0;font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;">Sil</button>
+    </div>`).join('');
+};
+
+window.toggleGiderSablonAktif = async (id, yeniDurum) => {
+  try {
+    await updateDoc(doc(db, 'giderSablonlari', id), { aktif: yeniDurum });
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.deleteGiderSablon = async (id) => {
+  if (!confirm('Bu sabit gider şablonunu silmek istediğinizden emin misiniz?\n\nNot: Bu işlem geçmişte zaten oluşturulmuş gider kayıtlarını silmez, sadece bundan sonraki otomatik oluşturmayı durdurur.')) return;
+  await deleteDoc(doc(db, 'giderSablonlari', id));
 };
 
 const GIDER_IKON = { 'Yakıt':'⛽', 'Malzeme':'🔧', 'Kira':'🏢', 'Maaş':'💼', 'Fatura':'📄', 'Araç':'🚗', 'Diğer':'📦' };
@@ -3803,7 +3945,8 @@ window.renderGiderler = function() {
         <td style="padding:12px;"><span class="sbadge badge-err-sm">${GIDER_IKON[g.kategori]||'📦'} ${g.kategori}</span></td>
         <td style="padding:12px;font-size:12px;color:#94A3B8;">${g.aciklama || '—'}</td>
         <td style="padding:12px;text-align:right;font-size:13px;color:#EF4444;font-weight:700;">-${(g.tutar||0).toLocaleString('tr-TR')} ₺</td>
-        <td style="padding:12px;text-align:right;">
+        <td style="padding:12px;text-align:right;display:flex;gap:8px;justify-content:flex-end;">
+          <button onclick="editGider('${g.id}')" style="font-size:11px;color:#F59E0B;background:none;border:none;cursor:pointer;">✏️ Düzenle</button>
           <button onclick="deleteGider('${g.id}','${(g.kategori||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;">Sil</button>
         </td>
       </tr>`).join('');
@@ -3885,7 +4028,105 @@ function maliOzetVerisiHesapla() {
     if (bakiye < 0) { bekleyenTahsilat += Math.abs(bakiye); borcluCariSayisi++; }
   });
 
-  return { toplamGelir, toplamGider, toplamGiderFirma, toplamAvans, netKar, gelirKirilim, giderKirilim, ayFiltre, bekleyenTahsilat, borcluCariSayisi };
+  // Kasa / Banka Hesap Takibi — TÜM zamanlar üzerinden (ay filtresinden
+  // bağımsız), çünkü bir hesabın bakiyesi geçmişten bugüne birikir.
+  // Ödeme yöntemine göre: gelen tahsilatlar (+) - o yöntemle yapılan
+  // giderler (-) = o "hesabın" güncel bakiyesi.
+  // Not: Avanslar şimdilik bu hesaba dahil edilmiyor (ödeme yöntemi
+  // alanı taşımıyorlar) — gerekirse ileride eklenebilir.
+  const KASA_TURLERI = ['Nakit', 'Havale/EFT', 'Kredi Kartı', 'Çek'];
+  const kasaBakiye = {};
+  KASA_TURLERI.forEach(t => kasaBakiye[t] = 0);
+  G_ODEMELER.forEach(o => {
+    const t = KASA_TURLERI.includes(o.tur) ? o.tur : 'Nakit';
+    kasaBakiye[t] += (o.tutar || 0);
+  });
+  G_GIDERLER.forEach(g => {
+    const t = KASA_TURLERI.includes(g.odemeYontemi) ? g.odemeYontemi : 'Nakit';
+    kasaBakiye[t] -= (g.tutar || 0);
+  });
+  const kasaToplam = Object.values(kasaBakiye).reduce((s,v) => s+v, 0);
+
+  return { toplamGelir, toplamGider, toplamGiderFirma, toplamAvans, netKar, gelirKirilim, giderKirilim, ayFiltre, bekleyenTahsilat, borcluCariSayisi, kasaBakiye, kasaToplam };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CARİ GELİR SIRALAMASI
+   Her cariden (binadan) toplam ne kadar tahsilat alındığını gösterir
+   — en çok gelir getiren en üstte. Ay filtresi uygulanan dönem için
+   hesaplanır (maliOzetVerisiHesapla ile aynı ayFiltre kullanılır).
+   Not: Bu basit bir GELİR görünümüdür, maliyet/gider düşülmez —
+   "bu cariden ne kadar tahsil ettik" sorusuna cevap verir.
+═══════════════════════════════════════════════════════════════ */
+function cariGelirSiralamasiHesapla() {
+  const ayFiltre = document.getElementById('ozetAyFiltre')?.value || '';
+  const odemeler = ayFiltre ? G_ODEMELER.filter(o => (o.tarih||'').startsWith(ayFiltre)) : G_ODEMELER;
+
+  const gelirMap = {}; // normalize edilmiş bina adı -> toplam tahsilat
+  odemeler.forEach(o => {
+    const k = binaAdiNormalize(o.bina);
+    gelirMap[k] = (gelirMap[k] || 0) + (o.tutar || 0);
+  });
+
+  // Görüntülenecek isim ve sıralama için, sadece hâlâ Cari Yönetimi'nde
+  // kayıtlı binaları listele (silinmiş cariler dahil edilmez).
+  const sonuc = G_BINALAR.map(bina => {
+    const k = binaAdiNormalize(bina.ad);
+    return { bina: bina.ad, toplamGelir: gelirMap[k] || 0 };
+  }).filter(x => x.toplamGelir > 0);
+
+  sonuc.sort((a,b) => b.toplamGelir - a.toplamGelir);
+  return sonuc;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   VADE / GECİKME TAKİBİ
+   Her cari için: güncel net bakiye (borç - tahsilat) ve sözleşmedeki
+   ödeme gününe göre kaç gün gecikmiş olduğu hesaplanır.
+   - Net bakiye >= 0 ise cari güncel, listeye girmez.
+   - Net bakiye < 0 ise borçludur; sözleşmede ödeme günü tanımlıysa
+     bu ayın o günüyle bugün arasındaki gün farkı "gecikme" sayılır
+     (henüz o gün gelmediyse "yaklaşıyor" / henüz gecikmemiş sayılır).
+   - Sözleşmede ödeme günü yoksa, sadece borçlu olduğu gösterilir
+     ama gecikme günü hesaplanamaz ("—" gösterilir).
+═══════════════════════════════════════════════════════════════ */
+function vadeGecikmisListesiHesapla() {
+  const bugun = new Date();
+  const buAyYil = bugun.getFullYear();
+  const buAy = bugun.getMonth(); // 0-indexed
+
+  const sonuc = [];
+  G_BINALAR.forEach(bina => {
+    const borclar = G_BORCLAR.filter(x => binaKaydaEslesir(x, bina));
+    const toplamBorc = borclar.reduce((s,x) => s + (x.tutar||0), 0);
+    const tahsilatlar = G_ODEMELER.filter(o => binaKaydaEslesir(o, bina));
+    const toplamTahsilat = tahsilatlar.reduce((s,o) => s + (o.tutar||0), 0);
+    const netBakiye = toplamTahsilat - toplamBorc;
+    if (netBakiye >= 0) return; // borçlu değil, listeye girmez
+
+    const sozlesme = G_SOZLESMELER.find(s => binaKaydaEslesir(s, bina));
+    const odemeGunu = sozlesme?.odemeGunu || null;
+
+    let gecikmeGun = null;
+    if (odemeGunu) {
+      const vadeTarihi = new Date(buAyYil, buAy, odemeGunu);
+      const farkMs = bugun.setHours(0,0,0,0) - vadeTarihi.setHours(0,0,0,0);
+      gecikmeGun = Math.round(farkMs / 86400000); // pozitifse gecikmiş, negatifse henüz vadesi gelmemiş
+    }
+
+    sonuc.push({
+      bina: bina.ad,
+      binaId: bina.id,
+      telefon: bina.telefon || '',
+      netBakiye,
+      odemeGunu,
+      gecikmeGun, // null: bilinmiyor, <=0: henüz vadesi gelmemiş/bugün, >0: o kadar gün gecikmiş
+    });
+  });
+
+  // En çok geciken en üstte
+  sonuc.sort((a,b) => (b.gecikmeGun ?? -9999) - (a.gecikmeGun ?? -9999));
+  return sonuc;
 }
 
 window.renderMaliOzet = function() {
@@ -3916,6 +4157,70 @@ window.renderMaliOzet = function() {
   document.getElementById('ozet-bekleyen-detay').textContent = veri.borcluCariSayisi > 0
     ? `${veri.borcluCariSayisi} cariden tahsil edilecek`
     : 'Tüm cariler güncel ✓';
+
+  // Kasa / Banka Hesap Durumu
+  const kasaIkon = { 'Nakit':'💵', 'Havale/EFT':'🏦', 'Kredi Kartı':'💳', 'Çek':'📝' };
+  const kasaToplamEl = document.getElementById('kasaToplamGoster');
+  if (kasaToplamEl) kasaToplamEl.textContent = `Toplam: ${veri.kasaToplam.toLocaleString('tr-TR')} ₺`;
+  const kasaKartEl = document.getElementById('kasaBakiyeKartlari');
+  if (kasaKartEl) {
+    kasaKartEl.innerHTML = Object.entries(veri.kasaBakiye).map(([tur, bakiye]) => `
+      <div class="kasa-mini-kart" style="background:#0D1629;padding:14px 16px;">
+        <div style="font-size:11px;color:#64748B;display:flex;align-items:center;gap:5px;">${kasaIkon[tur]||'💰'} ${tur}</div>
+        <div class="${bakiye<0?'kasa-mini-tutar-negatif':'kasa-mini-tutar'}" style="font-size:17px;font-weight:800;color:${bakiye<0?'#EF4444':'#E2E8F0'};margin-top:4px;">${bakiye.toLocaleString('tr-TR')} ₺</div>
+      </div>`).join('');
+  }
+
+  // Vade / Gecikme Takibi listesi
+  const vadeListesi = vadeGecikmisListesiHesapla();
+  const vadeListEl = document.getElementById('vadeTakipListesi');
+  const vadeSayiEl = document.getElementById('vadeOzetSayisi');
+  const gecikenSayisi = vadeListesi.filter(v => v.gecikmeGun !== null && v.gecikmeGun > 0).length;
+  if (vadeSayiEl) vadeSayiEl.textContent = vadeListesi.length
+    ? `${vadeListesi.length} cari borçlu${gecikenSayisi ? ` · ${gecikenSayisi} vadesi geçmiş` : ''}`
+    : '';
+  if (vadeListEl) {
+    vadeListEl.innerHTML = vadeListesi.length ? vadeListesi.map(v => {
+      const gecikmeRenk = (v.gecikmeGun !== null && v.gecikmeGun > 0) ? '#EF4444' : (v.gecikmeGun !== null ? '#F59E0B' : '#475569');
+      const gecikmeMetin = v.gecikmeGun === null
+        ? 'Vade tanımlı değil'
+        : v.gecikmeGun > 0
+        ? `⚠️ ${v.gecikmeGun} gün gecikti`
+        : v.gecikmeGun === 0
+        ? 'Vade bugün'
+        : `${Math.abs(v.gecikmeGun)} gün sonra vadesi geliyor`;
+      return `
+      <div style="padding:11px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.4);">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${v.bina}</div>
+          <div style="font-size:11px;color:${gecikmeRenk};margin-top:1px;">${gecikmeMetin}${v.odemeGunu ? ` · Vade: ayın ${v.odemeGunu}'i` : ''}</div>
+        </div>
+        <div style="font-size:13px;font-weight:700;color:#EF4444;flex-shrink:0;">-${Math.abs(v.netBakiye).toLocaleString('tr-TR')} ₺</div>
+        <button onclick="sendTahsilatHatirlatma('${v.bina.replace(/'/g,"\\'")}', ${v.netBakiye}, ${v.gecikmeGun})" title="WhatsApp ile Hatırlat" style="flex-shrink:0;font-size:13px;background:rgba(34,197,94,.12);color:#22C55E;border:1px solid rgba(34,197,94,.25);border-radius:6px;width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;">💬</button>
+      </div>`;
+    }).join('') : `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Tüm cariler güncel, vadesi geçmiş borç yok ✓</div>`;
+  }
+
+  // Cari Gelir Sıralaması — en çok tahsilat alınan ilk 10 cari
+  const gelirSiralamasi = cariGelirSiralamasiHesapla().slice(0, 10);
+  const enYuksekGelir = gelirSiralamasi[0]?.toplamGelir || 1;
+  const gelirSiralamasiEl = document.getElementById('cariGelirSiralamasiListesi');
+  if (gelirSiralamasiEl) {
+    gelirSiralamasiEl.innerHTML = gelirSiralamasi.length ? gelirSiralamasi.map((g, i) => {
+      const barGenislik = Math.max(4, Math.round((g.toplamGelir / enYuksekGelir) * 100));
+      return `
+      <div style="padding:10px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.4);">
+        <div style="width:20px;font-size:12px;font-weight:700;color:#475569;flex-shrink:0;">${i+1}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;font-weight:600;color:#E2E8F0;margin-bottom:4px;">${g.bina}</div>
+          <div style="height:5px;background:rgba(30,41,59,.4);border-radius:3px;overflow:hidden;">
+            <div style="height:100%;width:${barGenislik}%;background:linear-gradient(90deg,#00ADB5,#0891B2);border-radius:3px;"></div>
+          </div>
+        </div>
+        <div style="font-size:13px;font-weight:700;color:#10B981;flex-shrink:0;">${g.toplamGelir.toLocaleString('tr-TR')} ₺</div>
+      </div>`;
+    }).join('') : `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Seçili dönemde tahsilat kaydı yok.</div>`;
+  }
 
   // Gelir kırılımı listesi
   const gelirDetayEl = document.getElementById('ozet-gelirDetay');
@@ -4124,16 +4429,20 @@ window.yillikRaporPDF = async () => {
 // Aynı Ödeme Kaydet modalını kullanır, sadece bina adı ve tarihi
 // önceden doldurur.
 window.hizliTahsilatAc = (binaAdi) => {
+  document.getElementById('f-odeme-editId').value = '';
   document.getElementById('f-odeme-bina').value = binaAdi;
   document.getElementById('f-odeme-tutar').value = '';
   document.getElementById('f-odeme-tarih').value = new Date().toISOString().slice(0,10);
   document.getElementById('f-odeme-tur').value = 'Nakit';
   document.getElementById('f-odeme-aciklama').value = '';
+  document.getElementById('mOdemeTitle').textContent = 'Ödeme Kaydet';
+  document.getElementById('odemeSaveBtn').textContent = 'Kaydet';
   openModal('mOdeme');
   setTimeout(() => document.getElementById('f-odeme-tutar')?.focus(), 150);
 };
 
 window.saveOdeme = async () => {
+  const editId    = document.getElementById('f-odeme-editId').value;
   const bina      = document.getElementById('f-odeme-bina').value.trim();
   const tutar     = Math.max(0, parseFloat(document.getElementById('f-odeme-tutar').value) || 0);
   const tarih     = document.getElementById('f-odeme-tarih').value;
@@ -4143,17 +4452,47 @@ window.saveOdeme = async () => {
   if (!bina || !tutar || !tarih) { alert('Bina, tutar ve tarih zorunludur.'); return; }
 
   try {
-    await addDoc(collection(db, 'odemeler'), {
-      bina, binaCariKodu: binaCariKoduBul(bina), tutar, tarih, tur, aciklama,
-      kaydeden: currentUserData?.ad || '—',
-      olusturuldu: serverTimestamp()
-    });
+    if (editId) {
+      await updateDoc(doc(db, 'odemeler', editId), {
+        bina, binaCariKodu: binaCariKoduBul(bina), tutar, tarih, tur, aciklama,
+        guncellendi: serverTimestamp()
+      });
+    } else {
+      await addDoc(collection(db, 'odemeler'), {
+        bina, binaCariKodu: binaCariKoduBul(bina), tutar, tarih, tur, aciklama,
+        kaydeden: currentUserData?.ad || '—',
+        olusturuldu: serverTimestamp()
+      });
+    }
     closeModal('mOdeme');
-    document.getElementById('f-odeme-bina').value = '';
-    document.getElementById('f-odeme-tutar').value = '';
-    document.getElementById('f-odeme-tarih').value = '';
-    document.getElementById('f-odeme-aciklama').value = '';
+    resetOdemeForm();
   } catch(e) { alert('Hata: ' + e.message); }
+};
+
+function resetOdemeForm() {
+  document.getElementById('f-odeme-editId').value = '';
+  document.getElementById('f-odeme-bina').value = '';
+  document.getElementById('f-odeme-tutar').value = '';
+  document.getElementById('f-odeme-tarih').value = '';
+  document.getElementById('f-odeme-tur').value = 'Nakit';
+  document.getElementById('f-odeme-aciklama').value = '';
+  document.getElementById('mOdemeTitle').textContent = 'Ödeme Kaydet';
+  document.getElementById('odemeSaveBtn').textContent = 'Kaydet';
+}
+
+// Ödemeler listesinden bir kaydı düzenlemek için modali doldurup açar.
+window.editOdeme = (id) => {
+  const o = G_ODEMELER.find(x => x.id === id);
+  if (!o) return;
+  document.getElementById('f-odeme-editId').value = id;
+  document.getElementById('f-odeme-bina').value = o.bina || '';
+  document.getElementById('f-odeme-tutar').value = o.tutar || '';
+  document.getElementById('f-odeme-tarih').value = o.tarih || '';
+  document.getElementById('f-odeme-tur').value = o.tur || 'Nakit';
+  document.getElementById('f-odeme-aciklama').value = o.aciklama || '';
+  document.getElementById('mOdemeTitle').textContent = '✏️ Ödeme Kaydını Düzenle';
+  document.getElementById('odemeSaveBtn').textContent = '💾 Güncelle';
+  openModal('mOdeme');
 };
 
 window.deleteOdeme = async (id, bina) => {
@@ -4189,9 +4528,10 @@ window.renderMuhasebe = function() {
         <td style="padding:12px;font-size:13px;color:#10B981;font-weight:700;">${(o.tutar||0).toLocaleString('tr-TR')} ₺</td>
         <td style="padding:12px;"><span class="sbadge badge-info-sm">${o.tur||'—'}</span></td>
         <td style="padding:12px;font-size:12px;color:#64748B;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${o.aciklama||'—'}</td>
-        <td style="padding:12px;display:flex;gap:8px;">
+        <td style="padding:12px;display:flex;gap:8px;flex-wrap:wrap;">
           <button onclick="downloadMakbuz('${o.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">📄 Makbuz</button>
-          <button onclick="downloadMakbuzExcel('${o.id}')" style="font-size:11px;color:#10B981;background:none;border:none;cursor:pointer;margin-left:6px;">⬇ Excel</button>
+          <button onclick="downloadMakbuzExcel('${o.id}')" style="font-size:11px;color:#10B981;background:none;border:none;cursor:pointer;">⬇ Excel</button>
+          <button onclick="editOdeme('${o.id}')" style="font-size:11px;color:#F59E0B;background:none;border:none;cursor:pointer;" class="admin-only">✏️ Düzenle</button>
           <button onclick="deleteOdeme('${o.id}','${(o.bina||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
         </td>
       </tr>`).join('');
@@ -4249,7 +4589,7 @@ window.switchMuhasebeTab = (tab, btn) => {
 
   if (tab === 'personel') renderPersonelCari();
   if (tab === 'musteri') { doldurMusteriSecimi(); renderMusteriCariListesi(); }
-  if (tab === 'giderler') renderGiderler();
+  if (tab === 'giderler') { renderGiderler(); renderGiderSablonlari(); }
   if (tab === 'ozet') renderMaliOzet();
   if (tab === 'maas') renderMaaslar();
   if (tab === 'mesai') renderMesai();
@@ -5511,6 +5851,27 @@ window.sendBakimReminder = (bakimId) => {
   window.open(url, '_blank');
 };
 
+// ── TAHSİLAT HATIRLATICI ─────────────────────────────────────
+// Vade/Gecikme Takibi listesindeki bir cariye, açık bakiyesini ve
+// gecikme durumunu belirten bir WhatsApp mesajı hazırlar.
+window.sendTahsilatHatirlatma = (binaAdi, netBakiye, gecikmeGun) => {
+  const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, binaAdi));
+  const tel = bina?.telefon ? bina.telefon.replace(/[^0-9]/g, '') : '';
+  const tutar = Math.abs(netBakiye).toLocaleString('tr-TR');
+
+  const gecikmeIfade = (gecikmeGun !== null && gecikmeGun > 0)
+    ? ` Ödeme vadeniz ${gecikmeGun} gün önce geçmiştir.`
+    : '';
+
+  const mesaj = `Merhaba, ${binaAdi} carinizde ${tutar} ₺ tutarında açık bakiye bulunmaktadır.${gecikmeIfade} En kısa sürede ödemenizi gerçekleştirmenizi rica ederiz. AS-EL Asansör`;
+
+  const url = tel
+    ? `https://wa.me/90${tel.replace(/^0/, '')}?text=${encodeURIComponent(mesaj)}`
+    : `https://wa.me/?text=${encodeURIComponent(mesaj)}`;
+
+  window.open(url, '_blank');
+};
+
 /* ═══════════════════════════════════════════════════════════════
    FIRESTORE CRUD — ARIZA
 ═══════════════════════════════════════════════════════════════ */
@@ -6343,6 +6704,10 @@ body.light-mode .notif-row { border-color: #E2E8F0 !important; }
 body.light-mode .notif-mesaj { color: #475569 !important; }
 body.light-mode .notif-empty { color: #94A3B8 !important; }
 
+/* Kasa/Banka mini kartları (Mali Özet) — koyu tema varsayılan */
+body.light-mode .kasa-mini-kart { background: #F8FAFC !important; }
+body.light-mode .kasa-mini-tutar { color: #0F172A !important; }
+
 /* Bakım Kontrol Listesi (Checklist) — koyu tema varsayılan, açık temada güçlü kontrast */
 .checklist-satir { display:flex; align-items:center; gap:12px; padding:14px 14px; min-height:44px; background:rgba(15,23,42,.3); border:1px solid rgba(30,41,59,.5); border-radius:10px; cursor:pointer; transition:background .15s, border-color .15s; }
 .checklist-kutu { width:24px; height:24px; border-radius:7px; border:2px solid #475569; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:14px; color:#fff; background:transparent; transition:background .15s, border-color .15s; }
@@ -7081,7 +7446,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             </div>
             <div style="display:flex;gap:8px;">
               <button onclick="exportOdemelerCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
-              <button onclick="openModal('mOdeme')" class="btn-sm admin-only">+ Ödeme Kaydet</button>
+              <button onclick="resetOdemeForm(); openModal('mOdeme')" class="btn-sm admin-only">+ Ödeme Kaydet</button>
             </div>
           </div>
 
@@ -7231,7 +7596,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <p style="font-size:11px;color:#475569;">Yakıt, malzeme, kira gibi firma giderleri</p>
             <div style="display:flex;gap:8px;">
               <button onclick="exportGiderlerCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
-              <button onclick="openModal('mGider')" class="btn-sm">+ Gider Ekle</button>
+              <button onclick="resetGiderForm(); openModal('mGider')" class="btn-sm">+ Gider Ekle</button>
             </div>
           </div>
 
@@ -7242,6 +7607,15 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           </div>
 
           <div id="giderKategoriOzet" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;"></div>
+
+          <!-- Sabit / Tekrarlayan Giderler -->
+          <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;" id="sabitGiderlerKart">
+            <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">🔁 Sabit / Tekrarlayan Giderler</h3>
+              <span style="font-size:10px;color:#475569;">Kira, sigorta vb. — her ay otomatik oluşur</span>
+            </div>
+            <div id="sabitGiderlerListesi"></div>
+          </div>
 
           <div class="card" style="padding:0;overflow:hidden;">
             <div style="overflow-x:auto;">
@@ -7291,6 +7665,33 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
               <div id="ozet-bekleyen" style="font-size:24px;font-weight:900;color:#F59E0B;">0 ₺</div>
               <div id="ozet-bekleyen-detay" style="font-size:10px;color:#475569;margin-top:4px;">Güncel açık bakiye</div>
             </div>
+          </div>
+
+          <!-- Kasa / Banka Hesap Takibi -->
+          <div class="card" style="padding:0;overflow:hidden;margin-bottom:14px;">
+            <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">🏦 Kasa / Banka Hesap Durumu</h3>
+              <span id="kasaToplamGoster" style="font-size:12px;font-weight:700;color:#10B981;"></span>
+            </div>
+            <div id="kasaBakiyeKartlari" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:rgba(30,41,59,.4);"></div>
+          </div>
+
+          <!-- Vade / Gecikme Takibi -->
+          <div class="card" style="padding:0;overflow:hidden;margin-bottom:14px;">
+            <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">⏰ Vade / Gecikme Takibi</h3>
+              <span id="vadeOzetSayisi" style="font-size:11px;color:#475569;"></span>
+            </div>
+            <div id="vadeTakipListesi"></div>
+          </div>
+
+          <!-- Cari Gelir Sıralaması -->
+          <div class="card" style="padding:0;overflow:hidden;margin-bottom:14px;">
+            <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">🏆 Cari Gelir Sıralaması</h3>
+              <span style="font-size:10px;color:#475569;">Seçili döneme göre, en çok tahsilat alınan ilk 10 cari</span>
+            </div>
+            <div id="cariGelirSiralamasiListesi"></div>
           </div>
 
           <!-- Detay kırılımı -->
@@ -7724,9 +8125,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 <div id="modal-mOdeme" class="modal-wrap" onclick="if(event.target===this)closeModal('mOdeme')">
   <div class="modal-box">
     <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
-      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Ödeme Kaydet</h3>
+      <h3 id="mOdemeTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">Ödeme Kaydet</h3>
       <button onclick="closeModal('mOdeme')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
     </div>
+    <input type="hidden" id="f-odeme-editId"/>
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label>
         <input id="f-odeme-bina" type="text" class="db-input" placeholder="Tuna Apartmanı" list="odemeBinaListesi"/>
@@ -7742,7 +8144,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mOdeme')" class="btn-ghost">İptal</button>
-      <button onclick="saveOdeme()" class="btn-sm">Kaydet</button>
+      <button onclick="saveOdeme()" id="odemeSaveBtn" class="btn-sm">Kaydet</button>
     </div>
   </div>
 </div>
@@ -7751,9 +8153,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 <div id="modal-mGider" class="modal-wrap" onclick="if(event.target===this)closeModal('mGider')">
   <div class="modal-box">
     <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
-      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Gider Ekle</h3>
+      <h3 id="mGiderTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">Gider Ekle</h3>
       <button onclick="closeModal('mGider')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
     </div>
+    <input type="hidden" id="f-gider-editId"/>
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kategori *</label>
         <select id="f-gider-kategori" class="db-input">
@@ -7770,11 +8173,25 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-gider-tutar" type="number" class="db-input" min="0" placeholder="850"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-gider-tarih" type="date" class="db-input"/></div>
       </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Yöntemi</label>
+        <select id="f-gider-odemeYontemi" class="db-input"><option>Nakit</option><option>Havale/EFT</option><option>Kredi Kartı</option><option>Çek</option></select></div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Açıklama</label><input id="f-gider-aciklama" type="text" class="db-input" placeholder="Örn: Servis aracı yakıt dolumu"/></div>
+
+      <div class="card" id="f-gider-tekrarBlok" style="padding:12px 14px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.18);">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#E2E8F0;cursor:pointer;font-weight:600;">
+          <input type="checkbox" id="f-gider-tekrarla" style="width:15px;height:15px;accent-color:#00ADB5;" onchange="document.getElementById('f-gider-tekrarGunWrap').style.display=this.checked?'block':'none';"/>
+          🔁 Bu gideri her ay otomatik tekrarla (kira, sigorta, sabit fatura vb.)
+        </label>
+        <div id="f-gider-tekrarGunWrap" style="display:none;margin-top:10px;">
+          <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Her ay hangi gün otomatik oluşsun?</label>
+          <input id="f-gider-tekrarGun" type="number" min="1" max="28" class="db-input" placeholder="Örn: 1" style="max-width:120px;"/>
+          <p style="font-size:10px;color:#64748B;margin-top:6px;">Sistem her ay bu günde, aynı kategori/tutar/açıklama ile otomatik yeni bir gider kaydı açar. İstediğiniz zaman bu kaydı (şablonu) silerek durdurabilirsiniz.</p>
+        </div>
+      </div>
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mGider')" class="btn-ghost">İptal</button>
-      <button onclick="saveGider()" class="btn-sm">Kaydet</button>
+      <button onclick="saveGider()" id="giderSaveBtn" class="btn-sm">Kaydet</button>
     </div>
   </div>
 </div>
