@@ -5885,6 +5885,17 @@ window.downloadMakbuzExcel = (odemeId) => {
 // HTML şablonunu canvas'a, sonra PDF'e dönüştüren ortak yardımcı fonksiyon.
 // html2canvas tarayıcının kendi font render motorunu kullandığı için
 // Türkçe karakterler (İ, Ş, Ğ, ç, ı, ₺ vb.) %100 doğru basılır.
+// Bir HTML elementini PDF'e dönüştürür. ÖNEMLİ: html2canvas tüm içeriği
+// TEK bir uzun görsel (canvas) olarak render eder; bu görüntüyü A4
+// sayfalarına bölerken körü körüne sabit piksel yüksekliğinde dilimlersek,
+// bir madde kutusu (örn. sözleşmedeki vurgulu "Madde 5" kutusu) tam sayfa
+// sınırına denk geldiğinde ortadan ikiye bölünür ve metin yarıda kesilmiş
+// görünür. Bunu önlemek için: önce elementin içindeki blokların (madde
+// div'leri gibi) sayfa içindeki dikey konumu ölçülür; bir bloğun ALT
+// sınırı geçerli sayfanın sonunu aşıyorsa, kesim noktası o bloğun
+// TEPESİNE çekilir (blok bir sonraki sayfaya tam olarak kaydırılır).
+// Tek bir blok başlı başına bir sayfadan uzunsa (çok nadir), o blok
+// istisnaen normal şekilde bölünür.
 async function renderHtmlToPdf(elementId, fileName) {
   const el = document.getElementById(elementId);
   const wrapper = el.parentElement;
@@ -5908,18 +5919,70 @@ async function renderHtmlToPdf(elementId, fileName) {
     if (imgH <= pageH) {
       pdf.addImage(imgData, 'PNG', 0, 0, imgW, imgH);
     } else {
-      // İçerik tek sayfaya sığmıyorsa, görüntüyü sayfalara böl
-      let renderedHeight = 0;
+      // İçerik tek sayfaya sığmıyor — blok sınırlarını hesapla.
+      // Ölçek faktörü: CSS pikseli → canvas pikseli (html2canvas scale:2 kullandığı için).
+      const elRect = el.getBoundingClientRect();
+      const cssToCanvas = canvas.width / elRect.width;
       const pageHeightPx = (pageH * canvas.width) / imgW;
-      while (renderedHeight < canvas.height) {
+
+      // Elementin içindeki blokların (madde kutuları, paragraf grupları vb.)
+      // canvas-piksel cinsinden [üst, alt] sınırlarını topla. Şablonlarda
+      // gerçek içerik genelde büyük bir "padding sarmalayıcı" div'in İÇİNDE
+      // durur (örn. "padding:32px 40px" div'i tek başına tüm madde 1-8'i
+      // kapsadığı için kendisi zaten bir sayfadan uzun olabilir). Bu yüzden
+      // kardeş sayısına bakılmaksızın, BİR SAYFADAN UZUN olan her çocuğun
+      // içine inilir — gerçek (sayfaya sığabilecek küçüklükte) bloklara
+      // ulaşılana kadar bu devam eder.
+      const blokSinirlari = [];
+      function bloklariTopla(ebeveyn, kalanDerinlik) {
+        const cocuklar = Array.from(ebeveyn.children).filter(c => c.offsetParent !== null);
+        cocuklar.forEach(cocuk => {
+          const r = cocuk.getBoundingClientRect();
+          const ust = (r.top - elRect.top) * cssToCanvas;
+          const alt = (r.bottom - elRect.top) * cssToCanvas;
+          if (alt <= ust) return;
+          const yukseklik = alt - ust;
+          // Bu çocuk tek başına bir sayfadan büyükse ve içine inebiliyorsak
+          // (henüz derinlik sınırına gelmediysek, ve içinde gerçekten çocuk
+          // varsa), kendisini blok olarak eklemek yerine içine in.
+          if (yukseklik > pageHeightPx && kalanDerinlik > 0 && cocuk.children.length > 0) {
+            bloklariTopla(cocuk, kalanDerinlik - 1);
+          } else {
+            blokSinirlari.push({ ust, alt });
+          }
+        });
+      }
+      bloklariTopla(el, 4);
+
+      let renderedHeight = 0;
+      let sayfaSayisi = 0;
+
+      while (renderedHeight < canvas.height - 1) {
+        let dilimSonu = Math.min(renderedHeight + pageHeightPx, canvas.height);
+
+        // Bu sayfa sınırını ortadan kesen bir blok var mı? Varsa, kesim
+        // noktasını o bloğun tepesine çek (blok bir sonraki sayfaya geçsin).
+        // Bloğun kendisi tek başına bir sayfadan uzunsa (ust, geçerli
+        // sayfanın başlangıcından küçükse) bu istisna olarak normal kesilir.
+        for (const blok of blokSinirlari) {
+          const sayfaIciKesiyor = blok.ust < dilimSonu && blok.alt > dilimSonu;
+          const blokTekBasinaSayfadanUzun = (blok.alt - blok.ust) >= pageHeightPx;
+          if (sayfaIciKesiyor && !blokTekBasinaSayfadanUzun && blok.ust > renderedHeight) {
+            dilimSonu = blok.ust;
+          }
+        }
+
+        const dilimYuksekligi = Math.max(1, Math.round(dilimSonu - renderedHeight));
         const sliceCanvas = document.createElement('canvas');
         sliceCanvas.width = canvas.width;
-        sliceCanvas.height = Math.min(pageHeightPx, canvas.height - renderedHeight);
+        sliceCanvas.height = dilimYuksekligi;
         sliceCanvas.getContext('2d').drawImage(canvas, 0, -renderedHeight);
         const sliceImg = sliceCanvas.toDataURL('image/png');
-        if (renderedHeight > 0) pdf.addPage();
+        if (sayfaSayisi > 0) pdf.addPage();
         pdf.addImage(sliceImg, 'PNG', 0, 0, imgW, (sliceCanvas.height * imgW) / sliceCanvas.width);
-        renderedHeight += pageHeightPx;
+        renderedHeight += dilimYuksekligi;
+        sayfaSayisi++;
+        if (sayfaSayisi > 50) break; // güvenlik sınırı — sonsuz döngüye karşı
       }
     }
 
