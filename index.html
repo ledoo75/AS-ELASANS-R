@@ -1225,7 +1225,11 @@ window.aylikChecklistAc = (aylikBakimId, binaAdi) => {
   G_CHECKLIST_DUZENLEME_ID = null;
   G_CHECKLIST_ISARETLI = new Set();
 
-  document.getElementById('checklistBinaAdi').textContent = binaAdi;
+  // Toplu işaretleme kuyruğu aktifse, başlıkta kaç bina kaldığını göster
+  // (örn. "GÖKSÜ İNŞAAT (3 / 5)") — kullanıcı sırada ne kadar olduğunu bilsin.
+  document.getElementById('checklistBinaAdi').textContent = G_AYLIK_TOPLU_KUYRUK.length || G_AYLIK_TOPLU_TAMAMLANAN
+    ? `${binaAdi}  (${G_AYLIK_TOPLU_TAMAMLANAN + 1} / ${G_AYLIK_TOPLU_TAMAMLANAN + G_AYLIK_TOPLU_KUYRUK.length + 1})`
+    : binaAdi;
   document.getElementById('checklistNot').value = '';
 
   const liste = document.getElementById('checklistMaddeleri');
@@ -1236,7 +1240,9 @@ window.aylikChecklistAc = (aylikBakimId, binaAdi) => {
     </label>`).join('');
 
   checklistIlerlemeGuncelle();
-  document.getElementById('checklistTamamlaBtn').textContent = '✓ Bakımı Tamamla ve Kaydet';
+  document.getElementById('checklistTamamlaBtn').textContent = G_AYLIK_TOPLU_KUYRUK.length
+    ? `✓ Tamamla ve Sıradakine Geç (${G_AYLIK_TOPLU_KUYRUK.length} kaldı)`
+    : '✓ Bakımı Tamamla ve Kaydet';
   openModal('mBakimChecklist');
 };
 
@@ -1372,14 +1378,37 @@ function renderAylikTakip() {
       </div>
       <div class="prog-bar" style="margin-top:6px;"><div class="prog-fill" style="width:${oran}%"></div></div>
     </div>`}
-  ` + filtreliKayitlar.map(k => {
+  ` + (() => {
+    // Toplu işaretleme aksiyon çubuğu — sadece admin/teknisyen rolünde ve
+    // gerçek (id'si olan) "yapılmadı" kaydı varsa gösterilir.
+    const isaretlenebilirler = filtreliKayitlar.filter(k => k.durum !== 'yapildi' && k.id);
+    if (!isAdminTeknisyen || !isaretlenebilirler.length) return '';
+    const seciliSayisi = isaretlenebilirler.filter(k => G_AYLIK_SECILI_IDLER.has(k.id)).length;
+    const hepsiSecili = seciliSayisi === isaretlenebilirler.length;
+    return `
+    <div class="card" style="padding:10px 16px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(15,23,42,.4);">
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#94A3B8;cursor:pointer;">
+        <input type="checkbox" ${hepsiSecili ? 'checked' : ''} onchange="aylikTopluHepsiniSec(this.checked)"/>
+        Tümünü Seç (${isaretlenebilirler.length} bina işaretlenebilir)
+      </label>
+      ${seciliSayisi ? `
+        <button onclick="aylikTopluIsaretlemeBaslat()" style="padding:9px 16px;font-size:12px;font-weight:700;border:none;border-radius:10px;cursor:pointer;background:linear-gradient(135deg,#10B981,#059669);color:#fff;">
+          ✓ Seçilenleri İşaretle (${seciliSayisi})
+        </button>
+      ` : ''}
+    </div>`;
+  })() + filtreliKayitlar.map(k => {
     const yapildiMi = k.durum === 'yapildi';
     const renk = yapildiMi ? '#10B981' : '#EF4444';
     const bgRenk = yapildiMi ? 'rgba(16,185,129,.06)' : 'rgba(239,68,68,.06)';
     const borderRenk = yapildiMi ? 'rgba(16,185,129,.25)' : 'rgba(239,68,68,.25)';
+    const secilebilir = isAdminTeknisyen && !yapildiMi && k.id;
 
     return `
     <div class="card" style="padding:14px 16px;background:${bgRenk};border-color:${borderRenk};display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+      ${secilebilir ? `
+        <input type="checkbox" ${G_AYLIK_SECILI_IDLER.has(k.id) ? 'checked' : ''} onchange="aylikTopluSecimDegistir('${k.id}', this.checked)" style="width:18px;height:18px;flex-shrink:0;cursor:pointer;"/>
+      ` : isAdminTeknisyen ? `<div style="width:18px;flex-shrink:0;"></div>` : ''}
       <div style="width:42px;height:42px;border-radius:10px;background:${renk}22;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
         ${yapildiMi
           ? `<svg viewBox="0 0 24 24" style="width:22px;height:22px;fill:none;stroke:${renk};stroke-width:2.5;stroke-linecap:round;"><path d="M5 13l4 4L19 7"/></svg>`
@@ -1405,6 +1434,137 @@ function renderAylikTakip() {
     </div>`;
   }).join('');
 }
+
+// Bir binanın toplu işaretleme seçimini değiştirir (checkbox tıklanınca).
+window.aylikTopluSecimDegistir = (id, secili) => {
+  if (secili) G_AYLIK_SECILI_IDLER.add(id);
+  else G_AYLIK_SECILI_IDLER.delete(id);
+  renderAylikTakip();
+};
+
+// "Tümünü Seç" checkbox'ı — şu an ekranda görünen, işaretlenebilir
+// (yapılmadı + gerçek id'si olan) tüm binaları seçer/seçimden çıkarır.
+window.aylikTopluHepsiniSec = (hepsiSecili) => {
+  const yil = aylikSeciliTarih.getFullYear();
+  const ay = aylikSeciliTarih.getMonth() + 1;
+  const ayKey = `${yil}-${String(ay).padStart(2,'0')}`;
+  G_AYLIK_BAKIMLAR.filter(a => a.ayKey === ayKey && a.durum !== 'yapildi' && a.id).forEach(a => {
+    if (hepsiSecili) G_AYLIK_SECILI_IDLER.add(a.id);
+    else G_AYLIK_SECILI_IDLER.delete(a.id);
+  });
+  renderAylikTakip();
+};
+
+// Seçilen binalar için toplu işaretleme kuyruğunu başlatır. Checklist
+// QR akışındaki gibi her bina için AYRI AYRI açılır — burada sadece
+// kuyruğu doldurup ilk binayı açıyoruz; checklistTamamla() her bina
+// tamamlandığında otomatik olarak sıradakine geçer (bkz. AYLIK TAKİP MODU).
+window.aylikTopluIsaretlemeBaslat = () => {
+  const yil = aylikSeciliTarih.getFullYear();
+  const ay = aylikSeciliTarih.getMonth() + 1;
+  const ayKey = `${yil}-${String(ay).padStart(2,'0')}`;
+  const secilenler = G_AYLIK_BAKIMLAR.filter(a => a.ayKey === ayKey && G_AYLIK_SECILI_IDLER.has(a.id));
+  if (!secilenler.length) return;
+
+  if (!confirm(`${secilenler.length} bina için sırayla bakım kontrol listesi açılacak. Her birinde 22 maddeyi işaretleyip "Tamamla" dediğinizde otomatik olarak sıradaki binaya geçilecek ve fiş indirilecek.\n\nBaşlamak istiyor musunuz?`)) return;
+
+  G_AYLIK_TOPLU_KUYRUK = secilenler.map(a => ({ aylikBakimId: a.id, bina: a.bina, binaCariKodu: a.binaCariKodu || null }));
+  G_AYLIK_TOPLU_TAMAMLANAN = 0;
+
+  const ilk = G_AYLIK_TOPLU_KUYRUK.shift();
+  aylikChecklistAc(ilk.aylikBakimId, ilk.bina);
+};
+
+// Seçili ay için Aylık Bakım Takibi listesini (renderAylikTakip ile aynı
+// filtreleme/sıralama mantığıyla) hesaplar. Hem Excel hem PDF export bu
+// ortak fonksiyonu kullanır, ki ekranda görünenle dışa aktarılan birbirini
+// tutsun.
+function aylikTakipDisaAktarmaListesi() {
+  const yil = aylikSeciliTarih.getFullYear();
+  const ay = aylikSeciliTarih.getMonth() + 1;
+  const ayKey = `${yil}-${String(ay).padStart(2,'0')}`;
+
+  let kayitlar = G_AYLIK_BAKIMLAR.filter(a => {
+    if (a.ayKey !== ayKey) return false;
+    const sahipBina = G_BINALAR.find(b => binaKaydaEslesir(a, b));
+    if (!sahipBina) return false;
+    if (a.binaCariKodu && binaAdiNormalize(a.bina) !== binaAdiNormalize(sahipBina.ad)) return false;
+    return true;
+  });
+
+  G_BINALAR.forEach(b => {
+    if (kayitlar.some(k => binaKaydaEslesir(k, b))) return;
+    const sozlesme = G_SOZLESMELER.find(s => binaKaydaEslesir(s, b));
+    if (sozlesme?.tip === 'Sadece Arıza Hizmeti') return;
+    kayitlar.push({ id: null, bina: b.ad, binaCariKodu: b.cariKodu || null, ayKey, durum: 'kayitYok' });
+  });
+
+  kayitlar.sort((a,b) => {
+    const aYapilmadi = a.durum === 'yapilmadi' || a.durum === 'kayitYok';
+    const bYapilmadi = b.durum === 'yapilmadi' || b.durum === 'kayitYok';
+    if (aYapilmadi && !bYapilmadi) return -1;
+    if (!aYapilmadi && bYapilmadi) return 1;
+    return a.bina.localeCompare(b.bina, 'tr');
+  });
+
+  return kayitlar.map(k => {
+    const bina = G_BINALAR.find(b => binaKaydaEslesir(k, b));
+    return { ...k, sorumluTeknisyenAd: bina?.sorumluTeknisyenAd || '—' };
+  });
+}
+
+window.exportAylikTakipExcel = () => {
+  const ayAdlari = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+  const yil = aylikSeciliTarih.getFullYear();
+  const ay = aylikSeciliTarih.getMonth() + 1;
+  const ayEtiket = `${ayAdlari[ay-1]} ${yil}`;
+
+  const liste = aylikTakipDisaAktarmaListesi();
+  const satirlar = [['Bina', 'Sorumlu Teknisyen', 'Durum', 'Yapan Kişi', 'Yapılma Tarihi']];
+  liste.forEach(k => {
+    const yapildiMi = k.durum === 'yapildi';
+    const tarihStr = k.yapilmaTarihi?.toDate ? k.yapilmaTarihi.toDate().toLocaleDateString('tr-TR') : '—';
+    satirlar.push([k.bina, k.sorumluTeknisyenAd, yapildiMi ? 'Yapıldı' : 'Yapılmadı', yapildiMi ? (k.yapanKisi || '—') : '—', yapildiMi ? tarihStr : '—']);
+  });
+
+  xlsxIndir(satirlar, `Aylik_Bakim_Takibi_${ayEtiket.replace(/\s+/g,'_')}.xlsx`, ayEtiket);
+};
+
+window.exportAylikTakipPDF = async () => {
+  if (typeof window.html2canvas === 'undefined') {
+    alert('PDF kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.');
+    return;
+  }
+
+  const ayAdlari = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+  const yil = aylikSeciliTarih.getFullYear();
+  const ay = aylikSeciliTarih.getMonth() + 1;
+  const ayEtiket = `${ayAdlari[ay-1]} ${yil}`;
+
+  const liste = aylikTakipDisaAktarmaListesi();
+  const yapilan = liste.filter(k => k.durum === 'yapildi').length;
+  const yapilmayan = liste.length - yapilan;
+
+  document.getElementById('pat-ay').textContent = ayEtiket;
+  document.getElementById('pat-tarih').textContent = new Date().toLocaleDateString('tr-TR');
+  document.getElementById('pat-toplam').textContent = liste.length;
+  document.getElementById('pat-yapildi').textContent = yapilan;
+  document.getElementById('pat-yapilmadi').textContent = yapilmayan;
+
+  document.getElementById('pat-tablo').innerHTML = liste.length ? liste.map((k,i) => {
+    const yapildiMi = k.durum === 'yapildi';
+    const tarihStr = k.yapilmaTarihi?.toDate ? k.yapilmaTarihi.toDate().toLocaleDateString('tr-TR') : '—';
+    return `
+    <tr style="background:${i%2===0?'#fff':'#F8FAFC'};border-bottom:1px solid #F1F5F9;">
+      <td style="padding:9px 16px;color:#0F172A;font-size:12px;font-weight:600;">${k.bina}</td>
+      <td style="padding:9px 16px;color:#64748B;font-size:12px;">${k.sorumluTeknisyenAd}</td>
+      <td style="padding:9px 16px;font-size:12px;font-weight:700;color:${yapildiMi?'#059669':'#DC2626'};">${yapildiMi ? 'Yapıldı' : 'Yapılmadı'}</td>
+      <td style="padding:9px 16px;color:#64748B;font-size:12px;">${yapildiMi ? `${k.yapanKisi||'—'} — ${tarihStr}` : '—'}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="4" style="padding:16px;text-align:center;color:#94A3B8;font-size:12px;">Bu ay için bina kaydı yok</td></tr>`;
+
+  await renderHtmlToPdf('pdfAylikTakipSablon', `Aylik_Bakim_Takibi_${ayEtiket.replace(/\s+/g,'_')}.pdf`);
+};
 
 /* ═══════════════════════════════════════════════════════════════
    RENDER — ARIZALAR
@@ -1749,6 +1909,18 @@ window.editBina = async (id) => {
   document.getElementById('f-bina-sozlesme').value          = b.sozlesme || '';
   document.getElementById('f-bina-durum').value             = b.durum || 'ok';
   document.getElementById('f-bina-sorumluTeknisyen').value  = b.sorumluTeknisyenId || '';
+  // Kayıtlı sorumluTeknisyenId artık mevcut personel listesinde yoksa
+  // (kullanıcı silinmiş ama bina kaydı eski referansı/adı hâlâ taşıyor —
+  // bu düzeltmeden ÖNCE silinmiş kullanıcılar için olabilir), dropdown
+  // sessizce "Atanmamış"a düşer; bunu fark edilir kılmak için uyarı göster.
+  const hayaletReferans = b.sorumluTeknisyenId && document.getElementById('f-bina-sorumluTeknisyen').value !== b.sorumluTeknisyenId;
+  const hayaletUyariEl = document.getElementById('f-bina-sorumluHayaletUyari');
+  if (hayaletUyariEl) {
+    hayaletUyariEl.style.display = hayaletReferans ? 'block' : 'none';
+    hayaletUyariEl.textContent = hayaletReferans
+      ? `⚠️ Önceden atanmış "${b.sorumluTeknisyenAd || 'bilinmeyen'}" artık sistemde kayıtlı bir kullanıcı değil. Lütfen yeni bir sorumlu teknisyen seçip kaydedin.`
+      : '';
+  }
   document.getElementById('f-bina-anlasmaTipi').value       = b.anlasmaTipi || '';
   document.getElementById('f-bina-anlasmaTutar').value      = b.anlasmaTutar || '';
   document.getElementById('f-bina-anlasmaPeriyodik').checked= !!b.anlasmaPeriyodik;
@@ -1767,6 +1939,7 @@ window.resetBinaForm = function() {
   ['f-bina-ad','f-bina-cariKodu','f-bina-adres','f-bina-lat','f-bina-lng','f-bina-yetkili','f-bina-telefon','f-bina-vergiNo','f-bina-asansor','f-bina-anlasmaTutar'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('f-bina-konumDurum').textContent = 'ℹ️ Binadayken "Şu Anki Konumumu Kullan" butonuna basarsanız konum otomatik doldurulur. Teknisyenler daha sonra bu binaya tek dokunuşla yol tarifi alabilir.';
   document.getElementById('f-bina-sorumluTeknisyen').value = '';
+  document.getElementById('f-bina-sorumluHayaletUyari').style.display = 'none';
   document.getElementById('f-bina-anlasmaTipi').value = '';
   document.getElementById('f-bina-anlasmaPeriyodik').checked = false;
   document.getElementById('f-bina-editId').value = '';
@@ -2937,6 +3110,9 @@ let G_CHECKLIST_ISARETLI = new Set(); // şu an açık olan checklist'te işaret
 let G_CHECKLIST_DUZENLEME_ID = null;  // null ise yeni kayıt modu; bir bakım ID'si ise düzenleme modu
 let G_CHECKLIST_TAMAMLAMA_ID = null;  // "Bakım Planla" ile eklenmiş bekleyen bir kaydı checklist ile tamamlama modu
 let G_AYLIK_CHECKLIST_KAYIT = null;   // Aylık Bakım Takibi'nden "Yapıldı" işaretlenirken açılan checklist modu: { aylikBakimId, bina, binaCariKodu }
+let G_AYLIK_TOPLU_KUYRUK = [];         // Toplu işaretlemede sırada bekleyen binalar: [{ aylikBakimId, bina, binaCariKodu }, ...]
+let G_AYLIK_TOPLU_TAMAMLANAN = 0;      // Toplu işaretleme sırasında şu ana kadar tamamlanan bina sayısı
+let G_AYLIK_SECILI_IDLER = new Set();  // Aylık Bakım Takibi listesinde toplu işlem için seçilen aylikBakimlar ID'leri
 
 window.qrChecklistAc = () => {
   const asansor = G_QR_AKTIF_ASANSOR;
@@ -3084,11 +3260,30 @@ window.checklistTamamla = async () => {
         olusturuldu: serverTimestamp()
       });
 
-      closeModal('mBakimChecklist');
-      G_AYLIK_CHECKLIST_KAYIT = null;
-
       // Bakım fişini otomatik PDF olarak indir — QR akışıyla aynı fiş.
       await downloadBakimFisiPDF({ bina: binaAdi, kabin: '' }, yapilanMaddeler, not, bugun, teknisyenAd);
+
+      G_AYLIK_TOPLU_TAMAMLANAN++;
+      G_AYLIK_CHECKLIST_KAYIT = null;
+
+      // Toplu işaretleme kuyruğunda sırada bekleyen bina varsa, bu modalı
+      // kapatmadan/sıfırlamadan doğrudan sıradaki binanın checklist'ini aç.
+      // Böylece teknisyen her bina için ayrı ayrı "Yapıldı Olarak İşaretle"
+      // butonuna basmak zorunda kalmaz, fiş indirildikten sonra otomatik
+      // olarak bir sonraki bina açılır.
+      if (G_AYLIK_TOPLU_KUYRUK.length) {
+        const sonraki = G_AYLIK_TOPLU_KUYRUK.shift();
+        aylikChecklistAc(sonraki.aylikBakimId, sonraki.bina);
+      } else {
+        const tamamlananSayisi = G_AYLIK_TOPLU_TAMAMLANAN;
+        closeModal('mBakimChecklist');
+        if (tamamlananSayisi > 1) {
+          alert(`✓ Toplu işaretleme tamamlandı!\n\n${tamamlananSayisi} bina için bakım kaydı oluşturuldu ve fişleri indirildi.`);
+        }
+        G_AYLIK_TOPLU_TAMAMLANAN = 0;
+        G_AYLIK_SECILI_IDLER.clear();
+        renderAylikTakip();
+      }
     } catch(e) {
       alert('Hata: ' + e.message);
     }
@@ -6523,14 +6718,38 @@ window.createKullanici = async () => {
 // - Firestore'daki profili sileriz (kullanıcı artık panele giriş yapamaz —
 //   çünkü onAuthStateChanged profili bulamayınca otomatik signOut yapar)
 // - Authentication kaydı Firebase Console'da kalır ama işlevsiz olur.
+//
+// ÖNEMLİ: Bina dokümanlarında sorumluTeknisyenId/sorumluTeknisyenAd, o
+// teknisyenin Firestore id'sine ve o anki adına göre saklanır (ayrık bir
+// kopya, canlı referans değil). Kullanıcı silindiğinde bu alanlar OTOMATİK
+// güncellenmez — aksi halde binalarda artık var olmayan bir teknisyenin
+// adı "Sorumlu: Ahmet Yılmaz" şeklinde sonsuza kadar görünmeye devam eder
+// (Aylık Bakım Takibi listesi, Excel/PDF export, checklist tamamlama gibi
+// birçok yerde bu hayalet isim kullanılır). Bu yüzden silme öncesi, bu
+// kullanıcının sorumlu olduğu binalar taranır; varsa kullanıcı bilgilendirilir
+// ve silme onaylanırsa bu binalarda sorumlu alanı temizlenir.
 window.deleteKullanici = async (uid) => {
   const targetSnap = await getDoc(doc(db, 'kullanicilar', uid));
   if (targetSnap.exists() && targetSnap.data().kurucu) {
     alert('Kurucu hesabı silinemez!');
     return;
   }
-  if (!confirm('Bu kullanıcıyı silmek istediğinizden emin misiniz?\n\nNot: Kullanıcı artık panele giriş yapamayacak.')) return;
+
+  const sorumluOlduguBinalar = G_BINALAR.filter(b => b.sorumluTeknisyenId === uid);
+  const uyariMetni = sorumluOlduguBinalar.length
+    ? `\n\n⚠️ Bu kullanıcı şu an ${sorumluOlduguBinalar.length} binanın sorumlu teknisyeni olarak atanmış:\n${sorumluOlduguBinalar.map(b => '• ' + b.ad).join('\n')}\n\nSilerseniz bu binalarda "Sorumlu Teknisyen" alanı boşaltılacak (Atanmadı), başka bir teknisyene yeniden atamanız gerekecek.`
+    : '';
+
+  if (!confirm(`Bu kullanıcıyı silmek istediğinizden emin misiniz?\n\nNot: Kullanıcı artık panele giriş yapamayacak.${uyariMetni}`)) return;
+
   try {
+    // Önce sorumlu olduğu binalardaki referansı temizle — hayalet isim
+    // kalmasın. deleteDoc'tan ÖNCE yapılır ki yarıda kesilirse veri
+    // tutarsızlığı (silinmiş kullanıcı + hâlâ eski referans) en azından
+    // kullanıcı bilgilendirilmiş şekilde oluşsun.
+    for (const b of sorumluOlduguBinalar) {
+      await updateDoc(doc(db, 'binalar', b.id), { sorumluTeknisyenId: '', sorumluTeknisyenAd: '' });
+    }
     await deleteDoc(doc(db, 'kullanicilar', uid));
     // onSnapshot otomatik güncelleyecek
   } catch (e) {
@@ -6620,12 +6839,74 @@ window.closeModal = (id) => {
     G_CHECKLIST_DUZENLEME_ID = null;
     G_CHECKLIST_TAMAMLAMA_ID = null;
     G_AYLIK_CHECKLIST_KAYIT = null;
+    // Toplu işaretleme kuyruğu ortada kaydedilmeden kapatılırsa, kalan
+    // binalar için kuyruk iptal edilir — yoksa bir sonraki "Yapıldı"
+    // işaretlemede yanlışlıkla eski kuyruğa devam edilebilir.
+    if (G_AYLIK_TOPLU_KUYRUK.length) {
+      const kalan = G_AYLIK_TOPLU_KUYRUK.length;
+      G_AYLIK_TOPLU_KUYRUK = [];
+      alert(`Toplu işaretleme durduruldu. ${G_AYLIK_TOPLU_TAMAMLANAN} bina tamamlandı, kalan ${kalan} bina için kayıt oluşturulmadı — dilediğinizde tekrar başlatabilirsiniz.`);
+    }
+    G_AYLIK_TOPLU_TAMAMLANAN = 0;
     const btn = document.getElementById('checklistTamamlaBtn');
     if (btn) btn.textContent = '✓ Bakımı Tamamla ve Kaydet';
   }
 };
 window.openMobileSidebar  = () => { document.getElementById('dbSidebar').classList.add('open'); document.getElementById('sidebarOverlay').style.display='block'; };
 window.closeMobileSidebar = () => { document.getElementById('dbSidebar').classList.remove('open'); document.getElementById('sidebarOverlay').style.display='none'; };
+
+/* ═══════════════════════════════════════════════════════════════
+   MOBİL KART GÖRÜNÜMÜ — data-label OTOMATİK ETİKETLEME
+   .mobil-kart-tablo class'lı her <table> için, <thead><th> metinlerini
+   okuyup <tbody> içindeki her satırın <td>'lerine sırayla data-label
+   attribute'u basar. Bu attribute, yukarıdaki CSS tarafından mobilde
+   (≤640px) her hücrenin üstünde küçük bir sütun etiketi göstermek için
+   kullanılır (örn. "ADRES" etiketiyle "Esenyurt / İstanbul" değeri).
+   render...() fonksiyonlarının HİÇBİRİ değiştirilmeden çalışır: bu
+   fonksiyon, tbody.innerHTML her güncellendiğinde MutationObserver ile
+   otomatik tetiklenip etiketleri yeniden basar.
+═══════════════════════════════════════════════════════════════ */
+function mobilTabloKartGuncelle(tbody) {
+  const table = tbody.closest('table.mobil-kart-tablo');
+  if (!table) return;
+  const basliklar = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
+  if (!basliklar.length) return;
+  Array.from(tbody.rows).forEach(tr => {
+    Array.from(tr.cells).forEach((td, i) => {
+      if (td.hasAttribute('colspan')) return; // "Yükleniyor.../Kayıt yok" satırı — etiketleme
+      td.setAttribute('data-label', basliklar[i] || '');
+    });
+  });
+}
+
+// Sayfa içinde .mobil-kart-tablo'ya ait HER tbody'yi izleyip, içeriği her
+// değiştiğinde (render...() bir tbody.innerHTML = `...` çalıştırdığında)
+// otomatik olarak data-label'ları yeniden basar.
+const mobilKartGozlemcisi = new MutationObserver(mutasyonlar => {
+  const guncellenecekTbodylar = new Set();
+  mutasyonlar.forEach(m => {
+    const tbody = m.target.nodeType === 1 && m.target.tagName === 'TBODY' ? m.target : m.target.closest?.('tbody');
+    if (tbody && tbody.closest('table.mobil-kart-tablo')) guncellenecekTbodylar.add(tbody);
+  });
+  guncellenecekTbodylar.forEach(mobilTabloKartGuncelle);
+});
+
+// NOT: Bu modül script'i HTML belgesinde tablolardan ÖNCE konumlanıyor.
+// type="module" script'leri tarayıcı tarafından otomatik defer edilse de
+// (DOM tamamen parse olduktan sonra çalışır), bunu varsayım olarak
+// bırakmak yerine DOMContentLoaded'a bağlayarak garanti altına alıyoruz —
+// böylece tablo elementlerinin DOM'da kesinlikle var olduğu an çalışır.
+function mobilKartGozlemcisiBaslat() {
+  document.querySelectorAll('table.mobil-kart-tablo tbody').forEach(tbody => {
+    mobilTabloKartGuncelle(tbody); // ilk yükte de bir kez uygula
+    mobilKartGozlemcisi.observe(tbody, { childList: true, subtree: true });
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', mobilKartGozlemcisiBaslat);
+} else {
+  mobilKartGozlemcisiBaslat(); // belge zaten hazırsa hemen çalıştır
+}
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
@@ -6835,6 +7116,55 @@ body.light-mode .bina-autocomplete-item:hover, body.light-mode .bina-autocomplet
   #mobileMenuBtn{display:flex!important;}
   .hidden-sm{display:none!important;}
   .hero-grid{grid-template-columns:1fr!important;}
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MOBİLDE TABLO → KART GÖRÜNÜMÜ
+   Cari Yönetimi, Sözleşmeler, Ödemeler, Maaşlar, Çek/Senet gibi
+   sayfalardaki <table>'lar masaüstünde geniş oldukları için doğal
+   görünür, ama küçük ekranda yatay kaydırma gerektirir ve okumak
+   zorlaşır. 640px altında, JS tarafından her <td>'ye eklenen
+   data-label attribute'unu kullanarak tabloyu bir kart listesine
+   çeviriyoruz — <thead> gizlenir, her <tr> bir kart olur, her
+   <td> kendi sütun başlığını üstte küçük bir etiket olarak gösterir.
+   Bu salt CSS bir dönüşümdür; tablo işaretlemesi (markup) ve mevcut
+   render...() fonksiyonları DEĞİŞMEDEN aynen kalır (bkz. mobilTabloKartGuncelle).
+═══════════════════════════════════════════════════════════════ */
+@media(max-width:640px){
+  table.mobil-kart-tablo { border-collapse: collapse; }
+  table.mobil-kart-tablo thead { display: none; }
+  table.mobil-kart-tablo, table.mobil-kart-tablo tbody, table.mobil-kart-tablo tr, table.mobil-kart-tablo td {
+    display: block; width: 100%;
+  }
+  table.mobil-kart-tablo tr {
+    border: 1px solid rgba(30,41,59,.6);
+    border-radius: 12px;
+    margin-bottom: 10px;
+    padding: 10px 4px;
+    background: rgba(15,23,42,.3);
+  }
+  /* Tek hücrelik "Yükleniyor.../Kayıt yok" satırları kart gibi görünmesin */
+  table.mobil-kart-tablo tr:has(td[colspan]) {
+    border: none; background: none; padding: 0; margin-bottom: 0;
+  }
+  table.mobil-kart-tablo td {
+    padding: 7px 14px !important;
+    border-bottom: none !important;
+    text-align: left !important;
+    white-space: normal !important;
+  }
+  table.mobil-kart-tablo td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 9px;
+    font-weight: 700;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 3px;
+  }
+  /* Boş etiketli (örn. aksiyon butonları sütunu) hücrelerde etiket gösterme */
+  table.mobil-kart-tablo td[data-label=""]::before { display: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -7415,7 +7745,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         </div>
         <div class="card" style="padding:0;overflow:hidden;">
           <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;">
+            <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
               <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
                 <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Cari (Bina)</th>
                 <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Adres</th>
@@ -7444,6 +7774,11 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <button onclick="aylikAyShift(1)" class="btn-ghost" style="padding:8px 12px;">→</button>
             <button onclick="aylikAyShift(0,true)" class="btn-sm" style="padding:8px 12px;">Bu Ay</button>
           </div>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+          <button onclick="exportAylikTakipExcel()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
+          <button onclick="exportAylikTakipPDF()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">📄 PDF</button>
         </div>
 
         <!-- Hatırlatma Günü Ayarı -->
@@ -7544,7 +7879,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         </div>
 
         <div class="card" style="padding:0;overflow:hidden;">
-          <table style="width:100%;border-collapse:collapse;">
+          <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
             <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
               <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Ad Soyad</th>
               <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Kullanıcı Adı</th>
@@ -7612,7 +7947,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
         <div class="card" style="padding:0;overflow:hidden;">
           <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;">
+            <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
               <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
                 <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
                 <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Sözleşme Tipi</th>
@@ -7688,7 +8023,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
           <div class="card" style="padding:0;overflow:hidden;">
             <div style="overflow-x:auto;">
-              <table style="width:100%;border-collapse:collapse;">
+              <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
                 <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
                   <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
                   <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tarih</th>
@@ -7718,7 +8053,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
           <div class="card" style="padding:0;overflow:hidden;">
             <div style="overflow-x:auto;">
-              <table style="width:100%;border-collapse:collapse;">
+              <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
                 <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
                   <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Personel</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Aylık Maaş</th>
@@ -7765,7 +8100,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
           <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
             <div style="overflow-x:auto;">
-              <table style="width:100%;border-collapse:collapse;">
+              <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
                 <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
                   <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Personel</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Verilen Avans</th>
@@ -7800,7 +8135,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
           <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
             <div style="overflow-x:auto;">
-              <table style="width:100%;border-collapse:collapse;">
+              <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
                 <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
                   <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Toplam Borç</th>
@@ -7837,7 +8172,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
           <div class="card" style="padding:0;overflow:hidden;">
             <div style="overflow-x:auto;">
-              <table style="width:100%;border-collapse:collapse;">
+              <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
                 <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
                   <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tarih</th>
                   <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Kategori</th>
@@ -7873,7 +8208,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
           <div class="card" style="padding:0;overflow:hidden;">
             <div style="overflow-x:auto;">
-              <table style="width:100%;border-collapse:collapse;">
+              <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
                 <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
                   <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Vade</th>
                   <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Yön</th>
@@ -8144,6 +8479,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Sorumlu Teknisyen</label>
         <select id="f-bina-sorumluTeknisyen" class="db-input"><option value="">— Atanmamış —</option></select>
         <p style="font-size:10px;color:#64748B;margin-top:5px;">ℹ️ Aylık Bakım Takibi'nde bu bina işaretlenirken teknisyen alanı otomatik bu kişiyle doldurulur.</p>
+        <p id="f-bina-sorumluHayaletUyari" style="display:none;font-size:11px;color:#F59E0B;font-weight:600;margin-top:7px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:8px;padding:8px 10px;"></p>
       </div>
 
       <div class="card" style="padding:14px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.18);">
@@ -8988,6 +9324,66 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             </table>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div style="background:#F8FAFC; padding:16px 40px; border-top:1px solid #E2E8F0; text-align:center;">
+      <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17</div>
+    </div>
+  </div>
+
+  <!-- ── AYLIK BAKIM TAKİBİ RAPORU ŞABLONU ── -->
+  <div id="pdfAylikTakipSablon" style="width:800px; background:#fff; font-family:'Inter',system-ui,sans-serif; color:#0F172A;">
+    <div style="background:linear-gradient(135deg,#0F172A,#1E293B); padding:28px 40px; display:flex; align-items:center; justify-content:space-between;">
+      <div style="display:flex; align-items:center; gap:14px;">
+        <svg width="48" height="48" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#1E293B"/>
+          <rect x="36" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <rect x="56" y="12" width="16" height="76" rx="3" fill="#F3F4F6"/>
+          <rect x="80" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <path d="M 64 20 L 59 25 L 69 25 Z" fill="#1E293B"/>
+          <rect x="62.5" y="25" width="3" height="8" fill="#1E293B"/>
+          <path d="M 64 80 L 59 75 L 69 75 Z" fill="#1E293B"/>
+          <rect x="62.5" y="67" width="3" height="8" fill="#1E293B"/>
+        </svg>
+        <div>
+          <div style="font-size:22px; font-weight:800; color:#fff; letter-spacing:-0.3px;">AS-EL ASANSÖR</div>
+          <div style="font-size:11px; color:#94A3B8; letter-spacing:0.5px; margin-top:2px;">1989'dan Beri Güvenle</div>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:11px; color:#64748B; text-transform:uppercase; letter-spacing:1px; font-weight:600;">Aylık Bakım Takibi Raporu</div>
+        <div id="pat-ay" style="font-size:15px; color:#00ADB5; font-weight:700; margin-top:3px;">Haziran 2026</div>
+        <div id="pat-tarih" style="font-size:11px; color:#94A3B8; margin-top:2px;">20.06.2026</div>
+      </div>
+    </div>
+
+    <div style="padding:32px 40px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:24px;">
+        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px;">
+          <div style="font-size:9px; color:#64748B; text-transform:uppercase; letter-spacing:0.5px; font-weight:700; margin-bottom:7px;">Toplam Bina</div>
+          <div id="pat-toplam" style="font-size:18px; font-weight:800; color:#0F172A;">0</div>
+        </div>
+        <div style="background:#ECFDF5; border:1px solid #A7F3D0; border-radius:12px; padding:16px 18px;">
+          <div style="font-size:9px; color:#059669; text-transform:uppercase; letter-spacing:0.5px; font-weight:700; margin-bottom:7px;">Yapıldı</div>
+          <div id="pat-yapildi" style="font-size:18px; font-weight:800; color:#059669;">0</div>
+        </div>
+        <div style="background:#FEF2F2; border:1px solid #FECACA; border-radius:12px; padding:16px 18px;">
+          <div style="font-size:9px; color:#DC2626; text-transform:uppercase; letter-spacing:0.5px; font-weight:700; margin-bottom:7px;">Yapılmadı</div>
+          <div id="pat-yapilmadi" style="font-size:18px; font-weight:800; color:#DC2626;">0</div>
+        </div>
+      </div>
+
+      <div style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden;">
+        <table style="width:100%; border-collapse:collapse;">
+          <thead><tr style="background:#0F172A;">
+            <th style="text-align:left; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Bina</th>
+            <th style="text-align:left; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Sorumlu Teknisyen</th>
+            <th style="text-align:left; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Durum</th>
+            <th style="text-align:left; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Yapan / Tarih</th>
+          </tr></thead>
+          <tbody id="pat-tablo"></tbody>
+        </table>
       </div>
     </div>
 
