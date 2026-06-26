@@ -1185,30 +1185,47 @@ window.aylikAyShift = (delta, buAy) => {
   renderAylikTakip();
 };
 
+// "Geri Al" — SADECE "yapildi" → "yapilmadi" geri almak için kullanılır.
+// "Yapıldı" olarak işaretleme artık burada YAPILMAZ: bunun yerine
+// aylikChecklistAc() çağrılır, QR akışındaki gibi 22 maddelik bakım
+// kontrol listesi açılır ve kayıt ile fiş ancak checklist tamamlanınca
+// oluşturulur (bkz. checklistTamamla() — "AYLIK TAKİP MODU").
 window.aylikDurumDegistir = async (id, yeniDurum, binaAdi) => {
+  if (yeniDurum === 'yapildi') { aylikChecklistAc(id, binaAdi); return; }
   if (!baglantiKontrolEt()) return;
   try {
-    await updateDoc(doc(db, 'aylikBakimlar', id), {
-      durum: yeniDurum,
-      ...(yeniDurum === 'yapildi' ? { yapilmaTarihi: serverTimestamp(), yapanKisi: currentUserData?.ad || '—' } : {})
-    });
-
-    // "Yapıldı" işaretlenirken, binanın sorumlu teknisyeni biliniyorsa
-    // otomatik olarak o teknisyen adıyla somut bir bakım kaydı da oluştur
-    // (Bakım Takibi geçmişinde ve teknisyen performansında görünsün).
-    if (yeniDurum === 'yapildi' && binaAdi) {
-      const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, binaAdi));
-      const teknisyenAd = bina?.sorumluTeknisyenAd || currentUserData?.ad || '—';
-      await addDoc(collection(db, 'bakimlar'), {
-        bina: binaAdi, binaCariKodu: bina?.cariKodu || null, kabin: '', tip: 'Aylık Periyodik',
-        tarih: new Date().toISOString().slice(0,10),
-        teknisyen: teknisyenAd,
-        notlar: 'Aylık Bakım Takibi üzerinden işaretlendi.',
-        durum: 'tamamlandi', tamamlanmaTarihi: serverTimestamp(),
-        olusturuldu: serverTimestamp()
-      });
-    }
+    await updateDoc(doc(db, 'aylikBakimlar', id), { durum: 'yapilmadi' });
   } catch (e) { alert('Hata: ' + e.message); }
+};
+
+// Aylık Bakım Takibi'nde "✓ Yapıldı Olarak İşaretle" butonuna basıldığında
+// çağrılır. QR akışındaki "Bu Ayın Bakımını Yaptım" ile TAMAMEN aynı
+// deneyimi verir: 22 maddelik checklist açılır, teknisyen işaretler,
+// "Bakımı Tamamla" dediğinde checklistTamamla() hem aylikBakimlar kaydını
+// "yapildi" yapar hem bakimlar koleksiyonuna somut bir kayıt ekler hem de
+// logolu Bakım Fişi PDF'ini otomatik indirir.
+window.aylikChecklistAc = (aylikBakimId, binaAdi) => {
+  if (!aylikBakimId) { alert('Bu kayıt henüz Firestore\'a yazılmadı, lütfen birkaç saniye sonra tekrar deneyin.'); return; }
+  const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, binaAdi));
+
+  G_AYLIK_CHECKLIST_KAYIT = { aylikBakimId, bina: binaAdi, binaCariKodu: bina?.cariKodu || null };
+  G_CHECKLIST_TAMAMLAMA_ID = null;
+  G_CHECKLIST_DUZENLEME_ID = null;
+  G_CHECKLIST_ISARETLI = new Set();
+
+  document.getElementById('checklistBinaAdi').textContent = binaAdi;
+  document.getElementById('checklistNot').value = '';
+
+  const liste = document.getElementById('checklistMaddeleri');
+  liste.innerHTML = BAKIM_CHECKLIST_MADDELERI.map((madde, i) => `
+    <label data-idx="${i}" onclick="checklistMaddeToggle(${i})" class="checklist-satir">
+      <span class="checklist-kutu">​</span>
+      <span class="checklist-metin">${madde}</span>
+    </label>`).join('');
+
+  checklistIlerlemeGuncelle();
+  document.getElementById('checklistTamamlaBtn').textContent = '✓ Bakımı Tamamla ve Kaydet';
+  openModal('mBakimChecklist');
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2907,6 +2924,7 @@ const BAKIM_CHECKLIST_MADDELERI = [
 let G_CHECKLIST_ISARETLI = new Set(); // şu an açık olan checklist'te işaretli madde indeksleri
 let G_CHECKLIST_DUZENLEME_ID = null;  // null ise yeni kayıt modu; bir bakım ID'si ise düzenleme modu
 let G_CHECKLIST_TAMAMLAMA_ID = null;  // "Bakım Planla" ile eklenmiş bekleyen bir kaydı checklist ile tamamlama modu
+let G_AYLIK_CHECKLIST_KAYIT = null;   // Aylık Bakım Takibi'nden "Yapıldı" işaretlenirken açılan checklist modu: { aylikBakimId, bina, binaCariKodu }
 
 window.qrChecklistAc = () => {
   const asansor = G_QR_AKTIF_ASANSOR;
@@ -3025,6 +3043,40 @@ window.checklistTamamla = async () => {
       await downloadBakimFisiPDF({ bina: kayit.bina, kabin: kayit.kabin || '' }, yapilanMaddeler, not, tarih, kayit.teknisyen);
 
       alert('✓ Bakım fişi düzeltmeleri kaydedildi.');
+    } catch(e) {
+      alert('Hata: ' + e.message);
+    }
+    return;
+  }
+
+  // ── AYLIK TAKİP MODU (Aylık Bakım Takibi'nden "✓ Yapıldı Olarak İşaretle") ──
+  if (G_AYLIK_CHECKLIST_KAYIT) {
+    const { aylikBakimId, bina: binaAdi, binaCariKodu } = G_AYLIK_CHECKLIST_KAYIT;
+    const bina = G_BINALAR.find(b => binaAdiEslesir(b.ad, binaAdi));
+    const teknisyenAd = currentUserData?.ad || bina?.sorumluTeknisyenAd || '—';
+    const bugun = new Date();
+
+    try {
+      await updateDoc(doc(db, 'aylikBakimlar', aylikBakimId), {
+        durum: 'yapildi', yapilmaTarihi: serverTimestamp(), yapanKisi: currentUserData?.ad || '—'
+      });
+
+      await addDoc(collection(db, 'bakimlar'), {
+        bina: binaAdi, binaCariKodu, kabin: '', tip: 'Aylık Periyodik',
+        tarih: bugun.toISOString().slice(0,10),
+        teknisyen: teknisyenAd,
+        notlar: not || 'Aylık Bakım Takibi üzerinden kontrol listesiyle işaretlendi.',
+        checklistMaddeleri: yapilanMaddeler,
+        checklistToplam: BAKIM_CHECKLIST_MADDELERI.length,
+        durum: 'tamamlandi', tamamlanmaTarihi: serverTimestamp(),
+        olusturuldu: serverTimestamp()
+      });
+
+      closeModal('mBakimChecklist');
+      G_AYLIK_CHECKLIST_KAYIT = null;
+
+      // Bakım fişini otomatik PDF olarak indir — QR akışıyla aynı fiş.
+      await downloadBakimFisiPDF({ bina: binaAdi, kabin: '' }, yapilanMaddeler, not, bugun, teknisyenAd);
     } catch(e) {
       alert('Hata: ' + e.message);
     }
@@ -6247,6 +6299,7 @@ window.closeModal = (id) => {
   if (id === 'mBakimChecklist') {
     G_CHECKLIST_DUZENLEME_ID = null;
     G_CHECKLIST_TAMAMLAMA_ID = null;
+    G_AYLIK_CHECKLIST_KAYIT = null;
     const btn = document.getElementById('checklistTamamlaBtn');
     if (btn) btn.textContent = '✓ Bakımı Tamamla ve Kaydet';
   }
