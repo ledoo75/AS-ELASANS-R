@@ -538,6 +538,7 @@ let G_KULLANICILAR = [];      // personel listesi (avans dropdown'u için)
 let G_AYLIK_BAKIMLAR = [];     // her bina için aylık bakım yapıldı/yapılmadı kaydı
 let G_BORCLAR = [];            // cari borç kayıtları (anlaşma bedeli üzerinden otomatik/manuel)
 let G_GIDERLER = [];            // firma giderleri (yakıt, malzeme, kira vb.)
+let G_CEKLER = [];               // çek/senet takibi (alınan ve verilen)
 let G_TALEPLER = [];            // site iletişim formundan gelen müşteri talepleri
 let G_BAKIM_BINA_ARAMA = '';    // Bakım Takibi'ndeki bina adına özel arama (tarih filtresinden bağımsız)
 let G_MAASLAR = [];             // personel sabit aylık maaş tanımları
@@ -764,6 +765,17 @@ function subscribeAll() {
       G_GIDERLER = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (document.getElementById('muhTab-giderler')?.style.display !== 'none') renderGiderler();
       if (document.getElementById('muhTab-ozet')?.style.display !== 'none') renderMaliOzet();
+      rebuildBildirimler();
+    }));
+  }
+
+  // Çek/Senet Takibi (alınan ve verilen — HASSAS, sadece admin)
+  if (role === 'admin') {
+    const cekQ = query(collection(db, 'cekler'), orderBy('vadeTarihi'));
+    unsubscribers.push(onSnapshot(cekQ, snap => {
+      G_CEKLER = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (document.getElementById('muhTab-cekler')?.style.display !== 'none') renderCekler();
+      rebuildBildirimler();
     }));
   }
 
@@ -3543,6 +3555,47 @@ function rebuildBildirimler() {
     });
   }
 
+  // Tekrarlayan Gider Hatırlatma — vadesi gelmiş/geçmiş ve bu vadeden
+  // sonra henüz aynı kategori+tutar için yeni bir kayıt girilmemiş
+  // tekrarlayan giderler için uyarı (kira, sigorta, abonelik vb.).
+  const bugunStr = new Date().toISOString().slice(0,10);
+  G_GIDERLER.filter(g => g.tekrarlayan).forEach(g => {
+    const vade = tekrarlayanGiderGuncelVade(g);
+    if (vade > bugunStr) return; // henüz vadesi gelmedi
+
+    // Bu vadeden sonra aynı kategori+tutar için yeni bir kayıt girilmiş mi?
+    const yenilenmis = G_GIDERLER.some(g2 => g2.kategori === g.kategori && (g2.tutar||0) === (g.tutar||0) && g2.tarih > g.tarih && g2.tarih >= vade);
+    if (yenilenmis) return;
+
+    const gecikmeGun = Math.round((new Date(bugunStr) - new Date(vade)) / 86400000);
+    bildirimler.push({
+      tip: 'tekrarlayanGider',
+      ikon: '🔁',
+      renk: gecikmeGun > 0 ? '#EF4444' : '#F59E0B',
+      baslik: gecikmeGun > 0 ? 'Tekrarlayan Gider Gecikti!' : 'Tekrarlayan Gider Vadesi Geldi',
+      mesaj: `${GIDER_IKON[g.kategori]||'📦'} ${g.kategori} — ${(g.tutar||0).toLocaleString('tr-TR')} ₺ (${GIDER_PERIYOT_ETIKET[g.periyot]||''})${gecikmeGun > 0 ? ` — ${gecikmeGun} gün geçti` : ''}`,
+      zaman: null,
+      id: 'tekgider-' + g.id
+    });
+  });
+
+  // Çek/Senet Vade Hatırlatma — beklemede olan çeklerden vadesi 3 gün
+  // içinde gelecek veya zaten geçmiş olanlar için uyarı.
+  G_CEKLER.filter(c => c.durum === 'beklemede').forEach(c => {
+    const kalanGun = Math.round((new Date(c.vadeTarihi) - new Date(bugunStr)) / 86400000);
+    if (kalanGun > 3) return; // henüz vade yaklaşmadı
+    const gecmis = kalanGun < 0;
+    bildirimler.push({
+      tip: 'cekVade',
+      ikon: '🧾',
+      renk: gecmis ? '#EF4444' : '#F59E0B',
+      baslik: gecmis ? `${c.yon === 'alinan' ? 'Tahsil Edilmemiş Çek!' : 'Ödenmemiş Çek!'}` : 'Çek Vadesi Yaklaşıyor',
+      mesaj: `${c.taraf} — ${(c.tutar||0).toLocaleString('tr-TR')} ₺ (${c.yon === 'alinan' ? 'Alınan' : 'Verilen'})${gecmis ? ` — ${Math.abs(kalanGun)} gün geçti` : kalanGun === 0 ? ' — bugün' : ` — ${kalanGun} gün kaldı`}`,
+      zaman: null,
+      id: 'cek-' + c.id
+    });
+  });
+
   G_BILDIRIMLER = bildirimler;
   renderBildirimPanel();
 }
@@ -3844,12 +3897,24 @@ window.saveGider = async () => {
   const tarih     = document.getElementById('f-gider-tarih').value;
   const odemeYontemi = document.getElementById('f-gider-odemeYontemi').value;
   const aciklama  = document.getElementById('f-gider-aciklama').value.trim();
+  const tekrarlayan = document.getElementById('f-gider-tekrarlayan').checked;
+  const periyot   = document.getElementById('f-gider-periyot').value;
 
   if (!tutar || !tarih) { alert('Tutar ve tarih zorunludur.'); return; }
+
+  // Mükerrer kayıt uyarısı: aynı kategori + aynı tutar + aynı gün için
+  // zaten bir gider kaydı varsa, yanlışlıkla iki kez girilmiş olabilir.
+  const mukerrer = G_GIDERLER.some(g => g.tarih === tarih && (g.tutar||0) === tutar && g.kategori === kategori);
+  if (mukerrer) {
+    if (!confirm(`⚠️ Olası mükerrer kayıt!\n\n"${kategori}" kategorisinde ${tarih} tarihinde ${tutar.toLocaleString('tr-TR')} ₺ tutarında bir gider zaten kayıtlı.\n\nYine de bu gideri tekrar kaydetmek istediğinize emin misiniz?`)) return;
+  }
 
   try {
     await addDoc(collection(db, 'giderler'), {
       kategori, tutar, tarih, odemeYontemi, aciklama,
+      tekrarlayan,
+      periyot: tekrarlayan ? periyot : null,
+      sonrakiVadeTarihi: tekrarlayan ? sonrakiVadeTarihiHesapla(tarih, periyot) : null,
       kaydeden: currentUserData?.ad || '—',
       olusturuldu: serverTimestamp()
     });
@@ -3858,8 +3923,37 @@ window.saveGider = async () => {
     document.getElementById('f-gider-tarih').value = '';
     document.getElementById('f-gider-odemeYontemi').value = 'Nakit';
     document.getElementById('f-gider-aciklama').value = '';
+    document.getElementById('f-gider-tekrarlayan').checked = false;
+    document.getElementById('f-gider-periyotAlani').style.display = 'none';
+    document.getElementById('f-gider-periyot').value = 'aylik';
   } catch(e) { alert('Hata: ' + e.message); }
 };
+
+// Tekrarlayan bir giderin periyoduna göre bir sonraki vade tarihini hesaplar.
+function sonrakiVadeTarihiHesapla(tarihStr, periyot) {
+  const d = new Date(tarihStr);
+  if (periyot === '3ayda') d.setMonth(d.getMonth() + 3);
+  else if (periyot === '6ayda') d.setMonth(d.getMonth() + 6);
+  else if (periyot === 'yillik') d.setFullYear(d.getFullYear() + 1);
+  else d.setMonth(d.getMonth() + 1); // varsayılan: aylık
+  return d.toISOString().slice(0,10);
+}
+
+const GIDER_PERIYOT_ETIKET = { aylik: 'Her Ay', '3ayda': '3 Ayda Bir', '6ayda': '6 Ayda Bir', yillik: 'Her Yıl' };
+
+// Tekrarlayan bir giderin vadesi her geçtiğinde (kayıt yenilenmediği
+// sürece) bir sonraki döneme kayar — böylece hatırlatma sürekli en
+// güncel vadeyi gösterir, ay atlanırsa eski tarihte takılı kalmaz.
+function tekrarlayanGiderGuncelVade(g) {
+  let vade = g.sonrakiVadeTarihi || g.tarih;
+  const bugun = new Date().toISOString().slice(0,10);
+  let guvenlik = 0;
+  while (vade < bugun && guvenlik < 60) {
+    vade = sonrakiVadeTarihiHesapla(vade, g.periyot);
+    guvenlik++;
+  }
+  return vade;
+}
 
 window.deleteGider = async (id, kategori) => {
   if (!confirm(`"${kategori}" gider kaydını silmek istediğinizden emin misiniz?`)) return;
@@ -3884,7 +3978,7 @@ window.renderGiderler = function() {
       <tr class="tbl-row">
         <td style="padding:12px 18px;font-size:12px;color:#64748B;font-family:monospace;">${g.tarih}</td>
         <td style="padding:12px;"><span class="sbadge badge-err-sm">${GIDER_IKON[g.kategori]||'📦'} ${g.kategori}</span></td>
-        <td style="padding:12px;font-size:12px;color:#94A3B8;">${g.aciklama || '—'}</td>
+        <td style="padding:12px;font-size:12px;color:#94A3B8;">${g.aciklama || '—'}${g.tekrarlayan ? `<div style="font-size:10px;color:#F59E0B;margin-top:3px;">🔁 ${GIDER_PERIYOT_ETIKET[g.periyot]||''} — sonraki vade: ${tekrarlayanGiderGuncelVade(g)}</div>` : ''}</td>
         <td style="padding:12px;text-align:right;font-size:13px;color:#EF4444;font-weight:700;">-${(g.tutar||0).toLocaleString('tr-TR')} ₺</td>
         <td style="padding:12px;text-align:right;">
           <button onclick="deleteGider('${g.id}','${(g.kategori||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;">Sil</button>
@@ -3910,6 +4004,130 @@ window.exportGiderlerCSV = () => {
   const satirlar = [['Tarih', 'Kategori', 'Açıklama', 'Tutar (TL)', 'Kaydeden']];
   G_GIDERLER.forEach(g => satirlar.push([g.tarih, g.kategori||'', g.aciklama||'', g.tutar||0, g.kaydeden||'']));
   xlsxIndir(satirlar, `giderler_${new Date().toISOString().slice(0,10)}.xlsx`, 'Giderler');
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   ÇEK / SENET TAKİBİ
+   "Alınan" (müşteriden tahsil edilecek) ve "Verilen" (tedarikçiye/
+   üçüncü şahsa ödenecek) çek/senetlerin vade tarihi ve durumu takip
+   edilir. Durumlar: beklemede, tahsilEdildi (alınan için) /
+   odendi (verilen için), karsiliksiz.
+═══════════════════════════════════════════════════════════════ */
+const CEK_DURUM_ETIKET = {
+  beklemede:     { metin: 'Beklemede',      renk: '#F59E0B' },
+  tahsilEdildi:  { metin: 'Tahsil Edildi',  renk: '#10B981' },
+  odendi:        { metin: 'Ödendi',         renk: '#10B981' },
+  karsiliksiz:   { metin: 'Karşılıksız',    renk: '#EF4444' },
+};
+
+window.saveCek = async () => {
+  const yon        = document.getElementById('f-cek-yon').value; // 'alinan' | 'verilen'
+  const taraf      = document.getElementById('f-cek-taraf').value.trim();
+  const tutar      = Math.max(0, parseFloat(document.getElementById('f-cek-tutar').value) || 0);
+  const vadeTarihi = document.getElementById('f-cek-vadeTarihi').value;
+  const cekNo      = document.getElementById('f-cek-cekNo').value.trim();
+  const banka      = document.getElementById('f-cek-banka').value.trim();
+  const aciklama   = document.getElementById('f-cek-aciklama').value.trim();
+
+  if (!taraf || !tutar || !vadeTarihi) { alert('Taraf, tutar ve vade tarihi zorunludur.'); return; }
+
+  try {
+    await addDoc(collection(db, 'cekler'), {
+      yon, taraf, tutar, vadeTarihi, cekNo, banka, aciklama,
+      durum: 'beklemede',
+      kaydeden: currentUserData?.ad || '—',
+      olusturuldu: serverTimestamp()
+    });
+    closeModal('mCek');
+    ['f-cek-taraf','f-cek-tutar','f-cek-vadeTarihi','f-cek-cekNo','f-cek-banka','f-cek-aciklama'].forEach(id => document.getElementById(id).value = '');
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.cekDurumGuncelle = async (id, yeniDurum) => {
+  try {
+    await updateDoc(doc(db, 'cekler', id), {
+      durum: yeniDurum,
+      durumGuncellemeTarihi: serverTimestamp(),
+      durumGuncelleyen: currentUserData?.ad || '—'
+    });
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.deleteCek = async (id, taraf) => {
+  if (!confirm(`"${taraf}" çek/senet kaydını silmek istediğinizden emin misiniz?`)) return;
+  await deleteDoc(doc(db, 'cekler', id));
+};
+
+window.renderCekler = function() {
+  const tbody = document.getElementById('cekTableBody');
+  const ozetEl = document.getElementById('cekOzetKartlari');
+  if (!tbody) return;
+
+  const yonFiltre = document.getElementById('cekYonFiltre')?.value || '';
+  let data = G_CEKLER;
+  if (yonFiltre) data = data.filter(c => c.yon === yonFiltre);
+
+  const bugunStr = new Date().toISOString().slice(0,10);
+
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Çek/senet kaydı yok.</td></tr>`;
+  } else {
+    // Vadesi en yakın/geçmiş en üstte
+    const sirali = [...data].sort((a,b) => (a.vadeTarihi||'').localeCompare(b.vadeTarihi||''));
+    tbody.innerHTML = sirali.map(c => {
+      const durum = CEK_DURUM_ETIKET[c.durum] || CEK_DURUM_ETIKET.beklemede;
+      const gecikmis = c.durum === 'beklemede' && c.vadeTarihi < bugunStr;
+      const tamamlanmaDurumu = c.yon === 'alinan' ? 'tahsilEdildi' : 'odendi';
+      const tamamlanmaEtiket = c.yon === 'alinan' ? '✓ Tahsil Edildi' : '✓ Ödendi';
+      return `
+      <tr class="tbl-row" style="${gecikmis ? 'background:rgba(239,68,68,.05);' : ''}">
+        <td style="padding:12px 18px;font-size:12px;color:#64748B;font-family:monospace;">${c.vadeTarihi}${gecikmis ? ' <span style="color:#EF4444;font-weight:700;">⚠</span>' : ''}</td>
+        <td style="padding:12px;"><span class="sbadge" style="background:${c.yon==='alinan'?'rgba(16,185,129,.12)':'rgba(239,68,68,.12)'};color:${c.yon==='alinan'?'#10B981':'#EF4444'};">${c.yon==='alinan' ? '⬇ Alınan' : '⬆ Verilen'}</span></td>
+        <td style="padding:12px;font-size:12px;color:#E2E8F0;font-weight:600;">${c.taraf}${c.banka ? `<div style="font-size:10px;color:#475569;">${c.banka}${c.cekNo ? ' — '+c.cekNo : ''}</div>` : ''}</td>
+        <td style="padding:12px;font-size:12px;color:#94A3B8;">${c.aciklama || '—'}</td>
+        <td style="padding:12px;text-align:right;font-size:13px;color:${c.yon==='alinan'?'#10B981':'#EF4444'};font-weight:700;">${(c.tutar||0).toLocaleString('tr-TR')} ₺</td>
+        <td style="padding:12px;text-align:center;"><span class="sbadge" style="background:${durum.renk}22;color:${durum.renk};border:1px solid ${durum.renk}44;">${durum.metin}</span></td>
+        <td style="padding:12px;text-align:right;white-space:nowrap;">
+          ${c.durum === 'beklemede' ? `
+            <button onclick="cekDurumGuncelle('${c.id}','${tamamlanmaDurumu}')" style="font-size:11px;color:#10B981;background:none;border:none;cursor:pointer;font-weight:700;">${tamamlanmaEtiket}</button>
+            <button onclick="cekDurumGuncelle('${c.id}','karsiliksiz')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;margin-left:8px;">Karşılıksız</button>
+          ` : `<button onclick="cekDurumGuncelle('${c.id}','beklemede')" style="font-size:11px;color:#94A3B8;background:none;border:none;cursor:pointer;">Geri Al</button>`}
+          <button onclick="deleteCek('${c.id}','${(c.taraf||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#475569;background:none;border:none;cursor:pointer;margin-left:8px;">Sil</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Özet kartları: bekleyen alınan, bekleyen verilen, gecikmiş, karşılıksız
+  if (ozetEl) {
+    const bekleyenAlinan = data.filter(c => c.durum === 'beklemede' && c.yon === 'alinan').reduce((s,c) => s + (c.tutar||0), 0);
+    const bekleyenVerilen = data.filter(c => c.durum === 'beklemede' && c.yon === 'verilen').reduce((s,c) => s + (c.tutar||0), 0);
+    const gecikmisSayisi = data.filter(c => c.durum === 'beklemede' && c.vadeTarihi < bugunStr).length;
+    const karsiliksizToplam = data.filter(c => c.durum === 'karsiliksiz').reduce((s,c) => s + (c.tutar||0), 0);
+    ozetEl.innerHTML = `
+      <div class="card" style="padding:14px;border-color:rgba(16,185,129,.25);background:rgba(16,185,129,.04);">
+        <div style="font-size:10px;color:#475569;margin-bottom:4px;">⬇ Bekleyen Alınan Çekler</div>
+        <div style="font-size:16px;font-weight:800;color:#10B981;">${bekleyenAlinan.toLocaleString('tr-TR')} ₺</div>
+      </div>
+      <div class="card" style="padding:14px;border-color:rgba(239,68,68,.25);background:rgba(239,68,68,.04);">
+        <div style="font-size:10px;color:#475569;margin-bottom:4px;">⬆ Bekleyen Verilen Çekler</div>
+        <div style="font-size:16px;font-weight:800;color:#EF4444;">${bekleyenVerilen.toLocaleString('tr-TR')} ₺</div>
+      </div>
+      <div class="card" style="padding:14px;border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.04);">
+        <div style="font-size:10px;color:#475569;margin-bottom:4px;">⚠ Vadesi Geçmiş</div>
+        <div style="font-size:16px;font-weight:800;color:#F59E0B;">${gecikmisSayisi} adet</div>
+      </div>
+      <div class="card" style="padding:14px;">
+        <div style="font-size:10px;color:#475569;margin-bottom:4px;">✗ Karşılıksız Toplam</div>
+        <div style="font-size:16px;font-weight:800;color:#94A3B8;">${karsiliksizToplam.toLocaleString('tr-TR')} ₺</div>
+      </div>`;
+  }
+};
+
+window.exportCeklerCSV = () => {
+  const satirlar = [['Vade Tarihi', 'Yön', 'Taraf', 'Banka', 'Çek No', 'Tutar (TL)', 'Durum', 'Açıklama']];
+  G_CEKLER.forEach(c => satirlar.push([c.vadeTarihi, c.yon==='alinan'?'Alınan':'Verilen', c.taraf||'', c.banka||'', c.cekNo||'', c.tutar||0, (CEK_DURUM_ETIKET[c.durum]||{}).metin||'', c.aciklama||'']));
+  xlsxIndir(satirlar, `cek_senet_${new Date().toISOString().slice(0,10)}.xlsx`, 'Çek-Senet');
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -4387,6 +4605,15 @@ window.saveOdeme = async () => {
 
   if (!bina || !tutar || !tarih) { alert('Bina, tutar ve tarih zorunludur.'); return; }
 
+  // Mükerrer kayıt uyarısı: aynı bina + aynı tutar + aynı gün için zaten
+  // bir ödeme kaydı varsa, yanlışlıkla iki kez girilmiş olabilir — emin
+  // olunmadan kaydedilmeden önce kullanıcı uyarılır.
+  const ayniBinaNorm = binaAdiNormalize(bina);
+  const mukerrer = G_ODEMELER.some(o => o.tarih === tarih && (o.tutar||0) === tutar && binaAdiNormalize(o.bina) === ayniBinaNorm);
+  if (mukerrer) {
+    if (!confirm(`⚠️ Olası mükerrer kayıt!\n\n"${bina}" için ${tarih} tarihinde ${tutar.toLocaleString('tr-TR')} ₺ tutarında bir ödeme zaten kayıtlı.\n\nYine de bu ödemeyi tekrar kaydetmek istediğinize emin misiniz?`)) return;
+  }
+
   try {
     await addDoc(collection(db, 'odemeler'), {
       bina, binaCariKodu: binaCariKoduBul(bina), tutar, tarih, tur, aciklama,
@@ -4478,7 +4705,7 @@ window.renderMuhasebe = function() {
    MUHASEBE SEKME GEÇİŞİ
 ═══════════════════════════════════════════════════════════════ */
 // Sadece admin'in erişebileceği hassas muhasebe sekmeleri (bordro, gider, kar/zarar)
-const ADMIN_ONLY_MUHASEBE_TABS = ['giderler', 'ozet', 'maas', 'mesai', 'personel'];
+const ADMIN_ONLY_MUHASEBE_TABS = ['giderler', 'cekler', 'ozet', 'maas', 'mesai', 'personel'];
 
 window.switchMuhasebeTab = (tab, btn) => {
   const role = currentUserData?.rol;
@@ -4495,6 +4722,7 @@ window.switchMuhasebeTab = (tab, btn) => {
   if (tab === 'personel') renderPersonelCari();
   if (tab === 'musteri') { doldurMusteriSecimi(); renderMusteriCariListesi(); }
   if (tab === 'giderler') renderGiderler();
+  if (tab === 'cekler') renderCekler();
   if (tab === 'ozet') renderMaliOzet();
   if (tab === 'maas') renderMaaslar();
   if (tab === 'mesai') renderMesai();
@@ -5347,6 +5575,16 @@ window.renderMusteriCariDetay = () => {
   const toplamTahsilat = tahsilatlar.reduce((s,o) => s + (o.tutar||0), 0);
   const netBakiye = toplamTahsilat - toplamBorc;
 
+  // Kâr/Zarar kırılımı — basit yaklaşım: ek bir maliyet alanı eklemeden,
+  // mevcut borç türlerine göre geliri ikiye ayırır: "Anlaşma/Periyodik
+  // Bakım" borçlandırması ile "Parça/Onarım" borçlandırması. Bu, bu
+  // carinin asıl bakım anlaşmasından mı yoksa ek parça/onarım işlerinden
+  // mi daha çok kazandırdığını görmeyi sağlar. Toplamda yine
+  // Tahsilat - Borç = Net (yukarıdaki netBakiye ile aynı toplam),
+  // ama burada kaynağına göre kırılımı gösterilir.
+  const parcaOnarimBorc = borclar.filter(x => x.tip === 'Parça / Onarım').reduce((s,x) => s + (x.tutar||0), 0);
+  const anlasmaBorc = toplamBorc - parcaOnarimBorc;
+
   // Borç ve tahsilatları tarihe göre birleştir (eskiden yeniye, kümülatif bakiye için)
   const hareketler = [
     ...borclar.map(x => ({ id: x.id, koleksiyon:'borclar', tarih: x.tarih, tip:'borc', aciklama: x.aciklama || x.tip || 'Anlaşma bedeli', tutar: x.tutar })),
@@ -5388,6 +5626,25 @@ window.renderMusteriCariDetay = () => {
           <div style="font-size:17px;font-weight:800;color:${netBakiye<0?'#EF4444':'#10B981'};">${netBakiye.toLocaleString('tr-TR')} ₺</div>
         </div>
       </div>
+    </div>
+    <div class="card admin-only" style="padding:18px;margin-bottom:14px;">
+      <h4 style="font-size:12px;font-weight:700;color:#E2E8F0;margin-bottom:3px;">📊 Bu Carinin Kâr/Zarar Görünümü</h4>
+      <p style="font-size:10px;color:#475569;margin-bottom:12px;">Bu cariden işin başından beri tahsil edilen tutar, ne için borçlandırıldığına göre kırılımıyla.</p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+        <div style="background:rgba(15,23,42,.4);border-radius:8px;padding:12px;">
+          <div style="font-size:10px;color:#475569;margin-bottom:4px;">🔧 Anlaşma/Periyodik Bakım Borcu</div>
+          <div style="font-size:15px;font-weight:800;color:#94A3B8;">${anlasmaBorc.toLocaleString('tr-TR')} ₺</div>
+        </div>
+        <div style="background:rgba(15,23,42,.4);border-radius:8px;padding:12px;">
+          <div style="font-size:10px;color:#475569;margin-bottom:4px;">🛠️ Parça/Onarım Borcu</div>
+          <div style="font-size:15px;font-weight:800;color:#94A3B8;">${parcaOnarimBorc.toLocaleString('tr-TR')} ₺</div>
+        </div>
+        <div style="background:${netBakiye<0?'rgba(239,68,68,.06)':'rgba(16,185,129,.06)'};border:1px solid ${netBakiye<0?'rgba(239,68,68,.2)':'rgba(16,185,129,.2)'};border-radius:8px;padding:12px;">
+          <div style="font-size:10px;color:#475569;margin-bottom:4px;">${netBakiye<0?'⚠ ZARAR (Tahsil Edilmemiş)':'✓ KÂR (Net Tahsilat)'}</div>
+          <div style="font-size:15px;font-weight:800;color:${netBakiye<0?'#EF4444':'#10B981'};">${netBakiye.toLocaleString('tr-TR')} ₺</div>
+        </div>
+      </div>
+      <p style="font-size:9.5px;color:#475569;margin-top:10px;">Not: Bu basit bir görünümdür — parça alış maliyeti veya teknisyen işçilik gideri burada düşülmez, sadece bu cariye kesilen borç ile gelen tahsilat karşılaştırılır.</p>
     </div>
     <div class="card" style="padding:0;overflow:hidden;">
       <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);">
@@ -7336,6 +7593,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div style="display:flex;gap:1px;margin-bottom:16px;background:rgba(30,41,59,.5);padding:3px;border-radius:10px;width:fit-content;flex-wrap:wrap;">
           <button onclick="switchMuhasebeTab('odemeler',this)" class="muh-tab-btn muh-tab-active" data-tab="odemeler">💰 Ödemeler</button>
           <button onclick="switchMuhasebeTab('giderler',this)" class="muh-tab-btn admin-only" data-tab="giderler">📤 Giderler</button>
+          <button onclick="switchMuhasebeTab('cekler',this)" class="muh-tab-btn admin-only" data-tab="cekler">🧾 Çek/Senet</button>
           <button onclick="switchMuhasebeTab('ozet',this)" class="muh-tab-btn admin-only" data-tab="ozet">📊 Mali Özet</button>
           <button onclick="switchMuhasebeTab('maas',this)" class="muh-tab-btn admin-only" data-tab="maas">💼 Maaşlar</button>
           <button onclick="switchMuhasebeTab('mesai',this)" class="muh-tab-btn admin-only" data-tab="mesai">🕐 Mesai/Puantaj</button>
@@ -7525,6 +7783,44 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
                   <th style="padding:11px 12px;"></th>
                 </tr></thead>
                 <tbody id="giderTableBody"><tr><td colspan="5" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ SEKME: ÇEK/SENET TAKİBİ ═══ -->
+        <div id="muhTab-cekler" class="muh-tab-content" style="display:none;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+            <p style="font-size:11px;color:#475569;">Alınan (tahsil edilecek) ve verilen (ödenecek) çek/senetlerin vade takibi</p>
+            <div style="display:flex;gap:8px;">
+              <button onclick="exportCeklerCSV()" class="btn-ghost" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
+              <button onclick="openModal('mCek')" class="btn-sm">+ Çek/Senet Ekle</button>
+            </div>
+          </div>
+
+          <div id="cekOzetKartlari" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:16px;"></div>
+
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+            <select id="cekYonFiltre" class="db-input" style="max-width:220px;" onchange="renderCekler()">
+              <option value="">Tümü (Alınan + Verilen)</option>
+              <option value="alinan">⬇ Sadece Alınan</option>
+              <option value="verilen">⬆ Sadece Verilen</option>
+            </select>
+          </div>
+
+          <div class="card" style="padding:0;overflow:hidden;">
+            <div style="overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;">
+                <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
+                  <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Vade</th>
+                  <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Yön</th>
+                  <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Taraf</th>
+                  <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Açıklama</th>
+                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tutar</th>
+                  <th style="text-align:center;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
+                  <th style="padding:11px 12px;"></th>
+                </tr></thead>
+                <tbody id="cekTableBody"><tr><td colspan="7" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
               </table>
             </div>
           </div>
@@ -8071,10 +8367,60 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Yöntemi</label>
         <select id="f-gider-odemeYontemi" class="db-input"><option>Nakit</option><option>Havale/EFT</option><option>Kredi Kartı</option><option>Çek</option></select></div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Açıklama</label><input id="f-gider-aciklama" type="text" class="db-input" placeholder="Örn: Servis aracı yakıt dolumu"/></div>
+      <div style="border-top:1px solid rgba(30,41,59,.5);padding-top:12px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#94A3B8;cursor:pointer;">
+          <input id="f-gider-tekrarlayan" type="checkbox" onchange="document.getElementById('f-gider-periyotAlani').style.display=this.checked?'block':'none'"/>
+          🔁 Bu, düzenli tekrarlayan bir gider (kira, sigorta, abonelik vb.)
+        </label>
+        <div id="f-gider-periyotAlani" style="display:none;margin-top:10px;">
+          <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tekrar Periyodu</label>
+          <select id="f-gider-periyot" class="db-input">
+            <option value="aylik">Her Ay</option>
+            <option value="3ayda">3 Ayda Bir</option>
+            <option value="6ayda">6 Ayda Bir</option>
+            <option value="yillik">Her Yıl</option>
+          </select>
+          <p style="font-size:10px;color:#475569;margin-top:6px;">Vadesi geldiğinde Bildirim Merkezi'nde hatırlatma çıkar — kayıt otomatik oluşturulmaz, siz eklemeniz gerekir.</p>
+        </div>
+      </div>
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mGider')" class="btn-ghost">İptal</button>
       <button onclick="saveGider()" class="btn-sm">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Çek/Senet Ekle Modal -->
+<div id="modal-mCek" class="modal-wrap" onclick="if(event.target===this)closeModal('mCek')">
+  <div class="modal-box">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">Çek/Senet Ekle</h3>
+      <button onclick="closeModal('mCek')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Yön *</label>
+        <select id="f-cek-yon" class="db-input">
+          <option value="alinan">⬇ Alınan (müşteriden — tahsil edilecek)</option>
+          <option value="verilen">⬆ Verilen (tedarikçiye/üçüncü şahsa — ödenecek)</option>
+        </select>
+      </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Taraf (Kişi/Firma) *</label>
+        <input id="f-cek-taraf" type="text" class="db-input" placeholder="Örn: Göksü İnşaat veya ABC Yedek Parça Ltd."/>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-cek-tutar" type="number" class="db-input" min="0" placeholder="15000"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Vade Tarihi *</label><input id="f-cek-vadeTarihi" type="date" class="db-input"/></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Banka</label><input id="f-cek-banka" type="text" class="db-input" placeholder="Örn: Ziraat Bankası"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Çek/Senet No</label><input id="f-cek-cekNo" type="text" class="db-input" placeholder="Opsiyonel"/></div>
+      </div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Açıklama</label><input id="f-cek-aciklama" type="text" class="db-input" placeholder="Örn: Haziran ayı bakım bedeli için verilen çek"/></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mCek')" class="btn-ghost">İptal</button>
+      <button onclick="saveCek()" class="btn-sm">Kaydet</button>
     </div>
   </div>
 </div>
