@@ -37,7 +37,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
          signOut, onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc,
-         onSnapshot, query, orderBy, serverTimestamp, getDoc, setDoc }
+         onSnapshot, query, orderBy, limit, serverTimestamp, getDoc, setDoc }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -468,6 +468,8 @@ let G_COZUM_PARCA_SAYAC = 0; // Arıza çözüm modalındaki parça satırları 
 let G_CPB_PARCA_SAYAC = 0;   // Cari ekranı "Parça/Onarım Borcu Ekle" modalındaki sayaç
 let G_SOZLESMELER = [];
 let G_BINALAR = [];
+let G_AUDIT_LOG = []; // Sistem Audit Log — kim ne zaman ne yaptı (son 200 kayıt, eskiler otomatik silinir)
+let G_FORM_KIRLI_MODALLER = new Set(); // İçinde kaydedilmemiş değişiklik olan büyük formların modal id'leri (mBina, mSozlesme, mBakimChecklist)
 
 /* ═══════════════════════════════════════════════════════════════
    NAV_DEFS — Roller bazında varsayılan menü/sayfa tanımları.
@@ -531,7 +533,10 @@ function kullaniciIzinliSayfalar(userData) {
 let G_ODEMELER = [];
 let G_ASANSORLER = [];
 let G_BILDIRIMLER = [];
-let G_SON_GORULEN = null; // bildirim okundu takibi için zaman damgası
+// NOT: Bildirim "okundu" takibi zaten tam çalışır durumda — localStorage'da
+// 'asel_okunan_bildirimler' anahtarı altında tutulur (bkz. tumunuOkunduYap()
+// ve renderBildirimPanel()). Daha önce burada kullanılmayan, hiçbir yere
+// bağlanmamış bir G_SON_GORULEN değişkeni vardı; kafa karıştırmasın diye kaldırıldı.
 let G_AVANSLAR = [];          // KareKara mantığı: personele verilen avanslar
 let G_AVANS_KULLANIM = [];    // avanstan kullanılan/düşülen tutarlar
 let G_KULLANICILAR = [];      // personel listesi (avans dropdown'u için)
@@ -563,6 +568,65 @@ function aramaEslesir(terim, ...degerler) {
   return degerler.some(d => normalize(d).includes(t));
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   SİSTEM AUDIT LOG — "kim ne zaman ne yaptı"
+   Kritik/yıkıcı işlemler (silmeler, kullanıcı oluşturma, şifre
+   değişikliği) auditLog koleksiyonuna kaydedilir. Otomatik olarak
+   SADECE SON 200 KAYIT tutulur — her yazımdan sonra koleksiyon
+   200'ü aşıyorsa en eski kayıtlar silinir, böylece koleksiyon
+   sınırsız büyümez ve sayfa hep hızlı kalır.
+═══════════════════════════════════════════════════════════════ */
+async function auditLogYaz(islem, detay) {
+  try {
+    await addDoc(collection(db, 'auditLog'), {
+      islem,                              // örn: "Cari Silindi", "Kullanıcı Oluşturuldu"
+      detay,                              // örn: "Göksü İnşaat"
+      yapanKisi: currentUserData?.ad || '—',
+      yapanRol: currentUserData?.rolLabel || currentUserData?.rol || '—',
+      tarih: serverTimestamp()
+    });
+    // 200 kaydı aşan en eski fazlalıkları sil. G_AUDIT_LOG zaten
+    // onSnapshot ile (orderBy tarih desc) güncel tutulduğu için burada
+    // ekstra bir okuma yapmaya gerek yok — mevcut listeden hesaplanır.
+    if (G_AUDIT_LOG.length > 200) {
+      const fazlalar = G_AUDIT_LOG.slice(200); // 201. ve sonrası (en eskiler, çünkü desc sıralı)
+      for (const f of fazlalar) {
+        await deleteDoc(doc(db, 'auditLog', f.id)).catch(() => {}); // tek bir silme başarısız olursa diğerlerini durdurma
+      }
+    }
+  } catch (e) {
+    // Audit log yazılamaması ana işlemi DURDURMAMALI (örn. bir cari
+    // silinirken log yazımı internet kesintisiyle başarısız olsa da,
+    // silme işlemi zaten tamamlanmış olabilir) — sessizce konsola düşer.
+    console.warn('Audit log yazılamadı:', e.message);
+  }
+}
+
+// NOT: tarihToDate() fonksiyonu bu dosyada zaten tanımlı (Firestore
+// Timestamp / string / Date karışık tarih formatlarını normalize eder),
+// renderAuditLog() onu doğrudan kullanır.
+window.renderAuditLog = function() {
+  const tbody = document.getElementById('auditLogTableBody');
+  if (!tbody) return;
+
+  if (!G_AUDIT_LOG.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Henüz kayıt yok.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = G_AUDIT_LOG.map(l => {
+    const d = tarihToDate(l.tarih);
+    const tarihStr = d ? d.toLocaleString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+    return `
+    <tr class="tbl-row">
+      <td style="padding:11px 18px;font-size:11px;color:#64748B;font-family:monospace;white-space:nowrap;">${tarihStr}</td>
+      <td style="padding:11px 12px;font-size:12px;color:#E2E8F0;font-weight:600;">${l.islem || '—'}</td>
+      <td style="padding:11px 12px;font-size:12px;color:#94A3B8;">${l.detay || '—'}</td>
+      <td style="padding:11px 12px;font-size:11px;color:#475569;">${l.yapanKisi || '—'} <span style="opacity:.6;">(${l.yapanRol || '—'})</span></td>
+    </tr>`;
+  }).join('');
+};
+
 // İki bina adının, harf büyüklüğü ve fazladan/baştaki/sondaki boşluk
 // farkına bakılmaksızın AYNI cari olup olmadığını kontrol eder. Bina
 // adı birden çok koleksiyonda (borclar, odemeler, bakimlar, vb.) serbest
@@ -571,6 +635,30 @@ function aramaEslesir(terim, ...degerler) {
 // yapılan === karşılaştırmasıyla aynı cariyi farklı carilermiş gibi ikiye böler.
 function binaAdiNormalize(ad) {
   return (ad || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('tr-TR');
+}
+
+// Tutar/sayı alanlarını okurken hem virgülü hem noktayı ondalık ayırıcı
+// olarak kabul eder. Türkiye'de standart ondalık ayırıcı virgüldür
+// (1.500,50), ama bu input'lar artık type="text" + inputmode="decimal"
+// olduğu için kullanıcı alışkanlıkla nokta da yazabilir (1500.50).
+// Ayrıca olası binlik ayırıcı noktaları/boşlukları da temizler
+// (örn. "1.500,50" → 1500.50), tek bir virgül/nokta varsa onu ondalık
+// ayırıcı sayar.
+function tutarParse(deger) {
+  if (deger === null || deger === undefined) return NaN;
+  let s = String(deger).trim();
+  if (!s) return NaN;
+  const virgulVar = s.includes(',');
+  const noktaVar = s.includes('.');
+  if (virgulVar && noktaVar) {
+    // "1.500,50" gibi: nokta binlik ayırıcı, virgül ondalık — noktaları sil, virgülü noktaya çevir
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (virgulVar) {
+    // sadece virgül var → ondalık ayırıcı kabul et
+    s = s.replace(',', '.');
+  }
+  // sadece nokta varsa veya hiçbiri yoksa zaten parseFloat ile uyumlu
+  return parseFloat(s);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -719,6 +807,17 @@ function subscribeAll() {
     renderSozlesmeler(data);
     rebuildBildirimler();
   }));
+
+  // Sistem Audit Log — sadece admin görür, sadece son 200 kayıt çekilir
+  // (zaten auditLogYaz() koleksiyonu 200'ün üzerine çıkarmıyor, limit
+  // burada sadece ekstra bir güvenlik/performans sınırı).
+  if (role === 'admin') {
+    const auditQ = query(collection(db, 'auditLog'), orderBy('tarih', 'desc'), limit(200));
+    unsubscribers.push(onSnapshot(auditQ, snap => {
+      G_AUDIT_LOG = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (document.getElementById('pg-kullanicilar')?.classList.contains('active')) renderAuditLog();
+    }));
+  }
 
   // Ödemeler (Muhasebe)
   const odemeQ = query(collection(db, 'odemeler'), orderBy('tarih', 'desc'));
@@ -949,11 +1048,22 @@ window.showPage = (name, btn) => {
   document.getElementById('pageTitle').textContent = titles[name] || name;
   if (name === 'takvim') renderCalendar();
   if (name === 'performans') renderPerformans();
-  if (name === 'muhasebe') renderMuhasebe();
+  if (name === 'muhasebe') {
+    renderMuhasebe();
+    // Bina yöneticisi için "Ödemeler" sekmesi (admin'in genel tahsilat
+    // listesi) anlamlı bir varsayılan değil — bina yöneticisi doğrudan
+    // kendi cari ekstresini görmek ister. Sayfa her açıldığında otomatik
+    // olarak "Müşteri Cari" sekmesine geçilir.
+    if (role === 'bina') {
+      const musteriTabBtn = document.querySelector('.muh-tab-btn[data-tab="musteri"]');
+      if (musteriTabBtn) switchMuhasebeTab('musteri', musteriTabBtn);
+    }
+  }
   if (name === 'asansorler') renderAsansorler();
   if (name === 'aylik') renderAylikTakip();
   if (name === 'gorevler') renderGunlukGorevler();
   if (name === 'talepler') renderTalepler();
+  if (name === 'kullanicilar') renderAuditLog();
   closeMobileSidebar();
 };
 
@@ -1616,7 +1726,8 @@ function renderArizalar(data) {
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;">
           ${a.durum==='acik'
             ?`<button onclick="closeAriza('${a.id}')" class="btn-sm" style="padding:5px 10px;font-size:10px;">✓ Çözüldü</button>`
-            :`<button onclick="closeAriza('${a.id}')" class="btn-ghost" style="padding:5px 10px;font-size:10px;">✏️ Düzenle</button>`}
+            :`<button onclick="closeAriza('${a.id}')" class="btn-ghost" style="padding:5px 10px;font-size:10px;">✏️ Düzenle</button>
+              <button onclick="arizaTekrarAc('${a.id}')" class="btn-ghost admin-only" style="padding:5px 10px;font-size:10px;color:#F59E0B;">↺ Tekrar Aç</button>`}
           <button onclick="deleteAriza('${a.id}')" class="btn-ghost admin-only" style="padding:5px 10px;font-size:10px;">Sil</button>
         </div>
       </div>
@@ -1744,7 +1855,7 @@ window.saveBina = async () => {
   const sorumluTeknisyenId = sorumluSel.value;
   const sorumluTeknisyenAd = sorumluSel.selectedOptions[0]?.dataset.ad || '';
   const anlasmaTipi     = document.getElementById('f-bina-anlasmaTipi').value;
-  const anlasmaTutar    = Math.max(0, parseFloat(document.getElementById('f-bina-anlasmaTutar').value) || 0);
+  const anlasmaTutar    = Math.max(0, tutarParse(document.getElementById('f-bina-anlasmaTutar').value) || 0);
   const anlasmaPeriyodik= document.getElementById('f-bina-anlasmaPeriyodik').checked;
   const editId          = document.getElementById('f-bina-editId').value;
 
@@ -1868,7 +1979,7 @@ window.saveBina = async () => {
         });
       }
 
-      closeModal('mBina');
+      closeModal('mBina', true);
       resetBinaForm();
 
       // Kullanıcıyı doğrudan Aylık Bakım Takibi sayfasına yönlendir
@@ -1880,7 +1991,7 @@ window.saveBina = async () => {
       }
       return;
     }
-    closeModal('mBina');
+    closeModal('mBina', true);
     resetBinaForm();
   } catch(e) { alert('Hata: ' + e.message); }
 };
@@ -1940,6 +2051,7 @@ window.editBina = async (id) => {
 window.deleteBina = async (id, ad) => {
   if (!confirm(`"${ad}" carisini silmek istediğinizden emin misiniz?\n\nNot: Bu cariye bağlı bakım, sözleşme, borç ve ödeme kayıtları silinmez, ancak artık bu cariye bağlanamazlar.`)) return;
   await deleteDoc(doc(db, 'binalar', id));
+  auditLogYaz('Cari Silindi', ad);
 };
 
 window.resetBinaForm = function() {
@@ -2511,7 +2623,7 @@ window.sozBitisTarihiGuncelle = () => {
 window.saveSozlesme = async () => {
   const bina       = document.getElementById('f-soz-bina').value.trim();
   const tip        = document.getElementById('f-soz-tip').value;
-  const tutar      = Math.max(0, parseFloat(document.getElementById('f-soz-tutar').value) || 0);
+  const tutar      = Math.max(0, tutarParse(document.getElementById('f-soz-tutar').value) || 0);
   const gun        = parseInt(document.getElementById('f-soz-gun').value) || null;
   const baslangic  = document.getElementById('f-soz-baslangic').value;
   const sureAy     = parseInt(document.getElementById('f-soz-sure').value) || 12;
@@ -2520,6 +2632,7 @@ window.saveSozlesme = async () => {
   const not        = document.getElementById('f-soz-not').value.trim();
   const pdfOlustur = document.getElementById('f-soz-pdfOlustur').checked;
   const anaSozlesmeOlustur = document.getElementById('f-soz-anaSozlesmeOlustur').checked;
+  const otomatikBorclandirmayaBagla = document.getElementById('f-soz-otomatikBorclandirmayaBagla').checked;
   const editId     = document.getElementById('f-soz-editId').value;
 
   if (!bina) { alert('Bina adı zorunludur.'); return; }
@@ -2548,7 +2661,30 @@ window.saveSozlesme = async () => {
       const ref = await addDoc(collection(db, 'sozlesmeler'), data);
       sozlesmeId = ref.id;
     }
-    closeModal('mSozlesme');
+
+    // "Otomatik Aylık Borçlandırmaya Bağla" işaretlenmişse, Sözleşmeler
+    // sayfasındaki bu kayıt ile Cari Yönetimi'ndeki bina kaydının
+    // anlasmaPeriyodik/anlasmaTutar/anlasmaTipi alanları SENKRONİZE edilir.
+    // Bunlar önceden tamamen bağımsız iki sistemdi: bir sözleşme kaydı
+    // oluşturmak otomatik borçlandırmayı hiç etkilemiyordu — kullanıcı
+    // farkında olmadan "sözleşmeyi kaydettim ama borç hiç oluşmuyor"
+    // şaşkınlığına düşebiliyordu. Bu köprü, isteğe bağlı olarak ikisini
+    // birbirine bağlar.
+    if (otomatikBorclandirmayaBagla) {
+      const binaKaydi = G_BINALAR.find(b => binaAdiEslesir(b.ad, bina));
+      if (binaKaydi) {
+        await updateDoc(doc(db, 'binalar', binaKaydi.id), {
+          anlasmaPeriyodik: true,
+          anlasmaTutar: tutar,
+          anlasmaTipi: tip
+        });
+        auditLogYaz('Sözleşme Otomatik Borçlandırmaya Bağlandı', `${bina} — ${tutar.toLocaleString('tr-TR')} ₺/ay`);
+      } else {
+        alert(`Not: "${bina}" Cari Yönetimi'nde bulunamadığı için otomatik borçlandırma bağlanamadı. Önce Cari Yönetimi'nde bu bina için bir kayıt oluşturmanız gerekir.`);
+      }
+    }
+
+    closeModal('mSozlesme', true);
 
     // Kaydetme tamamlandıktan sonra, işaretliyse otomatik PDF üret
     if (pdfOlustur) {
@@ -2584,6 +2720,7 @@ window.editSozlesme = async (id) => {
 window.deleteSozlesme = async (id, bina) => {
   if (!confirm(`"${bina}" sözleşmesini silmek istediğinizden emin misiniz?`)) return;
   await deleteDoc(doc(db, 'sozlesmeler', id));
+  auditLogYaz('Sözleşme Silindi', bina);
 };
 
 window.resetSozlesmeForm = function() {
@@ -2593,6 +2730,7 @@ window.resetSozlesmeForm = function() {
   document.getElementById('f-soz-editId').value = '';
   document.getElementById('f-soz-pdfOlustur').checked = true;
   document.getElementById('f-soz-anaSozlesmeOlustur').checked = false;
+  document.getElementById('f-soz-otomatikBorclandirmayaBagla').checked = false;
   document.getElementById('mSozlesmeTitle').textContent = 'Yeni Sözleşme Ekle';
 }
 
@@ -2696,9 +2834,11 @@ function renderSozlesmeler(data) {
   tbody.innerHTML = data.map(s => {
     const yenileme = sozlesmeYenilemeDurumu(s.bitisTarihi);
     const yenilemeRenk = { gecmis:'#EF4444', yaklasti:'#F59E0B', normal:'#94A3B8', bilinmiyor:'#475569' }[yenileme.durum];
+    const binaKaydi = G_BINALAR.find(b => binaAdiEslesir(b.ad, s.bina));
+    const otomatikBorclu = !!(binaKaydi?.anlasmaPeriyodik && binaKaydi?.anlasmaTutar);
     return `
     <tr class="tbl-row">
-      <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${s.bina}</td>
+      <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${s.bina}${otomatikBorclu ? ` <span class="sbadge" style="background:rgba(245,158,11,.12);color:#F59E0B;border:1px solid rgba(245,158,11,.25);font-size:9px;margin-left:4px;" title="Bu cari, Cari Yönetimi'nde otomatik aylık borçlandırmaya bağlı">⚡ Otomatik Borçlu</span>` : ''}</td>
       <td style="padding:12px;font-size:12px;color:#64748B;">${s.tip || '—'}</td>
       <td style="padding:12px;font-size:12px;color:#CBD5E1;font-family:monospace;">${s.tutar ? s.tutar.toLocaleString('tr-TR') + ' ₺' : '—'}</td>
       <td style="padding:12px;font-size:12px;color:#64748B;">${s.odemeGunu ? 'Ayın ' + s.odemeGunu + '\'i' : (s.sonOdemeTarihi || '—')}</td>
@@ -3040,6 +3180,7 @@ window.editAsansor = async (id) => {
 window.deleteAsansor = async (id, ad) => {
   if (!confirm(`"${ad}" asansörünü silmek istediğinizden emin misiniz?`)) return;
   await deleteDoc(doc(db, 'asansorler', id));
+  auditLogYaz('Asansör Dosyası Silindi', ad);
 };
 
 window.resetAsansorForm = function() {
@@ -3331,7 +3472,7 @@ window.checklistTamamla = async () => {
         duzenleyenKisi: currentUserData?.ad || '—'
       });
 
-      closeModal('mBakimChecklist');
+      closeModal('mBakimChecklist', true);
       document.getElementById('checklistTamamlaBtn').textContent = '✓ Bakımı Tamamla ve Kaydet';
       G_CHECKLIST_DUZENLEME_ID = null;
 
@@ -3384,7 +3525,7 @@ window.checklistTamamla = async () => {
         aylikChecklistAc(sonraki.aylikBakimId, sonraki.bina);
       } else {
         const tamamlananSayisi = G_AYLIK_TOPLU_TAMAMLANAN;
-        closeModal('mBakimChecklist');
+        closeModal('mBakimChecklist', true);
         if (tamamlananSayisi > 1) {
           alert(`✓ Toplu işaretleme tamamlandı!\n\n${tamamlananSayisi} bina için bakım kaydı oluşturuldu ve fişleri indirildi.`);
         }
@@ -3412,7 +3553,7 @@ window.checklistTamamla = async () => {
         notlar: not || kayit.notlar || 'Kontrol listesi dolduruldu.'
       });
 
-      closeModal('mBakimChecklist');
+      closeModal('mBakimChecklist', true);
       G_CHECKLIST_TAMAMLAMA_ID = null;
 
       await downloadBakimFisiPDF({ bina: kayit.bina, kabin: kayit.kabin || '' }, yapilanMaddeler, not, new Date(), currentUserData?.ad);
@@ -3455,7 +3596,7 @@ window.checklistTamamla = async () => {
       olusturuldu: serverTimestamp()
     });
 
-    closeModal('mBakimChecklist');
+    closeModal('mBakimChecklist', true);
 
     document.getElementById('qrHizliDurumKutu').style.borderColor = 'rgba(16,185,129,.3)';
     document.getElementById('qrHizliDurumKutu').style.background = 'rgba(16,185,129,.06)';
@@ -4196,7 +4337,7 @@ window.exportBakimlarCSV = () => {
 ═══════════════════════════════════════════════════════════════ */
 window.saveGider = async () => {
   const kategori  = document.getElementById('f-gider-kategori').value;
-  const tutar     = Math.max(0, parseFloat(document.getElementById('f-gider-tutar').value) || 0);
+  const tutar     = Math.max(0, tutarParse(document.getElementById('f-gider-tutar').value) || 0);
   const tarih     = document.getElementById('f-gider-tarih').value;
   const odemeYontemi = document.getElementById('f-gider-odemeYontemi').value;
   const aciklama  = document.getElementById('f-gider-aciklama').value.trim();
@@ -4261,6 +4402,7 @@ function tekrarlayanGiderGuncelVade(g) {
 window.deleteGider = async (id, kategori) => {
   if (!confirm(`"${kategori}" gider kaydını silmek istediğinizden emin misiniz?`)) return;
   await deleteDoc(doc(db, 'giderler', id));
+  auditLogYaz('Gider Silindi', kategori);
 };
 
 const GIDER_IKON = { 'Yakıt':'⛽', 'Malzeme':'🔧', 'Kira':'🏢', 'Maaş':'💼', 'Fatura':'📄', 'Araç':'🚗', 'Diğer':'📦' };
@@ -4326,7 +4468,7 @@ const CEK_DURUM_ETIKET = {
 window.saveCek = async () => {
   const yon        = document.getElementById('f-cek-yon').value; // 'alinan' | 'verilen'
   const taraf      = document.getElementById('f-cek-taraf').value.trim();
-  const tutar      = Math.max(0, parseFloat(document.getElementById('f-cek-tutar').value) || 0);
+  const tutar      = Math.max(0, tutarParse(document.getElementById('f-cek-tutar').value) || 0);
   const vadeTarihi = document.getElementById('f-cek-vadeTarihi').value;
   const cekNo      = document.getElementById('f-cek-cekNo').value.trim();
   const banka      = document.getElementById('f-cek-banka').value.trim();
@@ -4359,6 +4501,7 @@ window.cekDurumGuncelle = async (id, yeniDurum) => {
 window.deleteCek = async (id, taraf) => {
   if (!confirm(`"${taraf}" çek/senet kaydını silmek istediğinizden emin misiniz?`)) return;
   await deleteDoc(doc(db, 'cekler', id));
+  auditLogYaz('Çek/Senet Silindi', taraf);
 };
 
 window.renderCekler = function() {
@@ -4901,7 +5044,7 @@ window.hizliTahsilatAc = (binaAdi) => {
 
 window.saveOdeme = async () => {
   const bina      = document.getElementById('f-odeme-bina').value.trim();
-  const tutar     = Math.max(0, parseFloat(document.getElementById('f-odeme-tutar').value) || 0);
+  const tutar     = Math.max(0, tutarParse(document.getElementById('f-odeme-tutar').value) || 0);
   const tarih     = document.getElementById('f-odeme-tarih').value;
   const tur       = document.getElementById('f-odeme-tur').value;
   const aciklama  = document.getElementById('f-odeme-aciklama').value.trim();
@@ -4934,6 +5077,7 @@ window.saveOdeme = async () => {
 window.deleteOdeme = async (id, bina) => {
   if (!confirm(`"${bina}" ödeme kaydını silmek istediğinizden emin misiniz?`)) return;
   await deleteDoc(doc(db, 'odemeler', id));
+  auditLogYaz('Ödeme Kaydı Silindi', bina);
 };
 
 window.renderMuhasebe = function() {
@@ -5023,7 +5167,26 @@ window.switchMuhasebeTab = (tab, btn) => {
   if (btn) btn.classList.add('muh-tab-active');
 
   if (tab === 'personel') renderPersonelCari();
-  if (tab === 'musteri') { doldurMusteriSecimi(); renderMusteriCariListesi(); }
+  if (tab === 'musteri') {
+    doldurMusteriSecimi();
+    renderMusteriCariListesi();
+    const listeAlani = document.getElementById('musteriCariListeAlani');
+    // Bina yöneticisi rolü için, "hangi bina" seçimi gereksiz bir adımdır
+    // — kendisi zaten tek bir binanın yöneticisi, başka cari göremez/
+    // göstermemeli. Liste+dropdown alanı tamamen gizlenip, kendi cari
+    // ekstresi otomatik açılır, ki "Ekstre PDF İndir" butonuna tek
+    // tıkla ulaşabilsin.
+    if (role === 'bina' && currentUserData?.bina) {
+      if (listeAlani) listeAlani.style.display = 'none';
+      const sel = document.getElementById('musteriCariSecim');
+      if (sel) {
+        sel.value = currentUserData.bina;
+        renderMusteriCariDetay();
+      }
+    } else if (listeAlani) {
+      listeAlani.style.display = '';
+    }
+  }
   if (tab === 'giderler') renderGiderler();
   if (tab === 'cekler') renderCekler();
   if (tab === 'ozet') renderMaliOzet();
@@ -5053,7 +5216,7 @@ window.saveAvans = async () => {
   const personelSel = document.getElementById('f-avans-personel');
   const personelId  = personelSel.value;
   const personelAd  = personelSel.selectedOptions[0]?.dataset.ad || '';
-  const tutar       = Math.max(0, parseFloat(document.getElementById('f-avans-tutar').value) || 0);
+  const tutar       = Math.max(0, tutarParse(document.getElementById('f-avans-tutar').value) || 0);
   const tarih       = document.getElementById('f-avans-tarih').value;
   const not         = document.getElementById('f-avans-not').value.trim();
 
@@ -5074,7 +5237,9 @@ window.saveAvans = async () => {
 
 window.deleteAvans = async (id) => {
   if (!confirm('Bu avans kaydını silmek istediğinizden emin misiniz?')) return;
+  const kayit = G_AVANSLAR.find(a => a.id === id);
   await deleteDoc(doc(db, 'avanslar', id));
+  auditLogYaz('Avans Kaydı Silindi', kayit?.personelAd || '—');
 };
 
 window.openAvansKullanimModal = (personelId, personelAd) => {
@@ -5088,7 +5253,7 @@ window.openAvansKullanimModal = (personelId, personelAd) => {
 
 window.saveAvansKullanim = async () => {
   const personelId = document.getElementById('f-avk-personel').value;
-  const tutar       = Math.max(0, parseFloat(document.getElementById('f-avk-tutar').value) || 0);
+  const tutar       = Math.max(0, tutarParse(document.getElementById('f-avk-tutar').value) || 0);
   const tarih       = document.getElementById('f-avk-tarih').value;
   const aciklama    = document.getElementById('f-avk-aciklama').value.trim();
 
@@ -5108,7 +5273,9 @@ window.saveAvansKullanim = async () => {
 
 window.deleteAvansKullanim = async (id) => {
   if (!confirm('Bu kullanım kaydını silmek istediğinizden emin misiniz?')) return;
+  const kayit = G_AVANS_KULLANIM.find(a => a.id === id);
   await deleteDoc(doc(db, 'avansKullanimlar', id));
+  auditLogYaz('Avans Kullanım Kaydı Silindi', kayit?.personelAd || '—');
 };
 
 function renderPersonelCari() {
@@ -5188,7 +5355,7 @@ window.saveMaasTanim = async () => {
   const personelSel = document.getElementById('f-maas-personel');
   const personelId  = personelSel.value;
   const personelAd  = personelSel.selectedOptions[0]?.dataset.ad || '';
-  const tutar       = Math.max(0, parseFloat(document.getElementById('f-maas-tutar').value) || 0);
+  const tutar       = Math.max(0, tutarParse(document.getElementById('f-maas-tutar').value) || 0);
 
   if (!personelId || !tutar) { alert('Personel ve aylık maaş tutarı zorunludur.'); return; }
 
@@ -5209,6 +5376,7 @@ window.saveMaasTanim = async () => {
 window.deleteMaasTanim = async (id, ad) => {
   if (!confirm(`"${ad}" için maaş tanımını silmek istediğinizden emin misiniz?`)) return;
   await deleteDoc(doc(db, 'maaslar', id));
+  auditLogYaz('Maaş Tanımı Silindi', ad);
 };
 
 // Çekirdek fonksiyon: onay istemeden direkt bir personelin maaşını kaydeder.
@@ -5682,7 +5850,9 @@ window.editMesai = async (id) => {
 
 window.deleteMesai = async (id) => {
   if (!confirm('Bu mesai kaydını silmek istediğinizden emin misiniz?')) return;
+  const kayit = G_MESAI.find(m => m.id === id);
   await deleteDoc(doc(db, 'mesaiKayitlari', id));
+  auditLogYaz('Mesai Kaydı Silindi', kayit?.personelAd || '—');
 };
 
 function resetMesaiForm() {
@@ -5909,7 +6079,7 @@ window.renderMusteriCariDetay = () => {
           <p style="font-size:11px;color:#475569;margin-top:3px;">Anlaşma: ${bina?.anlasmaTipi || 'Yok'} ${bina?.anlasmaTutar ? '· '+bina.anlasmaTutar.toLocaleString('tr-TR')+' ₺'+(bina.anlasmaPeriyodik?'/ay (otomatik)':' (tek seferlik)') : ''}</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button onclick="hizliTahsilatAc('${binaAdi.replace(/'/g,"\\'")}')" class="btn-sm" style="padding:9px 16px;background:linear-gradient(135deg,#10B981,#059669);">💰 Hızlı Tahsilat</button>
+          <button onclick="hizliTahsilatAc('${binaAdi.replace(/'/g,"\\'")}')" class="btn-sm admin-only" style="padding:9px 16px;background:linear-gradient(135deg,#10B981,#059669);">💰 Hızlı Tahsilat</button>
           <button onclick="cpbAc('${binaAdi.replace(/'/g,"\\'")}')" class="btn-sm admin-only" style="padding:9px 16px;background:rgba(239,68,68,.12);color:#fff !important;border:1px solid rgba(239,68,68,.3);">🔧 Parça/Onarım Borcu Ekle</button>
           <button onclick="downloadMusteriEkstresi('${binaAdi.replace(/'/g,"\\'")}')" class="btn-sm" style="padding:9px 16px;">📄 Ekstre PDF İndir</button>
           <button onclick="downloadMusteriEkstresiExcel('${binaAdi.replace(/'/g,"\\'")}')" class="btn-ghost" style="padding:9px 16px;">⬇ Excel İndir</button>
@@ -5988,16 +6158,19 @@ window.renderMusteriCariDetay = () => {
 window.cariHareketSil = async (koleksiyon, id) => {
   if (!confirm('Bu kaydı silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.')) return;
   try {
+    const liste = koleksiyon === 'borclar' ? G_BORCLAR : G_ODEMELER;
+    const kayit = liste.find(x => x.id === id);
+    const islemAdi = koleksiyon === 'borclar' ? 'Cari Borç Kaydı Silindi' : 'Cari Tahsilat Kaydı Silindi';
+    const detayMetni = kayit ? `${kayit.bina || '—'} — ${(kayit.tutar||0).toLocaleString('tr-TR')} ₺` : '—';
+
     // Bu borç bir arızadan otomatik oluşmuşsa, arıza kaydındaki borç
     // referansını da temizle — yoksa arıza sonradan düzenlenirken var
     // olmayan bir borcu güncellemeye çalışır.
-    if (koleksiyon === 'borclar') {
-      const borc = G_BORCLAR.find(x => x.id === id);
-      if (borc?.arizaId) {
-        await updateDoc(doc(db, 'arizalar', borc.arizaId), { arizaBorcuId: null }).catch(() => {});
-      }
+    if (koleksiyon === 'borclar' && kayit?.arizaId) {
+      await updateDoc(doc(db, 'arizalar', kayit.arizaId), { arizaBorcuId: null }).catch(() => {});
     }
     await deleteDoc(doc(db, koleksiyon, id));
+    auditLogYaz(islemAdi, detayMetni);
   } catch(e) {
     alert('Silinemedi: ' + e.message);
   }
@@ -6010,7 +6183,7 @@ window.cariHareketDuzenle = async (koleksiyon, id) => {
 
   const yeniTutarStr = prompt('Tutar (₺):', kayit.tutar ?? 0);
   if (yeniTutarStr === null) return; // iptal
-  const yeniTutar = parseFloat(String(yeniTutarStr).replace(',', '.'));
+  const yeniTutar = tutarParse(yeniTutarStr);
   if (isNaN(yeniTutar) || yeniTutar < 0) { alert('Geçerli bir tutar girin.'); return; }
 
   const yeniAciklama = prompt('Açıklama:', kayit.aciklama ?? '');
@@ -6020,6 +6193,7 @@ window.cariHareketDuzenle = async (koleksiyon, id) => {
   if (yeniTarih === null) return; // iptal
 
   try {
+    const eskiTutar = kayit.tutar ?? 0;
     await updateDoc(doc(db, koleksiyon, id), {
       tutar: yeniTutar,
       aciklama: yeniAciklama.trim(),
@@ -6033,6 +6207,9 @@ window.cariHareketDuzenle = async (koleksiyon, id) => {
     if (koleksiyon === 'borclar' && kayit.arizaId) {
       await updateDoc(doc(db, 'arizalar', kayit.arizaId), { toplamMaliyet: yeniTutar }).catch(() => {});
     }
+
+    const islemAdi = koleksiyon === 'borclar' ? 'Cari Borç Kaydı Düzenlendi' : 'Cari Tahsilat Kaydı Düzenlendi';
+    auditLogYaz(islemAdi, `${kayit.bina || '—'} — ${eskiTutar.toLocaleString('tr-TR')} ₺ → ${yeniTutar.toLocaleString('tr-TR')} ₺`);
   } catch(e) {
     alert('Güncellenemedi: ' + e.message);
   }
@@ -6352,7 +6529,9 @@ window.completeBakim = (id) => {
 
 window.deleteBakim = async (id) => {
   if (!confirm('Bu bakım kaydını silmek istediğinizden emin misiniz?')) return;
+  const kayit = G_BAKIMLAR.find(b => b.id === id);
   await deleteDoc(doc(db, 'bakimlar', id));
+  auditLogYaz('Bakım Kaydı Silindi', kayit?.bina || '—');
 };
 
 // ── WHATSAPP HATIRLATICI ─────────────────────────────────────
@@ -6459,6 +6638,27 @@ window.closeAriza = (id) => {
   openModal('mArizaCozum');
 };
 
+// Yanlışlıkla kapatılmış bir arızayı tekrar "açık" duruma döndürür.
+// Çözüm bilgileri (parçalar, işçilik, not, bağlı borç kaydı) SİLİNMEZ —
+// sadece durum değişir. Bağlı bir borç varsa dokunulmaz: müşteri zaten o
+// parça/işçilik için borçlandırılmış olabilir, arıza tekrar açılsa da bu
+// geçmiş işlem geçerliliğini korur; gerekirse admin borcu ayrıca düzenler.
+window.arizaTekrarAc = async (id) => {
+  const ariza = G_ARIZALAR.find(a => a.id === id);
+  if (!ariza) return;
+  if (!confirm(`"${ariza.bina}" için bu arızayı tekrar AÇIK duruma getirmek istediğinizden emin misiniz?\n\nNot: Daha önce kaydedilmiş parça/işçilik/borç bilgileri silinmez, sadece durum "Açık" olur.`)) return;
+  try {
+    await updateDoc(doc(db, 'arizalar', id), {
+      durum: 'acik',
+      tekrarAcildi: serverTimestamp(),
+      tekrarAcanKisi: currentUserData?.ad || '—'
+    });
+    auditLogYaz('Arıza Tekrar Açıldı', ariza.bina || '—');
+  } catch(e) {
+    alert('Hata: ' + e.message);
+  }
+};
+
 window.cozumParcaEkle = (mevcut) => {
   const rowId = `cp-${G_COZUM_PARCA_SAYAC++}`;
   const wrap = document.getElementById('f-cozum-parcaListesi');
@@ -6471,7 +6671,7 @@ window.cozumParcaEkle = (mevcut) => {
   row.innerHTML = `
     <input type="text" class="db-input cp-ad" value="${ad}" placeholder="Parça adı (örn. Kapı Kontaktörü)" style="font-size:12px;padding:7px 9px;color:#fff;" oninput="cozumToplamGuncelle()"/>
     <input type="number" class="db-input cp-adet" value="${adet}" placeholder="Adet" min="1" style="font-size:12px;padding:7px 6px;color:#fff;" oninput="cozumToplamGuncelle()"/>
-    <input type="number" class="db-input cp-fiyat" value="${fiyat}" placeholder="Birim ₺" min="0" step="0.01" style="font-size:12px;padding:7px 6px;color:#fff;" oninput="cozumToplamGuncelle()"/>
+    <input type="text" inputmode="decimal" class="db-input cp-fiyat" value="${fiyat}" placeholder="Birim ₺" style="font-size:12px;padding:7px 6px;color:#fff;" oninput="cozumToplamGuncelle()"/>
     <button type="button" onclick="document.getElementById('${rowId}').remove(); cozumToplamGuncelle();" style="color:#EF4444;background:none;border:none;cursor:pointer;font-size:16px;line-height:1;">×</button>`;
   wrap.appendChild(row);
 };
@@ -6485,7 +6685,7 @@ function cozumParcalariOku() {
   return [...document.querySelectorAll('#f-cozum-parcaListesi > div')].map(row => {
     const ad = row.querySelector('.cp-ad').value.trim();
     const adet = parseFloat(row.querySelector('.cp-adet').value) || 0;
-    const birimFiyat = parseFloat(row.querySelector('.cp-fiyat').value) || 0;
+    const birimFiyat = tutarParse(row.querySelector('.cp-fiyat').value) || 0;
     return { ad, adet, birimFiyat, tutar: adet * birimFiyat };
   }).filter(p => p.ad || p.tutar > 0); // tamamen boş satırları sayma
 }
@@ -6493,7 +6693,7 @@ function cozumParcalariOku() {
 window.cozumToplamGuncelle = () => {
   const parcalar = cozumParcalariOku();
   const parcaToplam = parcalar.reduce((s,p) => s + p.tutar, 0);
-  const iscilik = parseFloat(document.getElementById('f-cozum-iscilik').value) || 0;
+  const iscilik = Math.max(0, tutarParse(document.getElementById('f-cozum-iscilik').value) || 0);
   const genelToplam = parcaToplam + iscilik;
   document.getElementById('f-cozum-parcaToplam').textContent = `${parcaToplam.toLocaleString('tr-TR')} ₺`;
   document.getElementById('f-cozum-iscilikGoster').textContent = `${iscilik.toLocaleString('tr-TR')} ₺`;
@@ -6507,7 +6707,7 @@ window.cozumKaydet = async () => {
 
   const teknisyen = document.getElementById('f-cozum-teknisyen').value.trim() || currentUserData?.ad || '—';
   const parcalar = cozumParcalariOku();
-  const iscilik = parseFloat(document.getElementById('f-cozum-iscilik').value) || 0;
+  const iscilik = Math.max(0, tutarParse(document.getElementById('f-cozum-iscilik').value) || 0);
   const not = document.getElementById('f-cozum-not').value.trim();
   const parcaToplam = parcalar.reduce((s,p) => s + p.tutar, 0);
   const genelToplam = parcaToplam + iscilik;
@@ -6585,7 +6785,9 @@ window.cozumKaydet = async () => {
 
 window.deleteAriza = async (id) => {
   if (!confirm('Bu arıza kaydını silmek istediğinizden emin misiniz?')) return;
+  const kayit = G_ARIZALAR.find(a => a.id === id);
   await deleteDoc(doc(db, 'arizalar', id));
+  auditLogYaz('Arıza Kaydı Silindi', kayit?.bina || '—');
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -6616,7 +6818,7 @@ window.cpbParcaEkle = () => {
   row.innerHTML = `
     <input type="text" class="db-input cpb-ad" placeholder="Parça adı (örn. Kapı Kontaktörü)" style="font-size:12px;padding:7px 9px;color:#fff;" oninput="cpbToplamGuncelle()"/>
     <input type="number" class="db-input cpb-adet" placeholder="Adet" min="1" value="1" style="font-size:12px;padding:7px 6px;color:#fff;" oninput="cpbToplamGuncelle()"/>
-    <input type="number" class="db-input cpb-fiyat" placeholder="Birim ₺" min="0" step="0.01" style="font-size:12px;padding:7px 6px;color:#fff;" oninput="cpbToplamGuncelle()"/>
+    <input type="text" inputmode="decimal" class="db-input cpb-fiyat" placeholder="Birim ₺" style="font-size:12px;padding:7px 6px;color:#fff;" oninput="cpbToplamGuncelle()"/>
     <button type="button" onclick="document.getElementById('${rowId}').remove(); cpbToplamGuncelle();" style="color:#EF4444;background:none;border:none;cursor:pointer;font-size:16px;line-height:1;">×</button>`;
   wrap.appendChild(row);
 };
@@ -6625,7 +6827,7 @@ function cpbParcalariOku() {
   return [...document.querySelectorAll('#f-cpb-parcaListesi > div')].map(row => {
     const ad = row.querySelector('.cpb-ad').value.trim();
     const adet = parseFloat(row.querySelector('.cpb-adet').value) || 0;
-    const birimFiyat = parseFloat(row.querySelector('.cpb-fiyat').value) || 0;
+    const birimFiyat = tutarParse(row.querySelector('.cpb-fiyat').value) || 0;
     return { ad, adet, birimFiyat, tutar: adet * birimFiyat };
   }).filter(p => p.ad || p.tutar > 0);
 }
@@ -6633,7 +6835,7 @@ function cpbParcalariOku() {
 window.cpbToplamGuncelle = () => {
   const parcalar = cpbParcalariOku();
   const parcaToplam = parcalar.reduce((s,p) => s + p.tutar, 0);
-  const iscilik = parseFloat(document.getElementById('f-cpb-iscilik').value) || 0;
+  const iscilik = Math.max(0, tutarParse(document.getElementById('f-cpb-iscilik').value) || 0);
   const genelToplam = parcaToplam + iscilik;
   document.getElementById('f-cpb-parcaToplam').textContent = `${parcaToplam.toLocaleString('tr-TR')} ₺`;
   document.getElementById('f-cpb-iscilikGoster').textContent = `${iscilik.toLocaleString('tr-TR')} ₺`;
@@ -6646,7 +6848,7 @@ window.cpbKaydet = async () => {
   const baslik = document.getElementById('f-cpb-baslik').value.trim();
   const not = document.getElementById('f-cpb-not').value.trim();
   const parcalar = cpbParcalariOku();
-  const iscilik = parseFloat(document.getElementById('f-cpb-iscilik').value) || 0;
+  const iscilik = Math.max(0, tutarParse(document.getElementById('f-cpb-iscilik').value) || 0);
   const parcaToplam = parcalar.reduce((s,p) => s + p.tutar, 0);
   const genelToplam = parcaToplam + iscilik;
 
@@ -6733,6 +6935,7 @@ window.changeOwnPassword = async () => {
     document.getElementById('own-cur-pass').value = '';
     document.getElementById('own-new-pass').value = '';
     okEl.style.display = 'block';
+    auditLogYaz('Şifre Değiştirildi', `${currentUserData?.ad || '—'} (kendi şifresi)`);
   } catch (e) {
     let msg = 'Hata: ' + e.message;
     if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') msg = 'Mevcut şifre hatalı.';
@@ -6800,6 +7003,8 @@ window.createKullanici = async () => {
     // 3. Secondary app oturumunu kapat (sadece o app'in oturumu, ana admin oturumu etkilenmez)
     await signOut(secondaryAuth);
 
+    auditLogYaz('Kullanıcı Oluşturuldu', `${ad} (${rolLabelMap[rol] || rol})`);
+
     // Başarılı — formu temizle, modalı kapat
     document.getElementById('f-kul-ad').value = '';
     document.getElementById('f-kul-username').value = '';
@@ -6842,6 +7047,8 @@ window.deleteKullanici = async (uid) => {
     alert('Kurucu hesabı silinemez!');
     return;
   }
+  const silinenAd = targetSnap.exists() ? (targetSnap.data().ad || '—') : '—';
+  const silinenRol = targetSnap.exists() ? (targetSnap.data().rolLabel || targetSnap.data().rol || '—') : '—';
 
   const sorumluOlduguBinalar = G_BINALAR.filter(b => b.sorumluTeknisyenId === uid);
   const uyariMetni = sorumluOlduguBinalar.length
@@ -6859,6 +7066,7 @@ window.deleteKullanici = async (uid) => {
       await updateDoc(doc(db, 'binalar', b.id), { sorumluTeknisyenId: '', sorumluTeknisyenAd: '' });
     }
     await deleteDoc(doc(db, 'kullanicilar', uid));
+    auditLogYaz('Kullanıcı Silindi', `${silinenAd} (${silinenRol})`);
     // onSnapshot otomatik güncelleyecek
   } catch (e) {
     alert('Hata: ' + e.message);
@@ -6898,6 +7106,7 @@ window.resetKullaniciSifre = async (uid, currentEmail, adName) => {
     await deleteDoc(doc(db, 'kullanicilar', uid));
     await signOut(secondaryAuth);
 
+    auditLogYaz('Şifre Sıfırlandı (Admin Tarafından)', adName);
     alert(`${adName} şifresi güncellendi ✓`);
   } catch (e) {
     alert('Hata: ' + e.message);
@@ -6909,6 +7118,15 @@ window.resetKullaniciSifre = async (uid, currentEmail, adName) => {
 ═══════════════════════════════════════════════════════════════ */
 window.openModal  = (id) => {
   document.getElementById('modal-'+id).classList.add('open');
+  // mBina ve mSozlesme her zaman aynı modal id'sini kullanır (yeni kayıt
+  // veya düzenleme modu farketmeksizin). Bu yüzden modal her açıldığında
+  // önceki bir oturumdan kalmış "kirli" bayrağı temizlenir — aksi halde
+  // yeni bir cari/sözleşme eklerken hiçbir şey değiştirmeden kapatılsa
+  // bile, önceki kapanıştan kalan yanlış bir uyarı çıkabilir.
+  // (mBakimChecklist için bu temizlik aylikChecklistAc/completeBakim/
+  // qrChecklistAc fonksiyonlarında zaten G_CHECKLIST_ISARETLI sıfırlanarak
+  // yapılıyor, burada tekrar gerekmiyor.)
+  if (id === 'mBina' || id === 'mSozlesme') G_FORM_KIRLI_MODALLER.delete(id);
   // Arıza modalı açılırken, bina rolündeki kullanıcı için "Bina" alanı
   // otomatik kendi binasıyla doldurulup salt-okunur yapılır — başka bir
   // binanın adına yanlışlıkla (veya kasıtlı) arıza açılması önlenir.
@@ -6938,7 +7156,22 @@ window.openModal  = (id) => {
     }
   }
 };
-window.closeModal = (id) => {
+window.closeModal = (id, kayitliMi = false) => {
+  // BÜYÜK formlardan biri (Cari, Sözleşme, Checklist) "kirli" iken
+  // BAŞARILI BİR KAYIT olmadan kapatılmaya çalışılıyorsa, onay istenir.
+  // kayitliMi=true → save...() fonksiyonu kendi başarılı kaydından sonra
+  // çağırır, bu durumda zaten veri kaydedildiği için sorulmaz.
+  if (!kayitliMi && BUYUK_FORM_MODALLERI.includes(id)) {
+    const kirliMi = id === 'mBakimChecklist' ? checklistKirliMi() : G_FORM_KIRLI_MODALLER.has(id);
+    if (kirliMi) {
+      const mesaj = id === 'mBakimChecklist'
+        ? 'İşaretlediğiniz maddeler henüz kaydedilmedi. Kapatırsanız hepsi kaybolacak.\n\nYine de kapatmak istiyor musunuz?'
+        : 'Bu formda kaydedilmemiş değişiklikler var. Kapatırsanız tüm girdiğiniz bilgiler kaybolacak.\n\nYine de kapatmak istiyor musunuz?';
+      if (!confirm(mesaj)) return; // kullanıcı vazgeçti, modal açık kalır
+    }
+  }
+  G_FORM_KIRLI_MODALLER.delete(id);
+
   document.getElementById('modal-'+id).classList.remove('open');
   // Checklist modalı (kaydetmeden) kapatılırsa, düzenleme/tamamlama
   // modu durumu sıfırlanır — yoksa sonraki bir QR taramasında
@@ -7016,8 +7249,70 @@ if (document.readyState === 'loading') {
   mobilKartGozlemcisiBaslat(); // belge zaten hazırsa hemen çalıştır
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   KAYDEDİLMEMİŞ DEĞİŞİKLİK KORUMASI — sadece BÜYÜK formlarda
+   (Cari Ekle/Düzenle, Sözleşme Ekle, Bakım Checklist). Kullanıcı bu
+   formlardan birini doldururken yanlışlıkla modalı kapatır, Escape'e
+   basar, sayfayı yeniler veya tarayıcı sekmesini kapatırsa, veri
+   sessizce kaybolmasın — onay istenir.
+   Diğer (küçük/tek alanlı) formlar bu korumaya dahil değildir, çünkü
+   her tıklamada onay sorması rahatsız edici olur ve veri kaybı riski
+   azdır.
+═══════════════════════════════════════════════════════════════ */
+const BUYUK_FORM_MODALLERI = ['mBina', 'mSozlesme', 'mBakimChecklist'];
+
+function buyukFormKirliIzleyiciKur() {
+  BUYUK_FORM_MODALLERI.forEach(modalId => {
+    const modalEl = document.getElementById('modal-' + modalId);
+    if (!modalEl) return;
+    modalEl.addEventListener('input', () => G_FORM_KIRLI_MODALLER.add(modalId));
+    modalEl.addEventListener('change', () => G_FORM_KIRLI_MODALLER.add(modalId));
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', buyukFormKirliIzleyiciKur);
+} else {
+  buyukFormKirliIzleyiciKur();
+}
+
+// Checklist modalı için "kirli" sayılma kriteri farklıdır: input/change
+// event'i değil, en az bir maddenin işaretlenmiş olmasıdır (checklistMaddeToggle
+// fonksiyonu G_CHECKLIST_ISARETLI Set'ini günceller). Not alanı da bir
+// değişiklik sayılır (yukarıdaki genel input/change dinleyicisi bunu
+// zaten yakalar).
+function checklistKirliMi() {
+  return G_CHECKLIST_ISARETLI.size > 0 || G_FORM_KIRLI_MODALLER.has('mBakimChecklist');
+}
+
+// Tarayıcı sekmesi/penceresi kapatılırken veya sayfa yenilenirken, açık
+// bir büyük form kirliyse yerleşik "Bu sayfadan ayrılmak istediğinize
+// emin misiniz?" uyarısını tetikler. Not: Modern tarayıcılar özel bir
+// mesaj göstermeyi artık desteklemez (güvenlik nedeniyle), sadece
+// preventDefault + returnValue ataması yeterlidir.
+window.addEventListener('beforeunload', (e) => {
+  const acikKirliModal = BUYUK_FORM_MODALLERI.find(modalId => {
+    const modalEl = document.getElementById('modal-' + modalId);
+    if (!modalEl?.classList.contains('open')) return false;
+    return modalId === 'mBakimChecklist' ? checklistKirliMi() : G_FORM_KIRLI_MODALLER.has(modalId);
+  });
+  if (acikKirliModal) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
+    // Açık BÜYÜK formlardan biri "kirli"yse (kaydedilmemiş değişiklik
+    // varsa), Escape onları artık sessizce kapatmaz — closeModal()
+    // üzerinden, normal "x" butonuyla aynı onay akışından geçer. Bu,
+    // dışarı-tıklama korumasının (örn. checklist'te zaten var) Escape
+    // tuşuyla baypas edilmesini önler.
+    const acikBuyukModal = BUYUK_FORM_MODALLERI.find(modalId => document.getElementById('modal-' + modalId)?.classList.contains('open'));
+    if (acikBuyukModal) {
+      closeModal(acikBuyukModal);
+      return;
+    }
     document.querySelectorAll('.modal-wrap.open').forEach(m => m.classList.remove('open'));
     closeLogin();
   }
@@ -8066,6 +8361,25 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           </div>
           <div id="yedekDurum" style="display:none;margin-top:12px;padding:10px 14px;background:rgba(0,173,181,.06);border:1px solid rgba(0,173,181,.2);border-radius:8px;font-size:11px;color:#00ADB5;"></div>
         </div>
+
+        <!-- Sistem Audit Log -->
+        <div class="card admin-only" style="padding:0;overflow:hidden;margin-top:16px;">
+          <div style="padding:16px 18px;border-bottom:1px solid rgba(30,41,59,.6);">
+            <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;margin-bottom:4px;">📜 Sistem Audit Log</h3>
+            <p style="font-size:11px;color:#475569;">Kritik işlemlerin (silme, kullanıcı oluşturma, şifre değişikliği) kaydı — kim, ne zaman, ne yaptı. Otomatik olarak sadece son 200 kayıt tutulur, daha eskiler otomatik silinir.</p>
+          </div>
+          <div style="overflow-x:auto;max-height:420px;overflow-y:auto;">
+            <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
+              <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);position:sticky;top:0;background:#0B1220;">
+                <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Tarih</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">İşlem</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Detay</th>
+                <th style="text-align:left;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Yapan</th>
+              </tr></thead>
+              <tbody id="auditLogTableBody"><tr><td colspan="4" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <!-- BAKIM TAKVİMİ -->
@@ -8284,29 +8598,31 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
         <!-- ═══ SEKME: MÜŞTERİ CARİ (bina ekstresi) ═══ -->
         <div id="muhTab-musteri" class="muh-tab-content" style="display:none;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-            <div class="search-box-wrap">
-              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
-              <input type="text" class="db-input" placeholder="Cari ara..." oninput="aramaGuncelle('musteriCari', this.value)"/>
+          <div id="musteriCariListeAlani">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+              <div class="search-box-wrap">
+                <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+                <input type="text" class="db-input" placeholder="Cari ara..." oninput="aramaGuncelle('musteriCari', this.value)"/>
+              </div>
+              <select id="musteriCariSecim" class="db-input" style="max-width:240px;" onchange="renderMusteriCariDetay()">
+                <option value="">— Bina Seçin —</option>
+              </select>
             </div>
-            <select id="musteriCariSecim" class="db-input" style="max-width:240px;" onchange="renderMusteriCariDetay()">
-              <option value="">— Bina Seçin —</option>
-            </select>
-          </div>
 
-          <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
-            <div style="overflow-x:auto;">
-              <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
-                <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
-                  <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
-                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Toplam Borç</th>
-                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Toplam Tahsilat</th>
-                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Net Bakiye</th>
-                  <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
-                  <th style="padding:11px 12px;"></th>
-                </tr></thead>
-                <tbody id="musteriCariTableBody"><tr><td colspan="6" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
-              </table>
+            <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
+              <div style="overflow-x:auto;">
+                <table class="mobil-kart-tablo" style="width:100%;border-collapse:collapse;">
+                  <thead><tr style="border-bottom:1px solid rgba(30,41,59,.6);">
+                    <th style="text-align:left;padding:11px 18px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bina</th>
+                    <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Toplam Borç</th>
+                    <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Toplam Tahsilat</th>
+                    <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Net Bakiye</th>
+                    <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
+                    <th style="padding:11px 12px;"></th>
+                  </tr></thead>
+                  <tbody id="musteriCariTableBody"><tr><td colspan="6" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+                </table>
+              </div>
             </div>
           </div>
 
@@ -8648,7 +8964,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
           <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Anlaşma Tipi</label>
             <select id="f-bina-anlasmaTipi" class="db-input"><option value="">— Yok —</option><option value="Bakım">Bakım</option><option value="Montaj">Montaj</option><option value="Revizyon">Revizyon</option></select></div>
-          <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Anlaşma Tutarı (₺)</label><input id="f-bina-anlasmaTutar" type="number" class="db-input" min="0" placeholder="1500"/></div>
+          <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Anlaşma Tutarı (₺)</label><input id="f-bina-anlasmaTutar" type="text" inputmode="decimal" class="db-input" placeholder="1500"/></div>
         </div>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
           <input type="checkbox" id="f-bina-anlasmaPeriyodik" style="width:16px;height:16px;accent-color:#00ADB5;cursor:pointer;">
@@ -8747,7 +9063,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       </div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İşçilik / Servis Ücreti (₺)</label>
-        <input id="f-cozum-iscilik" type="number" min="0" step="0.01" class="db-input" style="color:#fff;" placeholder="0" oninput="cozumToplamGuncelle()"/></div>
+        <input id="f-cozum-iscilik" type="text" inputmode="decimal" class="db-input" style="color:#fff;" placeholder="0" oninput="cozumToplamGuncelle()"/></div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not (opsiyonel)</label>
         <textarea id="f-cozum-not" rows="2" class="db-input" style="resize:none;color:#fff;" placeholder="Yapılan işlemle ilgili ek not..."></textarea></div>
@@ -8798,7 +9114,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       </div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İşçilik / Servis Ücreti (₺)</label>
-        <input id="f-cpb-iscilik" type="number" min="0" step="0.01" class="db-input" style="color:#fff;" placeholder="0" oninput="cpbToplamGuncelle()"/></div>
+        <input id="f-cpb-iscilik" type="text" inputmode="decimal" class="db-input" style="color:#fff;" placeholder="0" oninput="cpbToplamGuncelle()"/></div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not (opsiyonel)</label>
         <textarea id="f-cpb-not" rows="2" class="db-input" style="resize:none;color:#fff;" placeholder="Ek not..."></textarea></div>
@@ -8834,7 +9150,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           <option value="Revizyon">Revizyon</option>
         </select></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Anlaşma Tutarı (₺) *</label><input id="f-soz-tutar" type="number" class="db-input" min="0" placeholder="1500"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Anlaşma Tutarı (₺) *</label><input id="f-soz-tutar" type="text" inputmode="decimal" class="db-input" placeholder="1500"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Günü (Ayın)</label><input id="f-soz-gun" type="number" min="1" max="31" class="db-input" placeholder="5"/></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
@@ -8866,6 +9182,12 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <input type="checkbox" id="f-soz-anaSozlesmeOlustur" style="width:16px;height:16px;accent-color:#00ADB5;cursor:pointer;">
         <span style="font-size:12px;color:#94A3B8;"><b style="color:#00ADB5;">Ana Sözleşme</b> (detaylı hukuki şartlar, sorumluluk ve fesih maddeleri) PDF'ini de oluştur</span>
       </label>
+      <div class="card" style="padding:10px 12px;background:rgba(245,158,11,.04);border-color:rgba(245,158,11,.18);margin-top:4px;">
+        <label style="display:flex;align-items:start;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="f-soz-otomatikBorclandirmayaBagla" style="width:16px;height:16px;accent-color:#F59E0B;cursor:pointer;margin-top:1px;">
+          <span style="font-size:11.5px;color:#94A3B8;line-height:1.5;">Bu sözleşmedeki tutarı, <b style="color:#F59E0B;">Cari Yönetimi'ndeki otomatik aylık borçlandırmaya</b> da bağla (her ay bu tutar üzerinden borç oluşturulur). İşaretlemezseniz, bu sadece bir sözleşme/belge kaydı olarak kalır, otomatik borçlandırmayı etkilemez.</span>
+        </label>
+      </div>
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="closeModal('mSozlesme')" class="btn-ghost">İptal</button>
@@ -8887,7 +9209,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <datalist id="odemeBinaListesi"></datalist>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-odeme-tutar" type="number" class="db-input" min="0" placeholder="1500"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-odeme-tutar" type="text" inputmode="decimal" class="db-input" placeholder="1500"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-odeme-tarih" type="date" class="db-input"/></div>
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Türü</label>
@@ -8921,7 +9243,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         </select>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-gider-tutar" type="number" class="db-input" min="0" placeholder="850"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-gider-tutar" type="text" inputmode="decimal" class="db-input" placeholder="850"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-gider-tarih" type="date" class="db-input"/></div>
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Ödeme Yöntemi</label>
@@ -8969,7 +9291,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <input id="f-cek-taraf" type="text" class="db-input" placeholder="Örn: Göksü İnşaat veya ABC Yedek Parça Ltd."/>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-cek-tutar" type="number" class="db-input" min="0" placeholder="15000"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-cek-tutar" type="text" inputmode="decimal" class="db-input" placeholder="15000"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Vade Tarihi *</label><input id="f-cek-vadeTarihi" type="date" class="db-input"/></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
@@ -8997,7 +9319,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <select id="f-avans-personel" class="db-input"><option value="">— Seçiniz —</option></select>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-avans-tutar" type="number" class="db-input" min="0" placeholder="2000"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-avans-tutar" type="text" inputmode="decimal" class="db-input" placeholder="2000"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-avans-tarih" type="date" class="db-input"/></div>
       </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not</label><input id="f-avans-not" type="text" class="db-input" placeholder="Örn: Haziran ayı yol/yakıt avansı"/></div>
@@ -9020,7 +9342,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Personel *</label>
         <select id="f-maas-personel" class="db-input"><option value="">— Seçiniz —</option></select>
       </div>
-      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Aylık Sabit Maaş (₺) *</label><input id="f-maas-tutar" type="number" class="db-input" min="0" placeholder="18000"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Aylık Sabit Maaş (₺) *</label><input id="f-maas-tutar" type="text" inputmode="decimal" class="db-input" placeholder="18000"/></div>
       <div class="card" style="padding:10px 12px;background:rgba(0,173,181,.04);border-color:rgba(0,173,181,.15);">
         <p style="font-size:11px;color:#64748B;">ℹ️ Bu tutar her ay için sabit kalır. Fazla mesai şu kurala göre otomatik hesaplanır: <b style="color:#00ADB5;">hafta içi 08:30-18:00 dışı</b> (12:00-13:00 öğle arası hariç tutulur), <b style="color:#00ADB5;">Cumartesi 13:00 sonrası</b>, ve <b style="color:#00ADB5;">Pazar tamamı</b> 1.5 katı ücretle maaşa eklenir. Personele o ay verilen avanslar, ödeme işaretlenirken otomatik olarak bu tutardan düşülür.</p>
       </div>
@@ -9087,7 +9409,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
     <input type="hidden" id="f-avk-personel"/>
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
-      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kullanılan Tutar (₺) *</label><input id="f-avk-tutar" type="number" class="db-input" min="0" placeholder="350"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kullanılan Tutar (₺) *</label><input id="f-avk-tutar" type="text" inputmode="decimal" class="db-input" placeholder="350"/></div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-avk-tarih" type="date" class="db-input"/></div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Açıklama</label><input id="f-avk-aciklama" type="text" class="db-input" placeholder="Örn: Yakıt, malzeme, yol masrafı..."/></div>
     </div>
