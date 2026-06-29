@@ -6011,6 +6011,23 @@ window.renderMaaslar = function() {
     taniHtml += `&nbsp;&nbsp;• personelAd="${m.personelAd}" | <b>personelId="${m.personelId}"</b><br/>`;
   });
   taniHtml += '</div>';
+  taniHtml += '<div style="margin-bottom:14px;padding:8px;background:rgba(34,197,94,.15);border-radius:6px;border:1px solid rgba(34,197,94,.4);">';
+  taniHtml += `<b style="color:#4ADE80;">TÜM KULLANICILAR (G_KULLANICILAR, ham) — toplam ${G_KULLANICILAR.length} kayıt:</b><br/>`;
+  G_KULLANICILAR.forEach(u => {
+    taniHtml += `&nbsp;&nbsp;• ad="${u.ad}" | <b>id="${u.id}"</b> | rol="${u.rol}"<br/>`;
+  });
+  taniHtml += '</div>';
+  taniHtml += '<div style="margin-bottom:14px;padding:8px;background:rgba(168,85,247,.15);border-radius:6px;border:1px solid rgba(168,85,247,.4);">';
+  taniHtml += `<b style="color:#C084FC;">AVANS FORMU DROPDOWN'UNUN ŞU ANKİ İÇERİĞİ (f-avans-personel):</b><br/>`;
+  const avansSelEl = document.getElementById('f-avans-personel');
+  if (avansSelEl) {
+    Array.from(avansSelEl.options).forEach(opt => {
+      taniHtml += `&nbsp;&nbsp;• option value="${opt.value}" | text="${opt.text}" | data-ad="${opt.dataset.ad || ''}"<br/>`;
+    });
+  } else {
+    taniHtml += '&nbsp;&nbsp;(dropdown elementi bulunamadı — modal hiç açılmamış olabilir)<br/>';
+  }
+  taniHtml += '</div>';
   G_MAASLAR.forEach(m => {
     const buAvanslar = G_AVANSLAR.filter(a => a.personelId === m.personelId);
     const buAyKesinti = personelAvansKesintisiHesapla(m.personelId, ayKey);
