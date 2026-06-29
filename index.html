@@ -661,6 +661,51 @@ function tutarParse(deger) {
   return parseFloat(s);
 }
 
+// İki "YYYY-MM" ay anahtarı arasındaki ay farkını hesaplar (örn.
+// "2026-06" → "2026-09" arası fark 3'tür). Negatif sonuç, ikinci ayın
+// birinciden ÖNCE olduğu anlamına gelir.
+function ayFarkiHesapla(ayKey1, ayKey2) {
+  const [y1, a1] = ayKey1.split('-').map(Number);
+  const [y2, a2] = ayKey2.split('-').map(Number);
+  return (y2 - y1) * 12 + (a2 - a1);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   AVANS TAKSİT HESAPLAMA — maaş hesaplamasının kullandığı TEK kaynak
+   Bir avansın belirli bir ay (ayKey) için ne kadar kesinti taşıdığını
+   SAF (mutasyonsuz) olarak hesaplar. Sadece avansın sabit alanlarına
+   (kesintiTipi, baslangicAyKey, aylikKesintiTutari, taksitSayisi, tutar)
+   bakar — hiçbir "şu ana kadar ne kadar düşüldü" gibi durum biriktiren
+   alan KULLANMAZ. Bu sayede bir maaş ödemesi "Geri Al" ile geri alınıp
+   tekrar işaretlense de, ya da aylar farklı sırayla işaretlense de,
+   sonuç her zaman aynı ve doğru çıkar (idempotent).
+═══════════════════════════════════════════════════════════════ */
+function avansBuAyKesintisi(avans, ayKey) {
+  if (avans.kesintiTipi === 'taksit' || avans.kesintiTipi === 'aylikTutar') {
+    const ayIndeks = ayFarkiHesapla(avans.baslangicAyKey, ayKey); // 0 = ilk taksit ayı
+    if (ayIndeks < 0 || ayIndeks >= (avans.taksitSayisi || 0)) return 0; // bu ay kapsam dışı
+    const sonTaksitMi = ayIndeks === avans.taksitSayisi - 1;
+    if (!sonTaksitMi) return avans.aylikKesintiTutari || 0;
+    // Son taksit: yuvarlama farkını telafi etmek için kalan TAM bakiye kesilir
+    // (toplam tutar - önceki taksitlerin tamamı).
+    const oncekiToplam = (avans.aylikKesintiTutari || 0) * ayIndeks;
+    return Math.max(0, Math.round(((avans.tutar || 0) - oncekiToplam) * 100) / 100);
+  }
+  // 'tek' (varsayılan/eski kayıtlar): sadece verildiği ayın tam tutarı kesilir.
+  return (avans.tarih || '').startsWith(ayKey) ? (avans.tutar || 0) : 0;
+}
+
+// Bir personelin belirli bir ay için TOPLAM avans kesintisini (tüm
+// avans kayıtlarının o aya denk gelen taksitlerinin toplamı) hesaplar.
+// renderMaaslar, maasOdemeKaydet, toplu ödeme, bordro export — HEPSİ
+// artık bu fonksiyonu kullanır; ham G_AVANSLAR.tutar toplamına
+// doğrudan bakan eski kod kaldırılmıştır.
+function personelAvansKesintisiHesapla(personelId, ayKey) {
+  return G_AVANSLAR
+    .filter(a => a.personelId === personelId)
+    .reduce((toplam, a) => toplam + avansBuAyKesintisi(a, ayKey), 0);
+}
+
 /* ═══════════════════════════════════════════════════════════════
    BİNA EŞLEŞTİRME — Kod öncelikli, isim yedek (fallback)
    Bina ismi değişebilir veya iki bina aynı ismi taşıyabilir.
@@ -5305,26 +5350,110 @@ function doldurPersonelSecimi() {
   });
 }
 
+// Kesinti tipi radyo butonu değiştiğinde, ilgili ek alanları göster/gizle.
+window.avansKesintiTipiDegisti = () => {
+  const tip = document.querySelector('input[name="f-avans-kesintiTipi"]:checked')?.value;
+  document.getElementById('f-avans-taksitSayisiAlani').style.display = tip === 'taksit' ? 'block' : 'none';
+  document.getElementById('f-avans-aylikTutarAlani').style.display = tip === 'aylikTutar' ? 'block' : 'none';
+  document.getElementById('f-avans-baslangicAyAlani').style.display = (tip === 'taksit' || tip === 'aylikTutar') ? 'block' : 'none';
+  avansTaksitOnizlemeGuncelle();
+};
+
+// Taksit sayısı veya aylık tutar girilirken, kullanıcıya canlı bir önizleme
+// gösterir (örn. "3 taksit × 1.000 ₺/ay" veya "1.000 ₺/ay × 3 ay sürer").
+window.avansTaksitOnizlemeGuncelle = () => {
+  const toplamTutar = Math.max(0, tutarParse(document.getElementById('f-avans-tutar').value) || 0);
+  const tip = document.querySelector('input[name="f-avans-kesintiTipi"]:checked')?.value;
+
+  if (tip === 'taksit') {
+    const taksitSayisi = parseInt(document.getElementById('f-avans-taksitSayisi').value) || 0;
+    const onizlemeEl = document.getElementById('f-avans-taksitOnizleme');
+    if (taksitSayisi >= 2 && toplamTutar > 0) {
+      const aylikTutar = Math.round((toplamTutar / taksitSayisi) * 100) / 100;
+      onizlemeEl.textContent = `${taksitSayisi} taksit × ${aylikTutar.toLocaleString('tr-TR')} ₺/ay (son taksitte yuvarlama farkı düzeltilir)`;
+    } else {
+      onizlemeEl.textContent = '';
+    }
+  } else if (tip === 'aylikTutar') {
+    const aylikTutar = Math.max(0, tutarParse(document.getElementById('f-avans-aylikKesintiTutari').value) || 0);
+    const onizlemeEl = document.getElementById('f-avans-aylikTutarOnizleme');
+    if (aylikTutar > 0 && toplamTutar > 0) {
+      const ayAdedi = Math.ceil(toplamTutar / aylikTutar);
+      onizlemeEl.textContent = `${aylikTutar.toLocaleString('tr-TR')} ₺/ay kesintiyle, ${ayAdedi} ay sürer (son ay kalan bakiye kadar kesilir).`;
+    } else {
+      onizlemeEl.textContent = '';
+    }
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   TAKSİTLİ AVANS SİSTEMİ
+   Her avans kaydı artık bir "kesintiTipi" taşır:
+   - 'tek'        : eski davranış — verildiği ayın maaşından tamamı düşülür
+   - 'taksit'     : toplam tutar, kullanıcının girdiği TAKSİT SAYISINA bölünür
+   - 'aylikTutar' : kullanıcının girdiği SABİT AYLIK TUTAR, bakiye bitene
+                    kadar her ay düşülür (son ay kalan bakiye kadar kesilir)
+   Her iki taksitli tipte de "kalanBakiye" alanı tutulur ve maaş ödemesi
+   her işaretlendiğinde o ayın taksiti bu bakiyeden düşülüp güncellenir
+   (bkz. avansBuAyKesintisi() — maaş hesaplamasının kullandığı tek
+   kaynak budur, artık ham avans tutarına değil bu fonksiyona bakılır).
+═══════════════════════════════════════════════════════════════ */
 window.saveAvans = async () => {
   const personelSel = document.getElementById('f-avans-personel');
   const personelId  = personelSel.value;
   const personelAd  = personelSel.selectedOptions[0]?.dataset.ad || '';
-  const tutar       = Math.max(0, tutarParse(document.getElementById('f-avans-tutar').value) || 0);
+  const toplamTutar = Math.max(0, tutarParse(document.getElementById('f-avans-tutar').value) || 0);
   const tarih       = document.getElementById('f-avans-tarih').value;
   const not         = document.getElementById('f-avans-not').value.trim();
+  const kesintiTipi = document.querySelector('input[name="f-avans-kesintiTipi"]:checked')?.value || 'tek';
 
-  if (!personelId || !tutar || !tarih) { alert('Personel, tutar ve tarih zorunludur.'); return; }
+  if (!personelId || !toplamTutar || !tarih) { alert('Personel, tutar ve tarih zorunludur.'); return; }
+
+  const data = {
+    personelId, personelAd, tutar: toplamTutar, tarih, not,
+    verenAd: currentUserData?.ad || '—',
+    kesintiTipi,
+    olusturuldu: serverTimestamp()
+  };
+
+  if (kesintiTipi === 'taksit' || kesintiTipi === 'aylikTutar') {
+    const baslangicAyGirisi = document.getElementById('f-avans-baslangicAy').value; // "YYYY-MM" veya boş
+    data.baslangicAyKey = baslangicAyGirisi || tarih.slice(0,7);
+    // NOT: "kalanBakiye" gibi her ay GÜNCELLENEN bir alan KASITLI OLARAK
+    // kullanılmıyor. Eğer maaş ödemesi "Geri Al" ile geri alınıp tekrar
+    // işaretlenirse, mutasyona dayalı bir bakiye alanı kolayca
+    // tutarsızlaşır (örn. taksit yanlışlıkla iki kez düşülmüş sayılır).
+    // Bunun yerine avansBuAyKesintisi() fonksiyonu, SADECE bu sabit
+    // alanlardan (baslangicAyKey, aylikKesintiTutari, tutar) yola çıkarak
+    // istenen ayın "kaçıncı taksit" olduğunu HER SEFERİNDE SIFIRDAN
+    // hesaplar — hiçbir mutasyon/durum biriktirmez, bu yüzden geri
+    // alma/tekrar işaretleme döngüsünde asla bozulmaz.
+
+    if (kesintiTipi === 'taksit') {
+      const taksitSayisi = parseInt(document.getElementById('f-avans-taksitSayisi').value) || 0;
+      if (taksitSayisi < 2) { alert('Taksit sayısı en az 2 olmalıdır (1 taksit için "Tek seferde" seçeneğini kullanın).'); return; }
+      data.taksitSayisi = taksitSayisi;
+      data.aylikKesintiTutari = Math.round((toplamTutar / taksitSayisi) * 100) / 100;
+    } else {
+      const aylikKesintiTutari = Math.max(0, tutarParse(document.getElementById('f-avans-aylikKesintiTutari').value) || 0);
+      if (!aylikKesintiTutari) { alert('Aylık kesinti tutarını girin.'); return; }
+      if (aylikKesintiTutari > toplamTutar) { alert('Aylık kesinti tutarı, toplam avans tutarından büyük olamaz.'); return; }
+      data.aylikKesintiTutari = aylikKesintiTutari;
+      data.taksitSayisi = Math.ceil(toplamTutar / aylikKesintiTutari);
+    }
+  }
 
   try {
-    await addDoc(collection(db, 'avanslar'), {
-      personelId, personelAd, tutar, tarih, not,
-      verenAd: currentUserData?.ad || '—',
-      olusturuldu: serverTimestamp()
-    });
+    await addDoc(collection(db, 'avanslar'), data);
     closeModal('mAvans');
     document.getElementById('f-avans-tutar').value = '';
     document.getElementById('f-avans-tarih').value = '';
     document.getElementById('f-avans-not').value = '';
+    document.getElementById('f-avans-taksitSayisi').value = '';
+    document.getElementById('f-avans-aylikKesintiTutari').value = '';
+    document.getElementById('f-avans-baslangicAy').value = '';
+    document.querySelector('input[name="f-avans-kesintiTipi"][value="tek"]').checked = true;
+    avansKesintiTipiDegisti();
   } catch(e) { alert('Hata: ' + e.message); }
 };
 
@@ -5413,23 +5542,26 @@ function renderPersonelCari() {
 
   // Son hareketler (avans + kullanım birleşik, tarihe göre)
   const hareketler = [
-    ...G_AVANSLAR.map(a => ({ tip:'avans', ad:a.personelAd, tutar:a.tutar, tarih:a.tarih, not:a.not, id:a.id, renk:'#00ADB5' })),
+    ...G_AVANSLAR.map(a => ({ tip:'avans', ad:a.personelAd, tutar:a.tutar, tarih:a.tarih, not:a.not, id:a.id, renk:'#00ADB5', kesintiTipi:a.kesintiTipi, taksitSayisi:a.taksitSayisi, aylikKesintiTutari:a.aylikKesintiTutari })),
     ...G_AVANS_KULLANIM.map(k => ({ tip:'kullanim', ad:k.personelAd, tutar:k.tutar, tarih:k.tarih, not:k.aciklama, id:k.id, renk:'#F59E0B' }))
   ].sort((a,b) => (b.tarih||'').localeCompare(a.tarih||'')).slice(0, 20);
 
-  logEl.innerHTML = hareketler.length ? hareketler.map(h => `
+  logEl.innerHTML = hareketler.length ? hareketler.map(h => {
+    const taksitliMi = h.tip === 'avans' && (h.kesintiTipi === 'taksit' || h.kesintiTipi === 'aylikTutar');
+    return `
     <div style="padding:11px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(30,41,59,.4);">
       <span class="sbadge" style="background:${h.renk}22;color:${h.renk};border:1px solid ${h.renk}44;flex-shrink:0;">${h.tip==='avans'?'Avans':'Kullanım'}</span>
       <div style="flex:1;min-width:0;">
         <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${h.ad}</div>
-        <div style="font-size:11px;color:#475569;margin-top:1px;">${h.not||'—'}</div>
+        <div style="font-size:11px;color:#475569;margin-top:1px;">${h.not||'—'}${taksitliMi ? ` · <span style="color:#F59E0B;">🔁 ${h.taksitSayisi} taksit, ${(h.aylikKesintiTutari||0).toLocaleString('tr-TR')} ₺/ay</span>` : ''}</div>
       </div>
       <div style="text-align:right;flex-shrink:0;">
         <div style="font-size:12px;font-weight:700;color:${h.renk};">${h.tip==='avans'?'+':'-'}${h.tutar.toLocaleString('tr-TR')} ₺</div>
         <div style="font-size:10px;color:#475569;font-family:monospace;">${h.tarih}</div>
       </div>
       <button onclick="${h.tip==='avans'?'deleteAvans':'deleteAvansKullanim'}('${h.id}')" class="admin-only" style="font-size:10px;color:#EF4444;background:none;border:none;cursor:pointer;flex-shrink:0;">✕</button>
-    </div>`).join('') : `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Henüz hareket yok.</div>`;
+    </div>`;
+  }).join('') : `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Henüz hareket yok.</div>`;
 
   const role = currentUserData?.rol;
   document.querySelectorAll('.admin-only').forEach(el => {
@@ -5475,8 +5607,7 @@ window.deleteMaasTanim = async (id, ad) => {
 // Çekirdek fonksiyon: onay istemeden direkt bir personelin maaşını kaydeder.
 // Tek tek işaretleme (onaylı) ve toplu işaretleme (tek onaylı) ikisi de bunu kullanır.
 async function maasOdemeKaydet(personelId, personelAd, aylikMaas, ayKey) {
-  const buAyAvanslari = G_AVANSLAR.filter(a => a.personelId === personelId && (a.tarih||'').startsWith(ayKey))
-                                   .reduce((s,a) => s + (a.tutar||0), 0);
+  const buAyAvanslari = personelAvansKesintisiHesapla(personelId, ayKey);
   const mesai = fazlaMesaiHesapla(personelId, aylikMaas, ayKey);
   const netOdenecek = aylikMaas + mesai.fazlaMesaiUcreti - buAyAvanslari;
 
@@ -5496,8 +5627,7 @@ async function maasOdemeKaydet(personelId, personelAd, aylikMaas, ayKey) {
 }
 
 window.maasOdendiIsaretle = async (personelId, personelAd, aylikMaas, ayKey) => {
-  const buAyAvanslari = G_AVANSLAR.filter(a => a.personelId === personelId && (a.tarih||'').startsWith(ayKey))
-                                   .reduce((s,a) => s + (a.tutar||0), 0);
+  const buAyAvanslari = personelAvansKesintisiHesapla(personelId, ayKey);
   const mesai = fazlaMesaiHesapla(personelId, aylikMaas, ayKey);
   const netOdenecek = aylikMaas + mesai.fazlaMesaiUcreti - buAyAvanslari;
 
@@ -5526,8 +5656,7 @@ window.topluMaasOdemeYap = async () => {
 
   let toplamNet = 0;
   const ozetSatirlari = odenmemisler.map(m => {
-    const buAyAvans = G_AVANSLAR.filter(a => a.personelId === m.personelId && (a.tarih||'').startsWith(ayKey))
-                                 .reduce((s,a) => s + (a.tutar||0), 0);
+    const buAyAvans = personelAvansKesintisiHesapla(m.personelId, ayKey);
     const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
     const net = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans;
     toplamNet += net;
@@ -5556,8 +5685,7 @@ window.maasOdemeGeriAl = async (id) => {
 function maasListesiHesapla(ayKey) {
   let toplamMaas = 0, toplamFazlaMesai = 0, toplamAvans = 0, toplamNet = 0;
   const satirlar = G_MAASLAR.map(m => {
-    const buAyAvans = G_AVANSLAR.filter(a => a.personelId === m.personelId && (a.tarih||'').startsWith(ayKey))
-                                 .reduce((s,a) => s + (a.tutar||0), 0);
+    const buAyAvans = personelAvansKesintisiHesapla(m.personelId, ayKey);
     const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
     const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans;
     const odemeKaydi = G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey);
@@ -5638,8 +5766,7 @@ window.downloadBordroPDF = async (personelId, personelAd, aylikMaas, ayKey) => {
     return;
   }
 
-  const buAyAvans = G_AVANSLAR.filter(a => a.personelId === personelId && (a.tarih||'').startsWith(ayKey))
-                               .reduce((s,a) => s + (a.tutar||0), 0);
+  const buAyAvans = personelAvansKesintisiHesapla(personelId, ayKey);
   const mesai = fazlaMesaiHesapla(personelId, aylikMaas, ayKey);
   const brutToplam = aylikMaas + mesai.fazlaMesaiUcreti;
   const netOdenecek = brutToplam - buAyAvans;
@@ -5668,8 +5795,7 @@ window.downloadBordroPDF = async (personelId, personelAd, aylikMaas, ayKey) => {
 // Maaş bordrosunu gerçek bir .xlsx dosyası olarak indirir (PDF'in
 // Excel karşılığı — aynı hesaplamalardan üretilir).
 window.downloadBordroExcel = (personelId, personelAd, aylikMaas, ayKey) => {
-  const buAyAvans = G_AVANSLAR.filter(a => a.personelId === personelId && (a.tarih||'').startsWith(ayKey))
-                               .reduce((s,a) => s + (a.tutar||0), 0);
+  const buAyAvans = personelAvansKesintisiHesapla(personelId, ayKey);
   const mesai = fazlaMesaiHesapla(personelId, aylikMaas, ayKey);
   const brutToplam = aylikMaas + mesai.fazlaMesaiUcreti;
   const netOdenecek = brutToplam - buAyAvans;
@@ -5829,8 +5955,7 @@ window.renderMaaslar = function() {
   let toplamMaas = 0, toplamOdenen = 0, odenenSayisi = 0, toplamFazlaMesai = 0;
 
   tbody.innerHTML = G_MAASLAR.map(m => {
-    const buAyAvans = G_AVANSLAR.filter(a => a.personelId === m.personelId && (a.tarih||'').startsWith(ayKey))
-                                 .reduce((s,a) => s + (a.tutar||0), 0);
+    const buAyAvans = personelAvansKesintisiHesapla(m.personelId, ayKey);
     const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
     const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans;
     const odemeKaydi = G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey);
@@ -5848,7 +5973,21 @@ window.renderMaaslar = function() {
           ? `<span style="color:#00ADB5;font-weight:700;">+${mesai.fazlaMesaiUcreti.toLocaleString('tr-TR')} ₺</span><div style="font-size:9px;color:#475569;margin-top:1px;">${mesai.fazlaSaat.toFixed(1)} saat × 1.5</div>`
           : `<span style="color:#475569;">—</span><div style="font-size:9px;color:#475569;margin-top:1px;">${mesai.toplamCalisilanSaat.toFixed(1)} saat çalıştı</div>`}
       </td>
-      <td style="padding:12px;text-align:right;font-size:12px;color:#F59E0B;">${buAyAvans.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:12px;text-align:right;font-size:12px;color:#F59E0B;">
+        ${buAyAvans.toLocaleString('tr-TR')} ₺
+        ${(() => {
+          // Bu personelin bu ay kesinti taşıyan taksitli avanslarını listele
+          // (örn. "Taksit 2/3" gibi) — birden fazla taksitli avans varsa hepsi gösterilir.
+          const taksitDetaylari = G_AVANSLAR.filter(a => a.personelId === m.personelId && (a.kesintiTipi === 'taksit' || a.kesintiTipi === 'aylikTutar'))
+            .map(a => {
+              const tutar = avansBuAyKesintisi(a, ayKey);
+              if (tutar <= 0) return null;
+              const ayIndeks = ayFarkiHesapla(a.baslangicAyKey, ayKey);
+              return `Taksit ${ayIndeks+1}/${a.taksitSayisi}`;
+            }).filter(Boolean);
+          return taksitDetaylari.length ? `<div style="font-size:9px;color:#475569;margin-top:1px;">${taksitDetaylari.join(', ')}</div>` : '';
+        })()}
+      </td>
       <td style="padding:12px;text-align:right;font-size:13px;font-weight:800;color:#10B981;">${netOdenecek.toLocaleString('tr-TR')} ₺</td>
       <td style="padding:12px;text-align:right;">
         ${odemeKaydi
@@ -9498,7 +9637,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
   </div>
 </div>
 
-<!-- Avans Ver Modal (Personel Cari — KareKara mantığı) -->
+<!-- Avans Ver Modal (Personel Cari — taksitli kesinti destekli) -->
 <div id="modal-mAvans" class="modal-wrap" onclick="if(event.target===this)closeModal('mAvans')">
   <div class="modal-box">
     <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
@@ -9510,9 +9649,43 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <select id="f-avans-personel" class="db-input"><option value="">— Seçiniz —</option></select>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tutar (₺) *</label><input id="f-avans-tutar" type="text" inputmode="decimal" class="db-input" placeholder="2000"/></div>
-        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Tarih *</label><input id="f-avans-tarih" type="date" class="db-input"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Toplam Tutar (₺) *</label><input id="f-avans-tutar" type="text" inputmode="decimal" class="db-input" placeholder="2000"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Veriliş Tarihi *</label><input id="f-avans-tarih" type="date" class="db-input"/></div>
       </div>
+
+      <div style="border-top:1px solid rgba(30,41,59,.5);padding-top:12px;">
+        <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:7px;">Maaştan Kesinti Şekli</label>
+        <div style="display:flex;flex-direction:column;gap:7px;">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#94A3B8;cursor:pointer;">
+            <input type="radio" name="f-avans-kesintiTipi" value="tek" checked onchange="avansKesintiTipiDegisti()"/> Tek seferde (verildiği ayın maaşından tamamı düşülür)
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#94A3B8;cursor:pointer;">
+            <input type="radio" name="f-avans-kesintiTipi" value="taksit" onchange="avansKesintiTipiDegisti()"/> Taksitli — taksit SAYISI belirleyeceğim
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#94A3B8;cursor:pointer;">
+            <input type="radio" name="f-avans-kesintiTipi" value="aylikTutar" onchange="avansKesintiTipiDegisti()"/> Taksitli — aylık kesinti TUTARINI belirleyeceğim
+          </label>
+        </div>
+
+        <div id="f-avans-taksitSayisiAlani" style="display:none;margin-top:10px;">
+          <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Taksit Sayısı (ay)</label>
+          <input id="f-avans-taksitSayisi" type="number" min="2" max="36" class="db-input" placeholder="3" oninput="avansTaksitOnizlemeGuncelle()"/>
+          <p id="f-avans-taksitOnizleme" style="font-size:10.5px;color:#00ADB5;margin-top:5px;"></p>
+        </div>
+
+        <div id="f-avans-aylikTutarAlani" style="display:none;margin-top:10px;">
+          <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Aylık Kesinti Tutarı (₺)</label>
+          <input id="f-avans-aylikKesintiTutari" type="text" inputmode="decimal" class="db-input" placeholder="500" oninput="avansTaksitOnizlemeGuncelle()"/>
+          <p id="f-avans-aylikTutarOnizleme" style="font-size:10.5px;color:#00ADB5;margin-top:5px;"></p>
+        </div>
+
+        <div id="f-avans-baslangicAyAlani" style="display:none;margin-top:10px;">
+          <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Kesinti Hangi Aydan Başlasın?</label>
+          <input id="f-avans-baslangicAy" type="month" class="db-input"/>
+          <p style="font-size:10px;color:#64748B;margin-top:5px;">Boş bırakırsanız, veriliş tarihinin ayından itibaren başlar.</p>
+        </div>
+      </div>
+
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not</label><input id="f-avans-not" type="text" class="db-input" placeholder="Örn: Haziran ayı yol/yakıt avansı"/></div>
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
