@@ -3098,6 +3098,11 @@ function renderDashboardEkstraBloklar() {
           <span style="font-size:12px;font-weight:700;color:#10B981;flex-shrink:0;">${t.toplam} iş</span>
         </div>`;
       }).join('');
+      performansEl.style.animation = '';
+      performansEl.innerHTML = satirHtml + satirHtml;
+    }
+  }
+
   // ── Çek/Senet Vade Hatırlatıcı kayan şeridi ──
   // Aynı 3 günlük eşiği kullanır (rebuildBildirimler'daki "Çek/Senet Vade
   // Hatırlatma" ile tutarlı) — yaklaşan (≤3 gün) veya zaten geçmiş vadeli,
