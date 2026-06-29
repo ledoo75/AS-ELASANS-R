@@ -5990,6 +5990,26 @@ window.renderMaaslar = function() {
   const ayKey = document.getElementById('maasAySecim')?.value || new Date().toISOString().slice(0,7);
   if (!document.getElementById('maasAySecim').value) document.getElementById('maasAySecim').value = ayKey;
 
+  // ── GEÇİCİ TANI KUTUSU (mobilden de görülebilir) ──────────────
+  // Avans kesintisinin neden 0 çıktığını teşhis etmek için eklendi.
+  // Sorun çözülünce bu blok kaldırılacak. Her personelin ham avans
+  // kayıtlarını (kesintiTipi, baslangicAyKey, taksitSayisi vb.)
+  // olduğu gibi ekranda gösterir — konsola gerek kalmaz.
+  let taniHtml = '';
+  G_MAASLAR.forEach(m => {
+    const buAvanslar = G_AVANSLAR.filter(a => a.personelId === m.personelId);
+    const buAyKesinti = personelAvansKesintisiHesapla(m.personelId, ayKey);
+    taniHtml += `<div style="margin-bottom:10px;padding:8px;background:rgba(0,0,0,.2);border-radius:6px;">
+      <b>${m.personelAd}</b> (personelId: ${m.personelId}) — seçili ayKey: <b>${ayKey}</b> — hesaplanan bu ay kesinti: <b style="color:#F59E0B;">${buAyKesinti}</b><br/>
+      ${buAvanslar.length ? buAvanslar.map(a => `
+        &nbsp;&nbsp;• avans.personelId=${a.personelId} | tutar=${a.tutar} | tarih=${a.tarih} | kesintiTipi=${a.kesintiTipi === undefined ? '<span style="color:red">undefined</span>' : a.kesintiTipi} | baslangicAyKey=${a.baslangicAyKey === undefined ? '<span style="color:red">undefined</span>' : a.baslangicAyKey} | taksitSayisi=${a.taksitSayisi === undefined ? '<span style="color:red">undefined</span>' : a.taksitSayisi} | aylikKesintiTutari=${a.aylikKesintiTutari === undefined ? '<span style="color:red">undefined</span>' : a.aylikKesintiTutari}<br/>
+      `).join('') : '&nbsp;&nbsp;(bu personel için hiç avans kaydı yok)<br/>'}
+    </div>`;
+  });
+  const taniKutusu = document.getElementById('avansTaniKutusu');
+  if (taniKutusu) taniKutusu.innerHTML = taniHtml;
+  // ── TANI KUTUSU SONU ──────────────────────────────────────────
+
   if (!G_MAASLAR.length) {
     tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz maaş tanımı yapılmamış. "+ Maaş Tanımla" ile başlayın.</td></tr>`;
     if (ozetEl) ozetEl.innerHTML = '';
@@ -8897,6 +8917,12 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
               <button onclick="topluMaasOdemeYap()" class="btn-sm admin-only" style="background:linear-gradient(135deg,#10B981,#059669);">✓ Tümünü Ödendi İşaretle</button>
               <button onclick="openModal('mMaasTanim')" class="btn-sm admin-only">+ Maaş Tanımla</button>
             </div>
+          </div>
+
+          <!-- GEÇİCİ TANI KUTUSU — sorun çözülünce kaldırılacak -->
+          <div style="background:#1E293B;color:#CBD5E1;padding:14px;border-radius:10px;margin-bottom:16px;font-size:11px;font-family:monospace;line-height:1.6;overflow-x:auto;">
+            <div style="color:#F59E0B;font-weight:700;margin-bottom:8px;">🔍 GEÇİCİ TANI BİLGİSİ (avans sorunu çözülünce kaldırılacak)</div>
+            <div id="avansTaniKutusu"></div>
           </div>
 
           <div id="maasOzet" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;"></div>
