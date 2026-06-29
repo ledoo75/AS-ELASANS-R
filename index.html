@@ -4129,6 +4129,13 @@ document.addEventListener('click', (e) => {
   if (panel && panel.style.display === 'block' && !panel.contains(e.target) && e.target !== btn && !btn?.contains(e.target)) {
     panel.style.display = 'none';
   }
+
+  // Paraşüt'e Aktar açılır menüsü için aynı "dışına tıklayınca kapat" davranışı
+  const parasutMenu = document.getElementById('parasutAktarimMenu');
+  const parasutBtn = document.getElementById('parasutAktarimBtn');
+  if (parasutMenu && parasutMenu.style.display === 'block' && !parasutMenu.contains(e.target) && e.target !== parasutBtn && !parasutBtn?.contains(e.target)) {
+    parasutMenu.style.display = 'none';
+  }
 });
 
 // Ekran döndürme/yeniden boyutlandırma durumunda "fixed" panelin konumu
@@ -4192,6 +4199,92 @@ window.exportBinalarCSV = () => {
   const satirlar = [['Cari Kodu', 'Bina / Cari Adı', 'Adres', 'Yetkili Kişi', 'Telefon', 'Vergi/TC No', 'Asansör Sayısı', 'Sözleşme', 'Durum']];
   G_BINALAR.forEach(b => satirlar.push([b.cariKodu||'', b.ad, b.adres||'', b.yetkili||'', b.telefon||'', b.vergiNo||'', b.asansorSayisi||'', b.sozlesme||'', b.durum||'']));
   xlsxIndir(satirlar, `cari_listesi_${new Date().toISOString().slice(0,10)}.xlsx`, 'Cari Listesi');
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   PARAŞÜT'E AKTARIM — MÜŞTERİLER
+   ⚠️ ÖNEMLİ SINIRLAMA: Paraşüt'ün içeri aktarma özelliği SADECE
+   kendi sitenizden indirdiğiniz resmi Excel şablonunu kabul eder —
+   genel bir CSV/Excel'i doğrudan yükleyemezsiniz. Bu fonksiyon,
+   Paraşüt'ün YAYGIN BİLİNEN standart müşteri alanlarına göre
+   yazılmıştır (gerçek şablon temin edilemediği için tahmine
+   dayanır). Paraşüt hesabınızdan CARİLER > Müşteriler sayfasında
+   İÇE/DIŞA AKTAR > DIŞARI AKTAR ile gerçek şablonu indirip bu
+   dosyadaki sütun başlıkları/sırası ile karşılaştırmanız, gerekirse
+   sütun adlarını/sırasını güncellememi istemeniz gerekebilir.
+═══════════════════════════════════════════════════════════════ */
+window.exportParasutMusteriler = () => {
+  const satirlar = [[
+    'Hesap Adı', 'Yetkili Adı Soyadı', 'Vergi Dairesi', 'Vergi No / TC Kimlik No',
+    'Telefon', 'E-posta', 'Adres', 'İl', 'İlçe', 'Hesap Kodu'
+  ]];
+  G_BINALAR.forEach(b => satirlar.push([
+    b.ad || '',
+    b.yetkili || '',
+    '', // Vergi Dairesi — sistemimizde bu alan tutulmuyor, elle doldurulmalı
+    b.vergiNo || '',
+    b.telefon || '',
+    '', // E-posta — sistemimizde bu alan tutulmuyor
+    b.adres || '',
+    '', // İl — adres serbest metin olarak tutulduğu için ayrıştırılamıyor
+    '', // İlçe — aynı sebep
+    b.cariKodu || ''
+  ]));
+  xlsxIndir(satirlar, `parasut_musteriler_${new Date().toISOString().slice(0,10)}.xlsx`, 'Müşteriler');
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   PARAŞÜT'E AKTARIM — SATIŞ FATURALARI
+   G_BORCLAR koleksiyonundaki her kayıt (anlaşma bedeli veya parça/
+   onarım borcu), müşteriye kesilen bir satış/hizmet kalemi olarak
+   eşlenir. KDV oranı sistemimizde tutulmadığı için %20 (güncel genel
+   KDV oranı) varsayılan olarak yazılır — farklıysa dosyada elle
+   düzeltilmelidir. Tarih aralığı seçimi yapılmazsa TÜM borç kayıtları
+   aktarılır.
+═══════════════════════════════════════════════════════════════ */
+window.exportParasutFaturalar = () => {
+  const baslangic = prompt('Başlangıç tarihi (YYYY-AA-GG) — boş bırakırsanız tüm kayıtlar aktarılır:', '');
+  const bitis = baslangic ? prompt('Bitiş tarihi (YYYY-AA-GG):', new Date().toISOString().slice(0,10)) : null;
+
+  let kayitlar = G_BORCLAR;
+  if (baslangic) kayitlar = kayitlar.filter(b => b.tarih >= baslangic && (!bitis || b.tarih <= bitis));
+
+  if (!kayitlar.length) { alert('Seçilen aralıkta aktarılacak fatura kalemi bulunamadı.'); return; }
+
+  const satirlar = [[
+    'Müşteri Adı', 'Fatura Tarihi', 'Vade Tarihi', 'Ürün/Hizmet Adı',
+    'Miktar', 'Birim Fiyat', 'KDV Oranı (%)', 'Açıklama'
+  ]];
+  kayitlar.forEach(b => satirlar.push([
+    b.bina || '',
+    b.tarih || '',
+    b.tarih || '', // vade tarihi ayrı tutulmadığı için fatura tarihiyle aynı yazılır, gerekirse elle düzeltilir
+    b.tip || 'Bakım Hizmeti',
+    1,
+    b.tutar || 0,
+    20, // KDV oranı sistemimizde tutulmuyor — varsayılan %20, gerekirse dosyada düzeltin
+    b.aciklama || ''
+  ]));
+  xlsxIndir(satirlar, `parasut_faturalar_${new Date().toISOString().slice(0,10)}.xlsx`, 'Satış Faturaları');
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   PARAŞÜT'E AKTARIM — GİDERLER
+═══════════════════════════════════════════════════════════════ */
+window.exportParasutGiderler = () => {
+  if (!G_GIDERLER.length) { alert('Aktarılacak gider kaydı bulunamadı.'); return; }
+  const satirlar = [[
+    'Tedarikçi/Açıklama', 'Tarih', 'Tutar', 'KDV Oranı (%)', 'Kategori', 'Ödeme Yöntemi'
+  ]];
+  G_GIDERLER.forEach(g => satirlar.push([
+    g.aciklama || g.kategori || '',
+    g.tarih || '',
+    g.tutar || 0,
+    20, // KDV oranı sistemimizde tutulmuyor — varsayılan %20, gerekirse dosyada düzeltin
+    g.kategori || '',
+    g.odemeYontemi || ''
+  ]));
+  xlsxIndir(satirlar, `parasut_giderler_${new Date().toISOString().slice(0,10)}.xlsx`, 'Giderler');
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -5454,6 +5547,88 @@ window.topluMaasOdemeYap = async () => {
 window.maasOdemeGeriAl = async (id) => {
   if (!confirm('Bu maaş ödemesini geri almak istediğinizden emin misiniz?')) return;
   await deleteDoc(doc(db, 'maasOdemeleri', id));
+};
+
+// Seçili ay için TÜM personelin maaş/fazla mesai/avans/net ödenecek
+// listesini hesaplar — renderMaaslar() ile AYNI mantığı kullanır, ki
+// ekranda görünen ile dışa aktarılan birbirini tutsun. Hem Excel hem PDF
+// toplu export'u bu ortak fonksiyonu kullanır.
+function maasListesiHesapla(ayKey) {
+  let toplamMaas = 0, toplamFazlaMesai = 0, toplamAvans = 0, toplamNet = 0;
+  const satirlar = G_MAASLAR.map(m => {
+    const buAyAvans = G_AVANSLAR.filter(a => a.personelId === m.personelId && (a.tarih||'').startsWith(ayKey))
+                                 .reduce((s,a) => s + (a.tutar||0), 0);
+    const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
+    const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans;
+    const odemeKaydi = G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey);
+
+    toplamMaas += m.aylikMaas;
+    toplamFazlaMesai += mesai.fazlaMesaiUcreti;
+    toplamAvans += buAyAvans;
+    toplamNet += netOdenecek;
+
+    return {
+      personelAd: m.personelAd, aylikMaas: m.aylikMaas,
+      fazlaMesaiSaat: mesai.fazlaSaat, fazlaMesaiUcreti: mesai.fazlaMesaiUcreti,
+      avans: buAyAvans, netOdenecek,
+      odendiMi: !!odemeKaydi, odemeTarihi: odemeKaydi?.odemeTarihi || null
+    };
+  }).sort((a,b) => a.personelAd.localeCompare(b.personelAd, 'tr'));
+
+  return { satirlar, toplamMaas, toplamFazlaMesai, toplamAvans, toplamNet };
+}
+
+window.exportMaasListesiExcel = () => {
+  const ayKey = document.getElementById('maasAySecim')?.value || new Date().toISOString().slice(0,7);
+  const { satirlar, toplamMaas, toplamFazlaMesai, toplamAvans, toplamNet } = maasListesiHesapla(ayKey);
+
+  if (!satirlar.length) { alert('Bu ay için maaş tanımı bulunamadı.'); return; }
+
+  const tablo = [['Personel', 'Aylık Maaş', 'Fazla Mesai Ücreti', 'Avans Kesintisi', 'Net Ödenecek', 'Durum', 'Ödeme Tarihi']];
+  satirlar.forEach(s => tablo.push([
+    s.personelAd, s.aylikMaas, s.fazlaMesaiUcreti, -s.avans, s.netOdenecek,
+    s.odendiMi ? 'Ödendi' : 'Bekliyor', s.odemeTarihi || ''
+  ]));
+  tablo.push([]);
+  tablo.push(['TOPLAM', toplamMaas, toplamFazlaMesai, -toplamAvans, toplamNet, '', '']);
+
+  xlsxIndir(tablo, `Maas_Listesi_${ayKey}.xlsx`, ayKey);
+};
+
+window.exportMaasListesiPDF = async () => {
+  const ayKey = document.getElementById('maasAySecim')?.value || new Date().toISOString().slice(0,7);
+  const { satirlar, toplamMaas, toplamFazlaMesai, toplamAvans, toplamNet } = maasListesiHesapla(ayKey);
+
+  if (!satirlar.length) { alert('Bu ay için maaş tanımı bulunamadı.'); return; }
+
+  const ayAdlari = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+  const [yil, ay] = ayKey.split('-');
+  const ayEtiket = `${ayAdlari[parseInt(ay)-1]} ${yil}`;
+
+  document.getElementById('pml-ay').textContent = ayEtiket;
+  document.getElementById('pml-tarih').textContent = new Date().toLocaleDateString('tr-TR');
+  document.getElementById('pml-toplamPersonel').textContent = satirlar.length;
+  document.getElementById('pml-toplamNet').textContent = toplamNet.toLocaleString('tr-TR') + ' ₺';
+
+  document.getElementById('pml-tablo').innerHTML = satirlar.map((s,i) => `
+    <tr style="background:${i%2===0?'#fff':'#F8FAFC'};border-bottom:1px solid #F1F5F9;">
+      <td style="padding:9px 16px;color:#0F172A;font-size:12px;font-weight:600;">${s.personelAd}</td>
+      <td style="padding:9px 16px;text-align:right;color:#64748B;font-size:12px;">${s.aylikMaas.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:9px 16px;text-align:right;color:#00ADB5;font-size:12px;">${s.fazlaMesaiUcreti > 0 ? '+'+s.fazlaMesaiUcreti.toLocaleString('tr-TR')+' ₺' : '—'}</td>
+      <td style="padding:9px 16px;text-align:right;color:#F59E0B;font-size:12px;">${s.avans > 0 ? '-'+s.avans.toLocaleString('tr-TR')+' ₺' : '—'}</td>
+      <td style="padding:9px 16px;text-align:right;color:#10B981;font-size:13px;font-weight:800;">${s.netOdenecek.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:9px 16px;text-align:right;font-size:11px;font-weight:700;color:${s.odendiMi?'#10B981':'#F59E0B'};">${s.odendiMi?'✓ Ödendi':'Bekliyor'}</td>
+    </tr>`).join('') + `
+    <tr style="background:#0F172A;">
+      <td style="padding:11px 16px;color:#fff;font-size:12px;font-weight:800;">TOPLAM (${satirlar.length} personel)</td>
+      <td style="padding:11px 16px;text-align:right;color:#fff;font-size:12px;font-weight:700;">${toplamMaas.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:11px 16px;text-align:right;color:#5EEAD4;font-size:12px;font-weight:700;">+${toplamFazlaMesai.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:11px 16px;text-align:right;color:#FCD34D;font-size:12px;font-weight:700;">-${toplamAvans.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:11px 16px;text-align:right;color:#6EE7B7;font-size:14px;font-weight:900;">${toplamNet.toLocaleString('tr-TR')} ₺</td>
+      <td></td>
+    </tr>`;
+
+  await renderHtmlToPdf('pdfMaasListesiSablon', `Maas_Listesi_${ayKey}.pdf`);
 };
 
 // ── MAAŞ BORDROSU PDF OLUŞTUR (logo + kazanç/kesinti dökümü) ──
@@ -8460,6 +8635,20 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Muhasebe</h2>
             <p style="font-size:11px;color:#475569;margin-top:2px;">Gelir takibi, personel cari ve müşteri ekstresi</p>
           </div>
+          <div class="admin-only" style="position:relative;">
+            <button id="parasutAktarimBtn" onclick="const m=document.getElementById('parasutAktarimMenu');m.style.display=m.style.display==='block'?'none':'block';" class="btn-ghost" style="padding:9px 14px;font-size:12px;display:flex;align-items:center;gap:6px;">
+              🪂 Paraşüt'e Aktar
+              <svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div id="parasutAktarimMenu" style="position:absolute;right:0;top:calc(100% + 6px);background:#0B1220;border:1px solid rgba(30,41,59,.7);border-radius:10px;padding:6px;min-width:220px;z-index:50;display:none;box-shadow:0 8px 24px rgba(0,0,0,.4);">
+              <button onclick="exportParasutMusteriler();document.getElementById('parasutAktarimMenu').style.display='none';" style="display:block;width:100%;text-align:left;padding:9px 12px;font-size:12px;color:#CBD5E1;background:none;border:none;border-radius:7px;cursor:pointer;">👤 Müşteriler (Cariler)</button>
+              <button onclick="exportParasutFaturalar();document.getElementById('parasutAktarimMenu').style.display='none';" style="display:block;width:100%;text-align:left;padding:9px 12px;font-size:12px;color:#CBD5E1;background:none;border:none;border-radius:7px;cursor:pointer;">🧾 Satış Faturaları</button>
+              <button onclick="exportParasutGiderler();document.getElementById('parasutAktarimMenu').style.display='none';" style="display:block;width:100%;text-align:left;padding:9px 12px;font-size:12px;color:#CBD5E1;background:none;border:none;border-radius:7px;cursor:pointer;">📤 Giderler</button>
+              <div style="border-top:1px solid rgba(30,41,59,.6);margin:5px 2px;padding-top:7px;">
+                <p style="font-size:9.5px;color:#475569;padding:0 12px;line-height:1.5;">⚠️ Bu dosyalar Paraşüt'ün <b>resmi şablonuyla</b> birebir eşleşmeyebilir — Paraşüt'ten indirdiğiniz gerçek şablonla karşılaştırıp gerekirse sütunları düzenleyin.</p>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Sekmeler -->
@@ -8519,6 +8708,8 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <p style="font-size:11px;color:#475569;">Sabit aylık maaş tanımı, ay bazlı ödeme işaretleme — avans otomatik düşülür</p>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
               <input id="maasAySecim" type="month" class="db-input" style="max-width:160px;" onchange="renderMaaslar()"/>
+              <button onclick="exportMaasListesiExcel()" class="btn-ghost admin-only" style="padding:9px 14px;font-size:12px;">⬇ Excel</button>
+              <button onclick="exportMaasListesiPDF()" class="btn-ghost admin-only" style="padding:9px 14px;font-size:12px;">📄 PDF</button>
               <button onclick="topluMaasOdemeYap()" class="btn-sm admin-only" style="background:linear-gradient(135deg,#10B981,#059669);">✓ Tümünü Ödendi İşaretle</button>
               <button onclick="openModal('mMaasTanim')" class="btn-sm admin-only">+ Maaş Tanımla</button>
             </div>
@@ -9868,6 +10059,65 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           <tbody id="pat-tablo"></tbody>
         </table>
       </div>
+    </div>
+
+    <div style="background:#F8FAFC; padding:16px 40px; border-top:1px solid #E2E8F0; text-align:center;">
+      <div style="font-size:10px; color:#94A3B8; font-weight:500;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17</div>
+    </div>
+  </div>
+
+  <!-- ── TOPLU MAAŞ ÖDEME LİSTESİ ŞABLONU ── -->
+  <div id="pdfMaasListesiSablon" style="width:800px; background:#fff; font-family:'Inter',system-ui,sans-serif; color:#0F172A;">
+    <div style="background:linear-gradient(135deg,#0F172A,#1E293B); padding:28px 40px; display:flex; align-items:center; justify-content:space-between;">
+      <div style="display:flex; align-items:center; gap:14px;">
+        <svg width="48" height="48" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#1E293B"/>
+          <rect x="36" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <rect x="56" y="12" width="16" height="76" rx="3" fill="#F3F4F6"/>
+          <rect x="80" y="30" width="12" height="46" rx="3" fill="#00ADB5"/>
+          <path d="M 64 20 L 59 25 L 69 25 Z" fill="#1E293B"/>
+          <rect x="62.5" y="25" width="3" height="8" fill="#1E293B"/>
+          <path d="M 64 80 L 59 75 L 69 75 Z" fill="#1E293B"/>
+          <rect x="62.5" y="67" width="3" height="8" fill="#1E293B"/>
+        </svg>
+        <div>
+          <div style="font-size:22px; font-weight:800; color:#fff; letter-spacing:-0.3px;">AS-EL ASANSÖR</div>
+          <div style="font-size:11px; color:#94A3B8; letter-spacing:0.5px; margin-top:2px;">1989'dan Beri Güvenle</div>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:11px; color:#64748B; text-transform:uppercase; letter-spacing:1px; font-weight:600;">Toplu Maaş Ödeme Listesi</div>
+        <div id="pml-ay" style="font-size:15px; color:#00ADB5; font-weight:700; margin-top:3px;">Haziran 2026</div>
+        <div id="pml-tarih" style="font-size:11px; color:#94A3B8; margin-top:2px;">20.06.2026</div>
+      </div>
+    </div>
+
+    <div style="padding:32px 40px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:24px;">
+        <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px;">
+          <div style="font-size:9px; color:#64748B; text-transform:uppercase; letter-spacing:0.5px; font-weight:700; margin-bottom:7px;">Toplam Personel</div>
+          <div id="pml-toplamPersonel" style="font-size:18px; font-weight:800; color:#0F172A;">0</div>
+        </div>
+        <div style="background:#ECFDF5; border:1px solid #A7F3D0; border-radius:12px; padding:16px 18px;">
+          <div style="font-size:9px; color:#059669; text-transform:uppercase; letter-spacing:0.5px; font-weight:700; margin-bottom:7px;">Toplam Net Ödenecek</div>
+          <div id="pml-toplamNet" style="font-size:18px; font-weight:800; color:#059669;">0 ₺</div>
+        </div>
+      </div>
+
+      <div style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden;">
+        <table style="width:100%; border-collapse:collapse;">
+          <thead><tr style="background:#0F172A;">
+            <th style="text-align:left; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Personel</th>
+            <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Aylık Maaş</th>
+            <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Fazla Mesai</th>
+            <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Avans Kesintisi</th>
+            <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Net Ödenecek</th>
+            <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Durum</th>
+          </tr></thead>
+          <tbody id="pml-tablo"></tbody>
+        </table>
+      </div>
+      <p style="font-size:9.5px; color:#94A3B8; margin-top:14px;">Bu liste banka havale talimatı veya ödeme onayı için kullanılabilir. "Avans Kesintisi", ilgili ay içinde personele verilmiş ve henüz maaştan düşülmemiş avans toplamıdır.</p>
     </div>
 
     <div style="background:#F8FAFC; padding:16px 40px; border-top:1px solid #E2E8F0; text-align:center;">
