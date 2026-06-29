@@ -1203,6 +1203,7 @@ function renderBinalar(data) {
           <button onclick="hizliOdemeEkle('${b.ad.replace(/'/g,"\\'")}')" title="Ödeme Kaydet" class="admin-only" style="font-size:13px;background:rgba(0,173,181,.12);color:#00ADB5;border:1px solid rgba(0,173,181,.25);border-radius:6px;width:26px;height:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;">💰</button>
           <span style="width:1px;height:18px;background:rgba(71,85,105,.4);margin:0 2px;"></span>
           <button onclick="editBina('${b.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;" class="admin-only">Düzenle</button>
+          <button onclick="kopyalaBinaSablon('${b.id}')" title="Bu binanın yetkili/telefon/anlaşma bilgilerini kopyalayıp yeni bir cari oluştur" style="font-size:11px;color:#A855F7;background:none;border:none;cursor:pointer;" class="admin-only">Şablon Kullan</button>
           <button onclick="deleteBina('${b.id}','${b.ad}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;" class="admin-only">Sil</button>
         </div>
       </td>
@@ -2140,6 +2141,44 @@ window.editBina = async (id) => {
   openModal('mBina');
 };
 
+// "Şablon Olarak Kullan" — aynı müteahhit/şirketin birden fazla binası
+// olduğunda (örn. aynı yetkili kişi, aynı telefon, aynı anlaşma şartları),
+// bu bilgileri sıfırdan yazmak yerine mevcut bir binadan KOPYALAYIP yeni
+// bir cari oluşturmayı hızlandırır. Bina-özel alanlar (Ad, Cari Kodu,
+// Adres, Konum) KASITLI OLARAK boş bırakılır — bunlar her binada farklı
+// olmalıdır, kopyalanmaları hataya/karışıklığa yol açardı.
+window.kopyalaBinaSablon = async (id) => {
+  const snap = await getDoc(doc(db, 'binalar', id));
+  if (!snap.exists()) return;
+  const b = snap.data();
+  binaSorumluTeknisyenSeciciDoldur();
+
+  // Bina-özel alanlar bilerek BOŞ bırakılıyor — yeni bina için ayrı girilmeli
+  document.getElementById('f-bina-ad').value        = '';
+  document.getElementById('f-bina-cariKodu').value  = '';
+  document.getElementById('f-bina-adres').value     = '';
+  document.getElementById('f-bina-lat').value       = '';
+  document.getElementById('f-bina-lng').value       = '';
+  document.getElementById('f-bina-konumDurum').textContent =
+    'ℹ️ Binadayken "Şu Anki Konumumu Kullan" butonuna basarsanız konum otomatik doldurulur. Teknisyenler daha sonra bu binaya tek dokunuşla yol tarifi alabilir.';
+
+  // Tekrarlanan, genelde aynı kalan bilgiler KOPYALANIYOR
+  document.getElementById('f-bina-yetkili').value            = b.yetkili || '';
+  document.getElementById('f-bina-telefon').value             = b.telefon || '';
+  document.getElementById('f-bina-vergiNo').value             = b.vergiNo || '';
+  document.getElementById('f-bina-asansor').value             = b.asansorSayisi || '';
+  document.getElementById('f-bina-sozlesme').value            = b.sozlesme || '';
+  document.getElementById('f-bina-durum').value               = 'ok';
+  document.getElementById('f-bina-sorumluTeknisyen').value    = b.sorumluTeknisyenId || '';
+  document.getElementById('f-bina-anlasmaTipi').value         = b.anlasmaTipi || '';
+  document.getElementById('f-bina-anlasmaTutar').value        = b.anlasmaTutar || '';
+  document.getElementById('f-bina-anlasmaPeriyodik').checked  = !!b.anlasmaPeriyodik;
+  document.getElementById('f-bina-editId').value              = ''; // YENİ kayıt modu — düzenleme değil
+
+  document.getElementById('mBinaTitle').textContent = `Yeni Cari Ekle (${b.ad} bilgilerinden kopyalandı)`;
+  openModal('mBina');
+};
+
 window.deleteBina = async (id, ad) => {
   if (!confirm(`"${ad}" carisini silmek istediğinizden emin misiniz?\n\nNot: Bu cariye bağlı bakım, sözleşme, borç ve ödeme kayıtları silinmez, ancak artık bu cariye bağlanamazlar.`)) return;
   await deleteDoc(doc(db, 'binalar', id));
@@ -2904,6 +2943,22 @@ function renderSozlesmeler(data) {
   const tbody = document.getElementById('sozlesmeTableBody');
   const statsEl = document.getElementById('sozlesmeStats');
   if (!tbody) return;
+
+  // GEÇİCİ TANI — bina yöneticisinin diğer carileri görme sorununu
+  // teşhis etmek için. Sorun çözülünce kaldırılacak.
+  const taniKutusu = document.getElementById('sozlesmeTaniKutusu');
+  if (taniKutusu) {
+    const tumBinaAdlari = [...new Set(data.map(s => s.bina))];
+    taniKutusu.innerHTML = `
+      <b style="color:#FCA5A5;">🔍 GEÇİCİ TANI BİLGİSİ</b><br/>
+      currentUserData?.rol = "${currentUserData?.rol}"<br/>
+      currentUserData?.bina = "${currentUserData?.bina}"<br/>
+      Bu sayfada görünen (renderSozlesmeler'a gelen "data") bina adları: ${tumBinaAdlari.join(', ') || '(yok)'}<br/>
+      Toplam sözleşme sayısı (filtre uygulanmış data.length): ${data.length}<br/>
+      G_SOZLESMELER (global, ham) toplam: ${G_SOZLESMELER.length}<br/>
+      G_SOZLESMELER'deki TÜM bina adları: ${[...new Set(G_SOZLESMELER.map(s => s.bina))].join(', ') || '(yok)'}
+    `;
+  }
 
   // Bina datalist doldur (sözleşme formundan kolay seçim için)
   const binaList = document.getElementById('sozBinaListesi');
@@ -5441,6 +5496,27 @@ function doldurPersonelSecimi() {
     sel.innerHTML = secenekHtml;
     if (mevcut) sel.value = mevcut;
   });
+
+  // f-bakim-teknik ve f-cozum-teknisyen: bu ikisi, ID değil DOĞRUDAN
+  // İSİM METNİ saklar (bakimlar.teknisyen / arizalar.cozenTeknisyen
+  // alanları zaten serbest metin formatında, kayıtlı geçmiş veriyle
+  // uyumlu kalması için ID'ye çevrilmedi). "Atanmamış" seçeneği hariç,
+  // değer = isim metni olacak şekilde dolduruluyor.
+  const isimBazliSecenekHtml = (bosEtiket) => `<option value="">${bosEtiket}</option>` +
+    personeller.map(p => `<option value="${(p.ad||'').replace(/"/g,'')}">${p.ad}</option>`).join('');
+
+  const bakimSel = document.getElementById('f-bakim-teknik');
+  if (bakimSel) {
+    const mevcut = bakimSel.value;
+    bakimSel.innerHTML = isimBazliSecenekHtml('— Atanmamış —');
+    if (mevcut) bakimSel.value = mevcut;
+  }
+  const cozumSel = document.getElementById('f-cozum-teknisyen');
+  if (cozumSel) {
+    const mevcut = cozumSel.value;
+    cozumSel.innerHTML = isimBazliSecenekHtml('— Seçiniz —');
+    if (mevcut) cozumSel.value = mevcut;
+  }
 }
 
 // Kesinti tipi radyo butonu değiştiğinde, ilgili ek alanları göster/gizle.
@@ -7036,7 +7112,15 @@ window.closeAriza = (id) => {
   if (!ariza) return;
   document.getElementById('f-cozum-arizaId').value = id;
   document.getElementById('f-cozum-binaInfo').textContent = `${ariza.bina}${ariza.kabin ? ' — '+ariza.kabin : ''} · ${ariza.tip || 'Arıza'}`;
-  document.getElementById('f-cozum-teknisyen').value = ariza.cozenTeknisyen || currentUserData?.ad || '';
+  const cozumTeknisyenSel = document.getElementById('f-cozum-teknisyen');
+  const oncekiTeknisyen = ariza.cozenTeknisyen || currentUserData?.ad || '';
+  // Eğer bu isim artık dropdown seçenekleri arasında yoksa (örn. o
+  // teknisyen kullanıcısı sonradan silinmiş), seçim sessizce kaybolmasın
+  // diye seçeneklere geçici olarak eklenir — kayıtlı geçmiş veri görünür kalır.
+  if (oncekiTeknisyen && !Array.from(cozumTeknisyenSel.options).some(o => o.value === oncekiTeknisyen)) {
+    cozumTeknisyenSel.insertAdjacentHTML('beforeend', `<option value="${oncekiTeknisyen.replace(/"/g,'')}">${oncekiTeknisyen} (artık aktif değil)</option>`);
+  }
+  cozumTeknisyenSel.value = oncekiTeknisyen;
   document.getElementById('f-cozum-iscilik').value = ariza.iscilikTutari || '';
   document.getElementById('f-cozum-not').value = ariza.cozumNotu || '';
   document.getElementById('f-cozum-borcOlustur').checked = !ariza.arizaBorcuId; // zaten borç oluşmuşsa varsayılan işaretli kalmasın, güncellenecek
@@ -7786,7 +7870,21 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 document.addEventListener('keydown', e => {
+  // Ctrl+K (Windows/Linux) veya Cmd+K (Mac) — Hızlı İşlem Menüsü'nü açar.
+  // Tarayıcının kendi adres çubuğu kısayollarıyla çakışmasın diye
+  // preventDefault() çağrılır.
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    komutPaletiAc();
+    return;
+  }
+
   if (e.key === 'Escape') {
+    const palet = document.getElementById('komutPaletiOverlay');
+    if (palet && palet.style.display !== 'none') {
+      komutPaletiKapat();
+      return;
+    }
     // Açık BÜYÜK formlardan biri "kirli"yse (kaydedilmemiş değişiklik
     // varsa), Escape onları artık sessizce kapatmaz — closeModal()
     // üzerinden, normal "x" butonuyla aynı onay akışından geçer. Bu,
@@ -7801,6 +7899,117 @@ document.addEventListener('keydown', e => {
     closeLogin();
   }
 });
+
+/* ═══════════════════════════════════════════════════════════════
+   HIZLI İŞLEM MENÜSÜ (Komut Paleti) — Ctrl+K / Cmd+K
+   Sık kullanılan aksiyonları (modal açma) ve sayfa geçişlerini tek bir
+   yerden, klavyeden yazarak filtreleyip Enter ile çalıştırmayı sağlar.
+   Sadece giriş yapılmış (panel açık) durumdayken anlamlıdır — login
+   ekranındayken Ctrl+K'ya basılsa bile komut listesi boş kalacağından
+   pratikte zararsızdır.
+═══════════════════════════════════════════════════════════════ */
+const KOMUT_PALETI_LISTESI = [
+  { etiket: '🔧 Bakım Planla', aksiyon: () => openModal('mBakim'), anahtarKelimeler: 'bakim planla yeni bakim ekle' },
+  { etiket: '⚠️ Arıza Bildir', aksiyon: () => openModal('mAriza'), anahtarKelimeler: 'ariza bildir yeni ariza ekle' },
+  { etiket: '🏢 Yeni Cari Ekle', aksiyon: () => { resetBinaForm(); openModal('mBina'); }, anahtarKelimeler: 'cari ekle yeni bina musteri ekle' },
+  { etiket: '💰 Ödeme Kaydet', aksiyon: () => openModal('mOdeme'), anahtarKelimeler: 'odeme kaydet tahsilat ekle' },
+  { etiket: '📤 Gider Ekle', aksiyon: () => openModal('mGider'), anahtarKelimeler: 'gider ekle masraf' },
+  { etiket: '🧾 Çek/Senet Ekle', aksiyon: () => openModal('mCek'), anahtarKelimeler: 'cek senet ekle' },
+  { etiket: '📄 Sözleşme Ekle', aksiyon: () => { resetSozlesmeForm(); openModal('mSozlesme'); }, anahtarKelimeler: 'sozlesme ekle yeni sozlesme' },
+  { etiket: '💼 Avans Ver', aksiyon: () => openModal('mAvans'), anahtarKelimeler: 'avans ver personel avans' },
+  { etiket: '📋 Maaş Tanımla', aksiyon: () => openModal('mMaasTanim'), anahtarKelimeler: 'maas tanimla personel maas' },
+  { etiket: '➡️ Genel Bakış', aksiyon: () => showPage('dashboard', null), anahtarKelimeler: 'genel bakis dashboard anasayfa' },
+  { etiket: '➡️ Müşteri Talepleri', aksiyon: () => showPage('talepler', null), anahtarKelimeler: 'musteri talepleri' },
+  { etiket: '➡️ Bugünün Görevleri', aksiyon: () => showPage('gorevler', null), anahtarKelimeler: 'bugunun gorevleri gunluk' },
+  { etiket: '➡️ Bakım Takvimi', aksiyon: () => showPage('takvim', null), anahtarKelimeler: 'bakim takvimi takvim' },
+  { etiket: '➡️ Aylık Bakım Takibi', aksiyon: () => showPage('aylik', null), anahtarKelimeler: 'aylik bakim takibi' },
+  { etiket: '➡️ Cari Yönetimi', aksiyon: () => showPage('binalar', null), anahtarKelimeler: 'cari yonetimi binalar musteriler' },
+  { etiket: '➡️ Asansör Dosyası', aksiyon: () => showPage('asansorler', null), anahtarKelimeler: 'asansor dosyasi' },
+  { etiket: '➡️ Bakım Takibi', aksiyon: () => showPage('bakimlar', null), anahtarKelimeler: 'bakim takibi gecmis bakimlar' },
+  { etiket: '➡️ Arıza Kayıtları', aksiyon: () => showPage('arizalar', null), anahtarKelimeler: 'ariza kayitlari arizalar' },
+  { etiket: '➡️ Sözleşme & Fatura', aksiyon: () => showPage('sozlesmeler', null), anahtarKelimeler: 'sozlesme fatura' },
+  { etiket: '➡️ Muhasebe', aksiyon: () => showPage('muhasebe', null), anahtarKelimeler: 'muhasebe odemeler maaslar gider' },
+  { etiket: '➡️ Teknisyen Performans', aksiyon: () => showPage('performans', null), anahtarKelimeler: 'teknisyen performans' },
+  { etiket: '➡️ Kullanıcılar', aksiyon: () => showPage('kullanicilar', null), anahtarKelimeler: 'kullanicilar personel listesi' },
+];
+
+let G_KOMUT_PALETI_SECILI_INDEKS = 0;
+let G_KOMUT_PALETI_GORUNEN = [];
+
+window.komutPaletiAc = () => {
+  // Login ekranı açıkken (henüz giriş yapılmamışken) komut paletinin
+  // açılması anlamsız ve kafa karıştırıcı olur — sadece panel açıkken
+  // (login overlay kapalıyken) çalışır.
+  if (document.getElementById('loginOverlay')?.classList.contains('open')) return;
+  if (!currentUserData) return;
+
+  const overlay = document.getElementById('komutPaletiOverlay');
+  const input = document.getElementById('komutPaletiInput');
+  overlay.style.display = 'flex';
+  input.value = '';
+  komutPaletiFiltrele('');
+  setTimeout(() => input.focus(), 30);
+};
+
+window.komutPaletiKapat = () => {
+  document.getElementById('komutPaletiOverlay').style.display = 'none';
+};
+
+window.komutPaletiFiltrele = (terim) => {
+  const normalize = s => String(s||'').toLocaleLowerCase('tr-TR')
+    .replace(/ı/g,'i').replace(/ğ/g,'g').replace(/ü/g,'u').replace(/ş/g,'s').replace(/ö/g,'o').replace(/ç/g,'c');
+  const t = normalize(terim);
+  G_KOMUT_PALETI_GORUNEN = KOMUT_PALETI_LISTESI.filter(k => !t || normalize(k.etiket + ' ' + k.anahtarKelimeler).includes(t));
+  G_KOMUT_PALETI_SECILI_INDEKS = 0;
+  komutPaletiListesiCiz();
+};
+
+function komutPaletiListesiCiz() {
+  const liste = document.getElementById('komutPaletiListesi');
+  if (!G_KOMUT_PALETI_GORUNEN.length) {
+    liste.innerHTML = `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Eşleşen işlem bulunamadı.</div>`;
+    return;
+  }
+  liste.innerHTML = G_KOMUT_PALETI_GORUNEN.map((k, i) => `
+    <div onclick="komutPaletiCalistir(${i})" onmouseenter="G_KOMUT_PALETI_SECILI_INDEKS=${i};komutPaletiVurguGuncelle()"
+      class="komut-paleti-satir" data-idx="${i}"
+      style="padding:11px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#E2E8F0;${i === G_KOMUT_PALETI_SECILI_INDEKS ? 'background:rgba(0,173,181,.12);' : ''}">
+      ${k.etiket}
+    </div>`).join('');
+}
+
+function komutPaletiVurguGuncelle() {
+  document.querySelectorAll('.komut-paleti-satir').forEach(el => {
+    const idx = parseInt(el.dataset.idx);
+    el.style.background = idx === G_KOMUT_PALETI_SECILI_INDEKS ? 'rgba(0,173,181,.12)' : '';
+  });
+}
+
+window.komutPaletiCalistir = (index) => {
+  const komut = G_KOMUT_PALETI_GORUNEN[index];
+  if (!komut) return;
+  komutPaletiKapat();
+  komut.aksiyon();
+};
+
+window.komutPaletiTusVuruldu = (e) => {
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    G_KOMUT_PALETI_SECILI_INDEKS = Math.min(G_KOMUT_PALETI_SECILI_INDEKS + 1, G_KOMUT_PALETI_GORUNEN.length - 1);
+    komutPaletiVurguGuncelle();
+    document.querySelector('.komut-paleti-satir[data-idx="'+G_KOMUT_PALETI_SECILI_INDEKS+'"]')?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    G_KOMUT_PALETI_SECILI_INDEKS = Math.max(G_KOMUT_PALETI_SECILI_INDEKS - 1, 0);
+    komutPaletiVurguGuncelle();
+    document.querySelector('.komut-paleti-satir[data-idx="'+G_KOMUT_PALETI_SECILI_INDEKS+'"]')?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    komutPaletiCalistir(G_KOMUT_PALETI_SECILI_INDEKS);
+  }
+  // Escape, dosyanın üst kısmındaki genel keydown dinleyicisi tarafından
+  // ele alınır (komutPaletiKapat çağrılır) — burada tekrar ele alınmaz.
+};
 
 /* ═══════════════════════════════════════════════════════════════
    İLK KURULUM: Firestore'a örnek kullanıcı profili yaz
@@ -8431,6 +8640,26 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
   </div>
 </div>
 
+<!-- ════════════════════════════════════
+     HIZLI İŞLEM MENÜSÜ (Ctrl+K)
+     Sık kullanılan aksiyonlara (Bakım Planla, Arıza Bildir, Cari Ekle
+     gibi) ve sayfalara, panel içinde herhangi bir yerdeyken klavyeden
+     tek vuruşla ulaşmayı sağlar — fare ile menüde gezinmeye gerek kalmaz.
+════════════════════════════════════ -->
+<div id="komutPaletiOverlay" onclick="if(event.target===this)komutPaletiKapat()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:20000;align-items:flex-start;justify-content:center;padding-top:12vh;">
+  <div style="background:#0B1220;border:1px solid rgba(30,41,59,.8);border-radius:14px;width:92%;max-width:520px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;">
+    <div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid rgba(30,41,59,.6);">
+      <svg viewBox="0 0 24 24" style="width:16px;height:16px;flex-shrink:0;fill:none;stroke:#64748B;stroke-width:2;"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+      <input id="komutPaletiInput" type="text" placeholder="Bir işlem ara: bakım planla, cari ekle, arıza..." autocomplete="off"
+        style="flex:1;background:none;border:none;outline:none;color:#E2E8F0;font-size:14px;"
+        oninput="komutPaletiFiltrele(this.value)"
+        onkeydown="komutPaletiTusVuruldu(event)"/>
+      <span style="font-size:10px;color:#475569;font-family:monospace;background:rgba(30,41,59,.6);padding:2px 6px;border-radius:5px;">ESC</span>
+    </div>
+    <div id="komutPaletiListesi" style="max-height:50vh;overflow-y:auto;padding:6px;"></div>
+  </div>
+</div>
+
 
 <!-- ════════════════════════════════════
      DASHBOARD
@@ -8905,6 +9134,9 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
       <!-- SÖZLEŞME & FATURA -->
       <div id="pg-sozlesmeler" class="db-page">
+        <!-- GEÇİCİ TANI KUTUSU — bina yöneticisinin diğer carileri görme sorununu teşhis etmek için -->
+        <div id="sozlesmeTaniKutusu" style="background:#1E293B;color:#FCD34D;padding:12px;border-radius:8px;margin-bottom:14px;font-size:11px;font-family:monospace;line-height:1.6;"></div>
+
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
           <div>
             <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Sözleşme & Fatura Takibi</h2>
@@ -9545,7 +9777,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bakım Tipi</label>
           <select id="f-bakim-tip" class="db-input"><option>Aylık Periyodik</option><option>Yıllık Muayene</option><option>Modernizasyon</option><option>Acil Bakım</option></select></div>
       </div>
-      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Teknisyen</label><input id="f-bakim-teknik" type="text" class="db-input" placeholder="Ad Soyad"/></div>
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Teknisyen</label>
+        <select id="f-bakim-teknik" class="db-input"><option value="">— Atanmamış —</option></select>
+        <p style="font-size:10px;color:#64748B;margin-top:5px;">ℹ️ Listede yoksa Kullanıcılar sayfasından eklenmelidir — yazım hatası/çiftlenme riskini önler.</p>
+      </div>
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Notlar</label><textarea id="f-bakim-notlar" rows="3" class="db-input" style="resize:none;" placeholder="Bakım detayları..."></textarea></div>
     </div>
     <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
@@ -9592,7 +9827,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div id="f-cozum-binaInfo" style="font-size:12px;color:#64748B;background:rgba(0,173,181,.06);border:1px solid rgba(0,173,181,.15);border-radius:8px;padding:8px 12px;"></div>
 
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Çözen Teknisyen</label>
-        <input id="f-cozum-teknisyen" type="text" class="db-input" style="color:#fff;" placeholder="Teknisyen adı"/></div>
+        <select id="f-cozum-teknisyen" class="db-input"><option value="">— Seçiniz —</option></select></div>
 
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
