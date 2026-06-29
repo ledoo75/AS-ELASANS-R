@@ -827,6 +827,38 @@ function subscribeAll() {
   const binaNorm = binaAdiNormalize(bina);
   const binaEslesir = (deger) => binaAdiNormalize(deger) === binaNorm;
 
+  // ⚠️ KRİTİK GÜVENLİK DÜZELTMESİ: Önceden filtre koşulu
+  // "role === 'bina' && bina" şeklindeydi — eğer bu kullanıcının
+  // Firestore kaydında "bina" alanı BOŞ/eksikse (örn. admin panelden
+  // kullanıcı oluştururken bina seçilmeyi unutulmuşsa, ya da veri
+  // bozulmuşsa), "&& bina" koşulu false olduğu için filtre SATIRI
+  // HİÇ ÇALIŞMIYORDU — yani ham (TÜM carilere ait) veri hiç
+  // filtrelenmeden gösteriliyordu. Bu, bina yöneticisinin kendi
+  // binası dışındaki TÜM sözleşme/asansör/bakım/ödeme verisini
+  // görmesine yol açan gerçek güvenlik açığıydı.
+  //
+  // Düzeltme: "bina" rolü için filtreleme artık SADECE iki durumdan
+  // birine girer — ya "sadece kendi binasına ait veri" (bina doluysa),
+  // ya da "HİÇBİR ŞEY" (bina boşsa) — asla "filtrelenmemiş tüm veri"
+  // durumuna düşemez. binaRoluGuvenliFiltre(data, alanSecici) bu iki
+  // durumu garanti eden tek bir yardımcı fonksiyondur; aşağıdaki tüm
+  // onSnapshot callback'leri artık doğrudan if/else yazmak yerine bunu
+  // çağırır, ki gelecekte yeni bir koleksiyon eklenirken aynı hata
+  // (yanlışlıkla "&& bina" unutulması) tekrarlanamaz.
+  function binaRoluGuvenliFiltre(data, alanSecici) {
+    if (role !== 'bina') return data; // admin/teknisyen — filtre yok
+    if (!bina) return []; // bina atanmamış hesap — GÜVENLİ VARSAYILAN: hiçbir şey gösterme
+    return data.filter(item => binaEslesir(alanSecici(item)));
+  }
+
+  // Bina ataması eksik bir "bina" rolü hesabıyla giriş yapılmışsa,
+  // kullanıcıyı sessizce boş ekranlarla baş başa bırakmak yerine açıkça
+  // uyar — aksi halde "neden hiçbir şey göremiyorum" diye yanlış bir
+  // hata sanılabilir, oysa bu kasıtlı bir güvenlik önlemidir.
+  if (role === 'bina' && !bina) {
+    console.warn('UYARI: Bu "bina" rolündeki kullanıcı hesabına Firestore\'da bir bina adı atanmamış. Güvenlik nedeniyle hiçbir cari verisi gösterilmeyecek. Kullanıcılar sayfasından bu hesaba doğru bina adını atayın.');
+  }
+
   // Müşteri Talepleri (site iletişim formu) — sadece admin/teknisyen görür
   if (role === 'admin' || role === 'teknisyen') {
     const talepQ = query(collection(db, 'talepler'), orderBy('tarih', 'desc'));
@@ -852,7 +884,7 @@ function subscribeAll() {
   const binaQ = query(collection(db, 'binalar'), orderBy('ad'));
   unsubscribers.push(onSnapshot(binaQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(b => binaEslesir(b.ad));
+    data = binaRoluGuvenliFiltre(data, b => b.ad);
     G_BINALAR = data;
     renderBinalar(data);
     renderBinaSayac(data.length);
@@ -863,7 +895,7 @@ function subscribeAll() {
   const bakimQ = query(collection(db, 'bakimlar'), orderBy('tarih'));
   unsubscribers.push(onSnapshot(bakimQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(b => binaEslesir(b.bina));
+    data = binaRoluGuvenliFiltre(data, b => b.bina);
     G_BAKIMLAR = data;
     renderBakimlar(data);
     renderBekleyenSayac(data.filter(b => b.durum === 'bekliyor').length);
@@ -878,7 +910,7 @@ function subscribeAll() {
   const arizaQ = query(collection(db, 'arizalar'), orderBy('tarih', 'desc'));
   unsubscribers.push(onSnapshot(arizaQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(a => binaEslesir(a.bina));
+    data = binaRoluGuvenliFiltre(data, a => a.bina);
     const eskiUzunluk = G_ARIZALAR.length;
     G_ARIZALAR = data;
     renderArizalar(data);
@@ -893,7 +925,7 @@ function subscribeAll() {
   const sozQ = query(collection(db, 'sozlesmeler'), orderBy('bina'));
   unsubscribers.push(onSnapshot(sozQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(s => binaEslesir(s.bina));
+    data = binaRoluGuvenliFiltre(data, s => s.bina);
     G_SOZLESMELER = data;
     renderSozlesmeler(data);
     rebuildBildirimler();
@@ -914,7 +946,7 @@ function subscribeAll() {
   const odemeQ = query(collection(db, 'odemeler'), orderBy('tarih', 'desc'));
   unsubscribers.push(onSnapshot(odemeQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(o => binaEslesir(o.bina));
+    data = binaRoluGuvenliFiltre(data, o => o.bina);
     G_ODEMELER = data;
     if (document.getElementById('pg-muhasebe')?.classList.contains('active')) renderMuhasebe();
     if (document.getElementById('musteriCariDetay')?.style.display === 'block') renderMusteriCariDetay();
@@ -925,7 +957,7 @@ function subscribeAll() {
   const asansorQ = query(collection(db, 'asansorler'), orderBy('bina'));
   unsubscribers.push(onSnapshot(asansorQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(a => binaEslesir(a.bina));
+    data = binaRoluGuvenliFiltre(data, a => a.bina);
     G_ASANSORLER = data;
     if (document.getElementById('pg-asansorler')?.classList.contains('active')) renderAsansorler();
     renderMuayeneSayac();
@@ -936,7 +968,7 @@ function subscribeAll() {
   const aylikQ = query(collection(db, 'aylikBakimlar'), orderBy('ayKey', 'desc'));
   unsubscribers.push(onSnapshot(aylikQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(a => binaEslesir(a.bina));
+    data = binaRoluGuvenliFiltre(data, a => a.bina);
     G_AYLIK_BAKIMLAR = data;
     if (document.getElementById('pg-aylik')?.classList.contains('active')) renderAylikTakip();
     rebuildBildirimler();
@@ -947,7 +979,7 @@ function subscribeAll() {
   const borcQ = query(collection(db, 'borclar'), orderBy('tarih', 'desc'));
   unsubscribers.push(onSnapshot(borcQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (role === 'bina' && bina) data = data.filter(b => binaEslesir(b.bina));
+    data = binaRoluGuvenliFiltre(data, b => b.bina);
     G_BORCLAR = data;
     if (document.getElementById('muhTab-musteri')?.style.display !== 'none') renderMusteriCariListesi();
     if (document.getElementById('musteriCariDetay')?.style.display === 'block') renderMusteriCariDetay();
@@ -2943,22 +2975,6 @@ function renderSozlesmeler(data) {
   const tbody = document.getElementById('sozlesmeTableBody');
   const statsEl = document.getElementById('sozlesmeStats');
   if (!tbody) return;
-
-  // GEÇİCİ TANI — bina yöneticisinin diğer carileri görme sorununu
-  // teşhis etmek için. Sorun çözülünce kaldırılacak.
-  const taniKutusu = document.getElementById('sozlesmeTaniKutusu');
-  if (taniKutusu) {
-    const tumBinaAdlari = [...new Set(data.map(s => s.bina))];
-    taniKutusu.innerHTML = `
-      <b style="color:#FCA5A5;">🔍 GEÇİCİ TANI BİLGİSİ</b><br/>
-      currentUserData?.rol = "${currentUserData?.rol}"<br/>
-      currentUserData?.bina = "${currentUserData?.bina}"<br/>
-      Bu sayfada görünen (renderSozlesmeler'a gelen "data") bina adları: ${tumBinaAdlari.join(', ') || '(yok)'}<br/>
-      Toplam sözleşme sayısı (filtre uygulanmış data.length): ${data.length}<br/>
-      G_SOZLESMELER (global, ham) toplam: ${G_SOZLESMELER.length}<br/>
-      G_SOZLESMELER'deki TÜM bina adları: ${[...new Set(G_SOZLESMELER.map(s => s.bina))].join(', ') || '(yok)'}
-    `;
-  }
 
   // Bina datalist doldur (sözleşme formundan kolay seçim için)
   const binaList = document.getElementById('sozBinaListesi');
@@ -9134,9 +9150,6 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
       <!-- SÖZLEŞME & FATURA -->
       <div id="pg-sozlesmeler" class="db-page">
-        <!-- GEÇİCİ TANI KUTUSU — bina yöneticisinin diğer carileri görme sorununu teşhis etmek için -->
-        <div id="sozlesmeTaniKutusu" style="background:#1E293B;color:#FCD34D;padding:12px;border-radius:8px;margin-bottom:14px;font-size:11px;font-family:monospace;line-height:1.6;"></div>
-
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
           <div>
             <h2 style="font-size:15px;font-weight:800;color:#E2E8F0;">Sözleşme & Fatura Takibi</h2>
