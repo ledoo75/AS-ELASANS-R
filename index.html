@@ -2985,10 +2985,19 @@ function renderSozlesmeler(data) {
 // riski taşırdı.
 function teknisyenPerformansHesapla() {
   const stats = {};
-  function ensureTeknisyen(name) {
-    if (!name) name = '—';
-    if (!stats[name]) stats[name] = { bakimTamam:0, bakimBekleyen:0, arizaCozum:0, arizaAcik:0 };
-    return stats[name];
+  // ÖNEMLİ: Teknisyen adı doğrudan anahtar olarak kullanılırsa, aynı
+  // kişinin adı bir kayıtta "Tayfun Özdemir", başka bir kayıtta
+  // (büyük/küçük harf veya fazladan boşluk farkıyla) "tayfun özdemir "
+  // şeklinde yazılmışsa, bunlar İKİ AYRI kişi sayılır — listede aynı
+  // isim iki kez, her birinde yanlış (bölünmüş) bir sayıyla görünür.
+  // Bu yüzden anahtar olarak normalize edilmiş ad kullanılır
+  // (binaAdiNormalize ile aynı mantık), ama ekranda gösterilecek isim
+  // İLK GÖRÜLEN orijinal yazımı korur.
+  function ensureTeknisyen(adHam) {
+    if (!adHam) adHam = '—';
+    const anahtar = binaAdiNormalize(adHam);
+    if (!stats[anahtar]) stats[anahtar] = { adGoster: adHam.trim(), bakimTamam:0, bakimBekleyen:0, arizaCozum:0, arizaAcik:0 };
+    return stats[anahtar];
   }
 
   G_BAKIMLAR.forEach(b => {
@@ -3005,9 +3014,9 @@ function teknisyenPerformansHesapla() {
     else s.arizaAcik++;
   });
 
-  const names = Object.keys(stats).filter(n => n !== '—');
-  return names.map(n => ({ name: n, ...stats[n], toplam: stats[n].bakimTamam + stats[n].arizaCozum }))
-              .sort((a,b) => b.toplam - a.toplam);
+  const anahtarlar = Object.keys(stats).filter(k => k !== '—' && k !== binaAdiNormalize('—'));
+  return anahtarlar.map(k => ({ name: stats[k].adGoster, ...stats[k], toplam: stats[k].bakimTamam + stats[k].arizaCozum }))
+                   .sort((a,b) => b.toplam - a.toplam);
 }
 
 /* ═══════════════════════════════════════════════════════════════
