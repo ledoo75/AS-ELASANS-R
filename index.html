@@ -706,6 +706,46 @@ function personelAvansKesintisiHesapla(personelId, ayKey) {
     .reduce((toplam, a) => toplam + avansBuAyKesintisi(a, ayKey), 0);
 }
 
+// Bir personelin, seçili ay DAHİL o aya kadar kesilmiş tüm taksitler
+// düşüldükten sonra KALAN toplam avans borcunu hesaplar. "Bu ay ne
+// kesiliyor" (personelAvansKesintisiHesapla) ile karıştırılmamalı —
+// bu fonksiyon KÜMÜLATİF kalan bakiyeyi verir (örn. 1000₺/3 taksitten
+// 2. ay sonunda kalan: 333.34₺). Mutasyona dayalı bir alan tutmadığı
+// için (bkz. avansBuAyKesintisi yorumları), her ay için sıfırdan,
+// geçmişteki TÜM taksitleri toplayarak hesaplar — bu yüzden ay
+// sırası/geri alma döngülerinden etkilenmez.
+function personelKalanAvansBakiyesi(personelId, ayKey) {
+  return G_AVANSLAR
+    .filter(a => a.personelId === personelId)
+    .reduce((toplamKalan, a) => {
+      if (a.kesintiTipi !== 'taksit' && a.kesintiTipi !== 'aylikTutar') {
+        // Tek seferlik avans: verildiği ay geçtiyse zaten tamamen
+        // kesilmiş sayılır (kalan yok); henüz o ay gelmediyse (gelecek
+        // tarihli avans, nadir) tüm tutar kalan sayılır.
+        const gectiMi = (a.tarih || '') <= ayKey + '-31';
+        return toplamKalan + (gectiMi ? 0 : (a.tutar || 0));
+      }
+      // Taksitli: bu aya kadar (dahil) geçen tüm ayların taksitlerini topla
+      let kesilenToplam = 0;
+      let ayIndeks = ayFarkiHesapla(a.baslangicAyKey, ayKey);
+      ayIndeks = Math.min(ayIndeks, a.taksitSayisi - 1); // seçili ay son taksitten ileriyse, sadece son taksite kadar say
+      for (let i = 0; i <= ayIndeks; i++) {
+        const buAyinAyKey = ayEkle(a.baslangicAyKey, i);
+        kesilenToplam += avansBuAyKesintisi(a, buAyinAyKey);
+      }
+      return toplamKalan + Math.max(0, (a.tutar || 0) - kesilenToplam);
+    }, 0);
+}
+
+// "YYYY-MM" formatında bir ay anahtarına N ay ekler (negatif de olabilir).
+function ayEkle(ayKey, n) {
+  const [y, a] = ayKey.split('-').map(Number);
+  const toplamAy = (y * 12 + (a - 1)) + n;
+  const yeniY = Math.floor(toplamAy / 12);
+  const yeniA = (toplamAy % 12) + 1;
+  return `${yeniY}-${String(yeniA).padStart(2,'0')}`;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    BİNA EŞLEŞTİRME — Kod öncelikli, isim yedek (fallback)
    Bina ismi değişebilir veya iki bina aynı ismi taşıyabilir.
@@ -5683,9 +5723,10 @@ window.maasOdemeGeriAl = async (id) => {
 // ekranda görünen ile dışa aktarılan birbirini tutsun. Hem Excel hem PDF
 // toplu export'u bu ortak fonksiyonu kullanır.
 function maasListesiHesapla(ayKey) {
-  let toplamMaas = 0, toplamFazlaMesai = 0, toplamAvans = 0, toplamNet = 0;
+  let toplamMaas = 0, toplamFazlaMesai = 0, toplamAvans = 0, toplamNet = 0, toplamKalanBakiye = 0;
   const satirlar = G_MAASLAR.map(m => {
     const buAyAvans = personelAvansKesintisiHesapla(m.personelId, ayKey);
+    const kalanBakiye = personelKalanAvansBakiyesi(m.personelId, ayKey);
     const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
     const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans;
     const odemeKaydi = G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey);
@@ -5694,38 +5735,39 @@ function maasListesiHesapla(ayKey) {
     toplamFazlaMesai += mesai.fazlaMesaiUcreti;
     toplamAvans += buAyAvans;
     toplamNet += netOdenecek;
+    toplamKalanBakiye += kalanBakiye;
 
     return {
       personelAd: m.personelAd, aylikMaas: m.aylikMaas,
       fazlaMesaiSaat: mesai.fazlaSaat, fazlaMesaiUcreti: mesai.fazlaMesaiUcreti,
-      avans: buAyAvans, netOdenecek,
+      avans: buAyAvans, kalanBakiye, netOdenecek,
       odendiMi: !!odemeKaydi, odemeTarihi: odemeKaydi?.odemeTarihi || null
     };
   }).sort((a,b) => a.personelAd.localeCompare(b.personelAd, 'tr'));
 
-  return { satirlar, toplamMaas, toplamFazlaMesai, toplamAvans, toplamNet };
+  return { satirlar, toplamMaas, toplamFazlaMesai, toplamAvans, toplamNet, toplamKalanBakiye };
 }
 
 window.exportMaasListesiExcel = () => {
   const ayKey = document.getElementById('maasAySecim')?.value || new Date().toISOString().slice(0,7);
-  const { satirlar, toplamMaas, toplamFazlaMesai, toplamAvans, toplamNet } = maasListesiHesapla(ayKey);
+  const { satirlar, toplamMaas, toplamFazlaMesai, toplamAvans, toplamNet, toplamKalanBakiye } = maasListesiHesapla(ayKey);
 
   if (!satirlar.length) { alert('Bu ay için maaş tanımı bulunamadı.'); return; }
 
-  const tablo = [['Personel', 'Aylık Maaş', 'Fazla Mesai Ücreti', 'Avans Kesintisi', 'Net Ödenecek', 'Durum', 'Ödeme Tarihi']];
+  const tablo = [['Personel', 'Aylık Maaş', 'Fazla Mesai Ücreti', 'Avans Kesintisi (Bu Ay)', 'Kalan Avans Borcu', 'Net Ödenecek', 'Durum', 'Ödeme Tarihi']];
   satirlar.forEach(s => tablo.push([
-    s.personelAd, s.aylikMaas, s.fazlaMesaiUcreti, -s.avans, s.netOdenecek,
+    s.personelAd, s.aylikMaas, s.fazlaMesaiUcreti, -s.avans, s.kalanBakiye, s.netOdenecek,
     s.odendiMi ? 'Ödendi' : 'Bekliyor', s.odemeTarihi || ''
   ]));
   tablo.push([]);
-  tablo.push(['TOPLAM', toplamMaas, toplamFazlaMesai, -toplamAvans, toplamNet, '', '']);
+  tablo.push(['TOPLAM', toplamMaas, toplamFazlaMesai, -toplamAvans, toplamKalanBakiye, toplamNet, '', '']);
 
   xlsxIndir(tablo, `Maas_Listesi_${ayKey}.xlsx`, ayKey);
 };
 
 window.exportMaasListesiPDF = async () => {
   const ayKey = document.getElementById('maasAySecim')?.value || new Date().toISOString().slice(0,7);
-  const { satirlar, toplamMaas, toplamFazlaMesai, toplamAvans, toplamNet } = maasListesiHesapla(ayKey);
+  const { satirlar, toplamMaas, toplamFazlaMesai, toplamAvans, toplamNet, toplamKalanBakiye } = maasListesiHesapla(ayKey);
 
   if (!satirlar.length) { alert('Bu ay için maaş tanımı bulunamadı.'); return; }
 
@@ -5744,6 +5786,7 @@ window.exportMaasListesiPDF = async () => {
       <td style="padding:9px 16px;text-align:right;color:#64748B;font-size:12px;">${s.aylikMaas.toLocaleString('tr-TR')} ₺</td>
       <td style="padding:9px 16px;text-align:right;color:#00ADB5;font-size:12px;">${s.fazlaMesaiUcreti > 0 ? '+'+s.fazlaMesaiUcreti.toLocaleString('tr-TR')+' ₺' : '—'}</td>
       <td style="padding:9px 16px;text-align:right;color:#F59E0B;font-size:12px;">${s.avans > 0 ? '-'+s.avans.toLocaleString('tr-TR')+' ₺' : '—'}</td>
+      <td style="padding:9px 16px;text-align:right;color:#EF4444;font-size:12px;">${s.kalanBakiye > 0 ? s.kalanBakiye.toLocaleString('tr-TR')+' ₺' : '—'}</td>
       <td style="padding:9px 16px;text-align:right;color:#10B981;font-size:13px;font-weight:800;">${s.netOdenecek.toLocaleString('tr-TR')} ₺</td>
       <td style="padding:9px 16px;text-align:right;font-size:11px;font-weight:700;color:${s.odendiMi?'#10B981':'#F59E0B'};">${s.odendiMi?'✓ Ödendi':'Bekliyor'}</td>
     </tr>`).join('') + `
@@ -5752,6 +5795,7 @@ window.exportMaasListesiPDF = async () => {
       <td style="padding:11px 16px;text-align:right;color:#fff;font-size:12px;font-weight:700;">${toplamMaas.toLocaleString('tr-TR')} ₺</td>
       <td style="padding:11px 16px;text-align:right;color:#5EEAD4;font-size:12px;font-weight:700;">+${toplamFazlaMesai.toLocaleString('tr-TR')} ₺</td>
       <td style="padding:11px 16px;text-align:right;color:#FCD34D;font-size:12px;font-weight:700;">-${toplamAvans.toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:11px 16px;text-align:right;color:#FCA5A5;font-size:12px;font-weight:700;">${toplamKalanBakiye.toLocaleString('tr-TR')} ₺</td>
       <td style="padding:11px 16px;text-align:right;color:#6EE7B7;font-size:14px;font-weight:900;">${toplamNet.toLocaleString('tr-TR')} ₺</td>
       <td></td>
     </tr>`;
@@ -5956,6 +6000,7 @@ window.renderMaaslar = function() {
 
   tbody.innerHTML = G_MAASLAR.map(m => {
     const buAyAvans = personelAvansKesintisiHesapla(m.personelId, ayKey);
+    const kalanBakiye = personelKalanAvansBakiyesi(m.personelId, ayKey);
     const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
     const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans;
     const odemeKaydi = G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey);
@@ -5985,7 +6030,7 @@ window.renderMaaslar = function() {
               const ayIndeks = ayFarkiHesapla(a.baslangicAyKey, ayKey);
               return `Taksit ${ayIndeks+1}/${a.taksitSayisi}`;
             }).filter(Boolean);
-          return taksitDetaylari.length ? `<div style="font-size:9px;color:#475569;margin-top:1px;">${taksitDetaylari.join(', ')}</div>` : '';
+          return taksitDetaylari.length ? `<div style="font-size:9px;color:#475569;margin-top:1px;">${taksitDetaylari.join(', ')}${kalanBakiye > 0 ? ` · <span style="color:#EF4444;">Kalan: ${kalanBakiye.toLocaleString('tr-TR')} ₺</span>` : ''}</div>` : '';
         })()}
       </td>
       <td style="padding:12px;text-align:right;font-size:13px;font-weight:800;color:#10B981;">${netOdenecek.toLocaleString('tr-TR')} ₺</td>
@@ -10284,6 +10329,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Aylık Maaş</th>
             <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Fazla Mesai</th>
             <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Avans Kesintisi</th>
+            <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Kalan Avans Borcu</th>
             <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Net Ödenecek</th>
             <th style="text-align:right; padding:10px 16px; color:#fff; font-size:10px; text-transform:uppercase; font-weight:700;">Durum</th>
           </tr></thead>
