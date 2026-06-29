@@ -971,6 +971,7 @@ function subscribeAll() {
       G_CEKLER = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (document.getElementById('muhTab-cekler')?.style.display !== 'none') renderCekler();
       rebuildBildirimler();
+      renderDashboardEkstraBloklar();
     }));
   }
 
@@ -3097,8 +3098,38 @@ function renderDashboardEkstraBloklar() {
           <span style="font-size:12px;font-weight:700;color:#10B981;flex-shrink:0;">${t.toplam} iş</span>
         </div>`;
       }).join('');
-      performansEl.style.animation = '';
-      performansEl.innerHTML = satirHtml + satirHtml;
+  // ── Çek/Senet Vade Hatırlatıcı kayan şeridi ──
+  // Aynı 3 günlük eşiği kullanır (rebuildBildirimler'daki "Çek/Senet Vade
+  // Hatırlatma" ile tutarlı) — yaklaşan (≤3 gün) veya zaten geçmiş vadeli,
+  // hâlâ "beklemede" durumundaki çekleri listeler.
+  const cekEl = document.getElementById('dash-cekler-serit');
+  if (cekEl) {
+    const bugunStr = new Date().toISOString().slice(0,10);
+    const yaklasanCekler = G_CEKLER
+      .filter(c => c.durum === 'beklemede')
+      .map(c => ({ ...c, kalanGun: Math.round((new Date(c.vadeTarihi) - new Date(bugunStr)) / 86400000) }))
+      .filter(c => c.kalanGun <= 3)
+      .sort((a,b) => a.kalanGun - b.kalanGun)
+      .slice(0, 8);
+
+    if (!yaklasanCekler.length) {
+      cekEl.style.animation = 'none';
+      cekEl.innerHTML = `<div style="padding:24px 16px;text-align:center;color:#64748B;font-size:11px;">Yaklaşan vade yok 🎉</div>`;
+    } else {
+      const satirHtml = yaklasanCekler.map(c => {
+        const gecmis = c.kalanGun < 0;
+        const gunMetni = gecmis ? `${Math.abs(c.kalanGun)} gün geçti` : c.kalanGun === 0 ? 'bugün' : `${c.kalanGun} gün kaldı`;
+        return `
+        <div style="padding:9px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(30,41,59,.4);">
+          <div style="min-width:0;overflow:hidden;">
+            <div style="font-size:12px;color:var(--dash-kart-baslik-renk,#E2E8F0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.taraf}</div>
+            <div style="font-size:9.5px;color:#64748B;margin-top:1px;">${c.yon === 'alinan' ? '⬇ Alınan' : '⬆ Verilen'} · ${(c.tutar||0).toLocaleString('tr-TR')} ₺</div>
+          </div>
+          <span style="font-size:10px;font-weight:700;color:${gecmis ? '#EF4444' : '#F59E0B'};flex-shrink:0;">${gunMetni}</span>
+        </div>`;
+      }).join('');
+      cekEl.style.animation = '';
+      cekEl.innerHTML = satirHtml + satirHtml;
     }
   }
 }
@@ -7897,7 +7928,9 @@ body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; backgrou
 .card {
   background: #0A0F1E; border: 1px solid rgba(30,41,59,.8); border-radius: 12px;
   transition: border-color .2s, transform .2s, box-shadow .2s; position: relative; overflow: hidden;
+  --dash-kart-baslik-renk: #E2E8F0;
 }
+body.light-mode .card { --dash-kart-baslik-renk: #0F172A; }
 .card::before {
   content:''; position:absolute; top:0; left:0; right:0; height:2px;
   background: linear-gradient(90deg,transparent,#00ADB5,transparent);
@@ -8514,37 +8547,52 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         </div>
 
         <!-- EK BLOKLAR: Aylık Bakım Takibi özeti, Müşteri Talepleri ve Teknisyen Performansı (kayan şerit) -->
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;" id="dashboardEkstraBloklar">
-          <div class="card" style="padding:16px;cursor:pointer;" onclick="showPage('aylik',null)">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-              <span style="font-size:12px;font-weight:700;color:#E2E8F0;">Aylık Bakım Takibi</span>
-              <span id="dash-aylik-etiket" style="font-size:10px;color:#475569;">—</span>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;" id="dashboardEkstraBloklar">
+          <div class="card dash-renkli-kart" style="padding:16px;cursor:pointer;border-left:4px solid #10B981;" onclick="showPage('aylik',null)">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+              <div style="width:34px;height:34px;border-radius:10px;background:rgba(16,185,129,.15);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">📋</div>
+              <div style="flex:1;min-width:0;">
+                <div style="font-size:10px;font-weight:700;color:#10B981;text-transform:uppercase;letter-spacing:.06em;">Aylık Bakım Takibi</div>
+                <div id="dash-aylik-etiket" style="font-size:9.5px;color:#64748B;margin-top:1px;">—</div>
+              </div>
             </div>
-            <div style="display:flex;align-items:center;gap:12px;">
-              <div id="dash-aylik-oran" style="font-size:24px;font-weight:900;color:#10B981;flex-shrink:0;">—</div>
-              <div class="prog-bar" style="flex:1;"><div id="dash-aylik-bar" class="prog-fill" style="width:0%"></div></div>
-            </div>
+            <div id="dash-aylik-oran" style="font-size:26px;font-weight:900;color:var(--dash-kart-baslik-renk,#0F172A);line-height:1;">—</div>
+            <div class="prog-bar" style="margin-top:8px;"><div id="dash-aylik-bar" class="prog-fill" style="width:0%;background:#10B981;"></div></div>
             <div id="dash-aylik-detay" style="font-size:10.5px;color:#64748B;margin-top:8px;">Yükleniyor...</div>
           </div>
 
-          <div class="card" style="padding:0;overflow:hidden;cursor:pointer;" onclick="showPage('talepler',null)">
-            <div style="padding:13px 16px;border-bottom:1px solid rgba(30,41,59,.5);">
-              <span style="font-size:12px;font-weight:700;color:#E2E8F0;">Müşteri Talepleri</span>
+          <div class="card dash-renkli-kart" style="padding:0;overflow:hidden;cursor:pointer;border-left:4px solid #3B82F6;" onclick="showPage('talepler',null)">
+            <div style="padding:13px 16px;display:flex;align-items:center;gap:10px;">
+              <div style="width:34px;height:34px;border-radius:10px;background:rgba(59,130,246,.15);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">📥</div>
+              <span style="font-size:10px;font-weight:700;color:#3B82F6;text-transform:uppercase;letter-spacing:.06em;">Müşteri Talepleri</span>
             </div>
             <div class="dash-serit-disari">
               <div id="dash-talepler-serit" class="dash-serit-icerik" style="animation-duration:8s;">
-                <div style="padding:24px 16px;text-align:center;color:#475569;font-size:11px;">Yükleniyor...</div>
+                <div style="padding:24px 16px;text-align:center;color:#64748B;font-size:11px;">Yükleniyor...</div>
               </div>
             </div>
           </div>
 
-          <div class="card" style="padding:0;overflow:hidden;cursor:pointer;" onclick="showPage('performans',null)">
-            <div style="padding:13px 16px;border-bottom:1px solid rgba(30,41,59,.5);">
-              <span style="font-size:12px;font-weight:700;color:#E2E8F0;">Teknisyen Performansı</span>
+          <div class="card dash-renkli-kart" style="padding:0;overflow:hidden;cursor:pointer;border-left:4px solid #A855F7;" onclick="showPage('performans',null)">
+            <div style="padding:13px 16px;display:flex;align-items:center;gap:10px;">
+              <div style="width:34px;height:34px;border-radius:10px;background:rgba(168,85,247,.15);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">📊</div>
+              <span style="font-size:10px;font-weight:700;color:#A855F7;text-transform:uppercase;letter-spacing:.06em;">Teknisyen Performansı</span>
             </div>
             <div class="dash-serit-disari">
               <div id="dash-performans-serit" class="dash-serit-icerik" style="animation-duration:10s;">
-                <div style="padding:24px 16px;text-align:center;color:#475569;font-size:11px;">Yükleniyor...</div>
+                <div style="padding:24px 16px;text-align:center;color:#64748B;font-size:11px;">Yükleniyor...</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card dash-renkli-kart admin-only" style="padding:0;overflow:hidden;cursor:pointer;border-left:4px solid #F59E0B;" onclick="showPage('muhasebe',null)">
+            <div style="padding:13px 16px;display:flex;align-items:center;gap:10px;">
+              <div style="width:34px;height:34px;border-radius:10px;background:rgba(245,158,11,.15);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">🧾</div>
+              <span style="font-size:10px;font-weight:700;color:#F59E0B;text-transform:uppercase;letter-spacing:.06em;">Çek/Senet Vade</span>
+            </div>
+            <div class="dash-serit-disari">
+              <div id="dash-cekler-serit" class="dash-serit-icerik" style="animation-duration:8s;">
+                <div style="padding:24px 16px;text-align:center;color:#64748B;font-size:11px;">Yükleniyor...</div>
               </div>
             </div>
           </div>
