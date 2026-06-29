@@ -555,7 +555,8 @@ let G_MESAI = [];               // günlük mesai/puantaj kayıtları
 // G_BINALAR/G_BAKIMLAR gibi ham veriyi bu terime göre filtreler.
 const G_ARAMA = {
   binalar: '', bakimlar: '', arizalar: '', sozlesmeler: '',
-  asansorler: '', odemeler: '', musteriCari: '', talepler: ''
+  asansorler: '', odemeler: '', musteriCari: '', talepler: '',
+  maaslar: '', mesai: '', personelCari: '', giderler: '', cekler: ''
 };
 
 // Genel amaçlı arama yardımcı fonksiyonu: bir nesnenin seçilen
@@ -785,6 +786,11 @@ window.aramaGuncelle = (sayfa, terim) => {
     odemeler: () => renderMuhasebe(),
     musteriCari: () => renderMusteriCariListesi(),
     talepler: () => renderTalepler(),
+    maaslar: () => renderMaaslar(),
+    mesai: () => renderMesaiOzet(),
+    personelCari: () => renderPersonelCari(),
+    giderler: () => renderGiderler(),
+    cekler: () => renderCekler(),
   };
   renderMap[sayfa]?.();
 };
@@ -4593,9 +4599,10 @@ window.renderGiderler = function() {
   const ayFiltre = document.getElementById('giderAyFiltre')?.value || '';
   let data = G_GIDERLER;
   if (ayFiltre) data = data.filter(g => (g.tarih || '').startsWith(ayFiltre));
+  data = data.filter(g => aramaEslesir(G_ARAMA.giderler, g.kategori, g.aciklama));
 
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="5" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Bu dönemde gider kaydı yok.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" style="padding:28px;text-align:center;color:#475569;font-size:13px;">${G_ARAMA.giderler ? 'Aramayla eşleşen gider bulunamadı.' : 'Bu dönemde gider kaydı yok.'}</td></tr>`;
   } else {
     tbody.innerHTML = data.map(g => `
       <tr class="tbl-row">
@@ -4690,11 +4697,12 @@ window.renderCekler = function() {
   const yonFiltre = document.getElementById('cekYonFiltre')?.value || '';
   let data = G_CEKLER;
   if (yonFiltre) data = data.filter(c => c.yon === yonFiltre);
+  data = data.filter(c => aramaEslesir(G_ARAMA.cekler, c.taraf, c.aciklama, c.banka, c.cekNo));
 
   const bugunStr = new Date().toISOString().slice(0,10);
 
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Çek/senet kaydı yok.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">${G_ARAMA.cekler ? 'Aramayla eşleşen çek/senet bulunamadı.' : 'Çek/senet kaydı yok.'}</td></tr>`;
   } else {
     // Vadesi en yakın/geçmiş en üstte
     const sirali = [...data].sort((a,b) => (a.vadeTarihi||'').localeCompare(b.vadeTarihi||''));
@@ -5560,10 +5568,10 @@ function renderPersonelCari() {
 
   const personelList = Object.entries(personelMap).map(([id, v]) => ({
     id, ad: v.ad, avans: v.avans, kullanim: v.kullanim, bakiye: v.avans - v.kullanim
-  }));
+  })).filter(p => aramaEslesir(G_ARAMA.personelCari, p.ad));
 
   if (!personelList.length) {
-    tbody.innerHTML = `<tr><td colspan="5" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz avans kaydı yok.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" style="padding:28px;text-align:center;color:#475569;font-size:13px;">${G_ARAMA.personelCari ? 'Aramayla eşleşen personel bulunamadı.' : 'Henüz avans kaydı yok.'}</td></tr>`;
   } else {
     tbody.innerHTML = personelList.map(p => {
       const bakiyeRenk = p.bakiye < 0 ? '#EF4444' : p.bakiye > 0 ? '#10B981' : '#94A3B8';
@@ -5996,9 +6004,16 @@ window.renderMaaslar = function() {
     return;
   }
 
+  const filtreliMaaslar = G_MAASLAR.filter(m => aramaEslesir(G_ARAMA.maaslar, m.personelAd));
+  if (!filtreliMaaslar.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Aramayla eşleşen personel bulunamadı.</td></tr>`;
+    if (ozetEl) ozetEl.innerHTML = '';
+    return;
+  }
+
   let toplamMaas = 0, toplamOdenen = 0, odenenSayisi = 0, toplamFazlaMesai = 0;
 
-  tbody.innerHTML = G_MAASLAR.map(m => {
+  tbody.innerHTML = filtreliMaaslar.map(m => {
     const buAyAvans = personelAvansKesintisiHesapla(m.personelId, ayKey);
     const kalanBakiye = personelKalanAvansBakiyesi(m.personelId, ayKey);
     const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
@@ -6308,11 +6323,11 @@ window.renderMesaiOzet = () => {
     document.getElementById('mesaiOzetAy').value = ayKey;
   }
 
-  const personeller = G_KULLANICILAR.filter(u => u.rol === 'admin' || u.rol === 'teknisyen');
+  const personeller = G_KULLANICILAR.filter(u => (u.rol === 'admin' || u.rol === 'teknisyen') && aramaEslesir(G_ARAMA.mesai, u.ad));
   const ayKayitlari = G_MESAI.filter(m => (m.tarih||'').startsWith(ayKey));
 
   if (!personeller.length) {
-    ozetEl.innerHTML = `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">Personel kaydı yok.</div>`;
+    ozetEl.innerHTML = `<div style="padding:24px;text-align:center;color:#475569;font-size:13px;">${G_ARAMA.mesai ? 'Aramayla eşleşen personel bulunamadı.' : 'Personel kaydı yok.'}</div>`;
     return;
   }
 
@@ -8964,6 +8979,11 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             </div>
           </div>
 
+          <div class="search-box-wrap" style="margin-bottom:14px;">
+            <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+            <input type="text" class="db-input" placeholder="Personel ara..." oninput="aramaGuncelle('maaslar', this.value)"/>
+          </div>
+
           <div id="maasOzet" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;"></div>
 
           <div class="card" style="padding:0;overflow:hidden;">
@@ -9000,7 +9020,13 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           <div class="card" style="padding:0;overflow:hidden;">
             <div style="padding:13px 18px;border-bottom:1px solid rgba(30,41,59,.5);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
               <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">Aylık Mesai Özeti</h3>
-              <input id="mesaiOzetAy" type="month" class="db-input" style="max-width:160px;" onchange="renderMesaiOzet()"/>
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <div class="search-box-wrap" style="max-width:200px;">
+                  <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+                  <input type="text" class="db-input" placeholder="Personel ara..." oninput="aramaGuncelle('mesai', this.value)"/>
+                </div>
+                <input id="mesaiOzetAy" type="month" class="db-input" style="max-width:160px;" onchange="renderMesaiOzet()"/>
+              </div>
             </div>
             <div id="mesaiAylikOzet"></div>
           </div>
@@ -9011,6 +9037,11 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
             <p style="font-size:11px;color:#475569;">Personele verilen avanslar ve net bakiye durumu</p>
             <button onclick="openModal('mAvans')" class="btn-sm admin-only">+ Avans Ver</button>
+          </div>
+
+          <div class="search-box-wrap" style="margin-bottom:14px;">
+            <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+            <input type="text" class="db-input" placeholder="Personel ara..." oninput="aramaGuncelle('personelCari', this.value)"/>
           </div>
 
           <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
@@ -9079,8 +9110,12 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             </div>
           </div>
 
-          <!-- Ay filtresi + kategori özetleri -->
+          <!-- Arama + Ay filtresi + kategori özetleri -->
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+            <div class="search-box-wrap">
+              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" class="db-input" placeholder="Kategori, açıklama ara..." oninput="aramaGuncelle('giderler', this.value)"/>
+            </div>
             <input id="giderAyFiltre" type="month" class="db-input" style="max-width:180px;" onchange="renderGiderler()"/>
             <button onclick="document.getElementById('giderAyFiltre').value='';renderGiderler()" class="btn-ghost" style="padding:9px 14px;">Tümünü Göster</button>
           </div>
@@ -9116,6 +9151,10 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
           <div id="cekOzetKartlari" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:16px;"></div>
 
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+            <div class="search-box-wrap">
+              <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" class="db-input" placeholder="Taraf, banka, açıklama ara..." oninput="aramaGuncelle('cekler', this.value)"/>
+            </div>
             <select id="cekYonFiltre" class="db-input" style="max-width:220px;" onchange="renderCekler()">
               <option value="">Tümü (Alınan + Verilen)</option>
               <option value="alinan">⬇ Sadece Alınan</option>
