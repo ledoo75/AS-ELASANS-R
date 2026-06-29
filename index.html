@@ -5990,58 +5990,6 @@ window.renderMaaslar = function() {
   const ayKey = document.getElementById('maasAySecim')?.value || new Date().toISOString().slice(0,7);
   if (!document.getElementById('maasAySecim').value) document.getElementById('maasAySecim').value = ayKey;
 
-  // ── GEÇİCİ TANI KUTUSU (mobilden de görülebilir) ──────────────
-  // Avans kesintisinin neden 0 çıktığını teşhis etmek için eklendi.
-  // Sorun çözülünce bu blok kaldırılacak. Her personelin ham avans
-  // kayıtlarını (kesintiTipi, baslangicAyKey, taksitSayisi vb.)
-  // olduğu gibi ekranda gösterir — konsola gerek kalmaz.
-  let taniHtml = '<div style="margin-bottom:14px;padding:8px;background:rgba(239,68,68,.15);border-radius:6px;border:1px solid rgba(239,68,68,.4);">';
-  taniHtml += `<b style="color:#F87171;">TÜM HAM AVANS KAYITLARI (filtresiz, Firestore'da gerçekte ne varsa) — toplam ${G_AVANSLAR.length} kayıt:</b><br/>`;
-  if (!G_AVANSLAR.length) {
-    taniHtml += '&nbsp;&nbsp;(G_AVANSLAR DİZİSİ TAMAMEN BOŞ — Firestore\'dan hiç veri gelmemiş olabilir!)<br/>';
-  } else {
-    G_AVANSLAR.forEach(a => {
-      taniHtml += `&nbsp;&nbsp;• personelAd="${a.personelAd}" | <b>personelId="${a.personelId}"</b> | tutar=${a.tutar} | tarih=${a.tarih} | kesintiTipi=${a.kesintiTipi}<br/>`;
-    });
-  }
-  taniHtml += '</div>';
-  taniHtml += '<div style="margin-bottom:14px;padding:8px;background:rgba(59,130,246,.15);border-radius:6px;border:1px solid rgba(59,130,246,.4);">';
-  taniHtml += `<b style="color:#60A5FA;">TÜM MAAŞ TANIMLARI (G_MAASLAR) — toplam ${G_MAASLAR.length} kayıt:</b><br/>`;
-  G_MAASLAR.forEach(m => {
-    taniHtml += `&nbsp;&nbsp;• personelAd="${m.personelAd}" | <b>personelId="${m.personelId}"</b><br/>`;
-  });
-  taniHtml += '</div>';
-  taniHtml += '<div style="margin-bottom:14px;padding:8px;background:rgba(34,197,94,.15);border-radius:6px;border:1px solid rgba(34,197,94,.4);">';
-  taniHtml += `<b style="color:#4ADE80;">TÜM KULLANICILAR (G_KULLANICILAR, ham) — toplam ${G_KULLANICILAR.length} kayıt:</b><br/>`;
-  G_KULLANICILAR.forEach(u => {
-    taniHtml += `&nbsp;&nbsp;• ad="${u.ad}" | <b>id="${u.id}"</b> | rol="${u.rol}"<br/>`;
-  });
-  taniHtml += '</div>';
-  taniHtml += '<div style="margin-bottom:14px;padding:8px;background:rgba(168,85,247,.15);border-radius:6px;border:1px solid rgba(168,85,247,.4);">';
-  taniHtml += `<b style="color:#C084FC;">AVANS FORMU DROPDOWN'UNUN ŞU ANKİ İÇERİĞİ (f-avans-personel):</b><br/>`;
-  const avansSelEl = document.getElementById('f-avans-personel');
-  if (avansSelEl) {
-    Array.from(avansSelEl.options).forEach(opt => {
-      taniHtml += `&nbsp;&nbsp;• option value="${opt.value}" | text="${opt.text}" | data-ad="${opt.dataset.ad || ''}"<br/>`;
-    });
-  } else {
-    taniHtml += '&nbsp;&nbsp;(dropdown elementi bulunamadı — modal hiç açılmamış olabilir)<br/>';
-  }
-  taniHtml += '</div>';
-  G_MAASLAR.forEach(m => {
-    const buAvanslar = G_AVANSLAR.filter(a => a.personelId === m.personelId);
-    const buAyKesinti = personelAvansKesintisiHesapla(m.personelId, ayKey);
-    taniHtml += `<div style="margin-bottom:10px;padding:8px;background:rgba(0,0,0,.2);border-radius:6px;">
-      <b>${m.personelAd}</b> (personelId: ${m.personelId}) — seçili ayKey: <b>${ayKey}</b> — hesaplanan bu ay kesinti: <b style="color:#F59E0B;">${buAyKesinti}</b><br/>
-      ${buAvanslar.length ? buAvanslar.map(a => `
-        &nbsp;&nbsp;• avans.personelId=${a.personelId} | tutar=${a.tutar} | tarih=${a.tarih} | kesintiTipi=${a.kesintiTipi === undefined ? '<span style="color:red">undefined</span>' : a.kesintiTipi} | baslangicAyKey=${a.baslangicAyKey === undefined ? '<span style="color:red">undefined</span>' : a.baslangicAyKey} | taksitSayisi=${a.taksitSayisi === undefined ? '<span style="color:red">undefined</span>' : a.taksitSayisi} | aylikKesintiTutari=${a.aylikKesintiTutari === undefined ? '<span style="color:red">undefined</span>' : a.aylikKesintiTutari}<br/>
-      `).join('') : '&nbsp;&nbsp;(bu personel için hiç avans kaydı yok)<br/>'}
-    </div>`;
-  });
-  const taniKutusu = document.getElementById('avansTaniKutusu');
-  if (taniKutusu) taniKutusu.innerHTML = taniHtml;
-  // ── TANI KUTUSU SONU ──────────────────────────────────────────
-
   if (!G_MAASLAR.length) {
     tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz maaş tanımı yapılmamış. "+ Maaş Tanımla" ile başlayın.</td></tr>`;
     if (ozetEl) ozetEl.innerHTML = '';
@@ -7462,9 +7410,29 @@ window.deleteKullanici = async (uid) => {
   const silinenRol = targetSnap.exists() ? (targetSnap.data().rolLabel || targetSnap.data().rol || '—') : '—';
 
   const sorumluOlduguBinalar = G_BINALAR.filter(b => b.sorumluTeknisyenId === uid);
-  const uyariMetni = sorumluOlduguBinalar.length
-    ? `\n\n⚠️ Bu kullanıcı şu an ${sorumluOlduguBinalar.length} binanın sorumlu teknisyeni olarak atanmış:\n${sorumluOlduguBinalar.map(b => '• ' + b.ad).join('\n')}\n\nSilerseniz bu binalarda "Sorumlu Teknisyen" alanı boşaltılacak (Atanmadı), başka bir teknisyene yeniden atamanız gerekecek.`
-    : '';
+  // ÖNEMLİ: Bu kullanıcı bir personel olarak maaş/avans/mesai sisteminde
+  // de kayıtlı olabilir. Bu koleksiyonlar personelId'yi (kullanıcının
+  // Firestore doküman ID'sini) SABİT bir referans olarak saklar — eğer
+  // kullanıcı silinip AYNI KİŞİ için yeni bir hesap oluşturulursa
+  // (örn. şifre sıfırlama akışında olduğu gibi yeni bir UID üretilir),
+  // eski personelId artık hiçbir güncel kullanıcıyla eşleşmez ve bu
+  // koleksiyonlardaki kayıtlar "hayalet referans" haline gelir — bu
+  // tam olarak maaş tanımının avans kesintisini göstermemesine yol
+  // açan gerçek bir üretim hatasının kök nedeniydi.
+  const buPersoneleAitMaasTanimi = G_MAASLAR.find(m => m.personelId === uid);
+  const buPersoneleAitAvanslar = G_AVANSLAR.filter(a => a.personelId === uid);
+  const buPersoneleAitMesai = G_MESAI.filter(ms => ms.personelId === uid);
+
+  let uyariMetni = '';
+  if (sorumluOlduguBinalar.length) {
+    uyariMetni += `\n\n⚠️ Bu kullanıcı şu an ${sorumluOlduguBinalar.length} binanın sorumlu teknisyeni olarak atanmış:\n${sorumluOlduguBinalar.map(b => '• ' + b.ad).join('\n')}\n\nSilerseniz bu binalarda "Sorumlu Teknisyen" alanı boşaltılacak (Atanmadı), başka bir teknisyene yeniden atamanız gerekecek.`;
+  }
+  if (buPersoneleAitMaasTanimi) {
+    uyariMetni += `\n\n⚠️ Bu kullanıcının ${buPersoneleAitMaasTanimi.aylikMaas.toLocaleString('tr-TR')} ₺ tutarında bir maaş tanımı var. Silerseniz bu tanım da silinecek — aynı kişi için yeni bir kullanıcı hesabı açarsanız, maaş tanımını YENİDEN GİRMENİZ gerekecek (eski tanım yeni hesaba otomatik bağlanmaz).`;
+  }
+  if (buPersoneleAitAvanslar.length || buPersoneleAitMesai.length) {
+    uyariMetni += `\n\n⚠️ Bu kullanıcının ${buPersoneleAitAvanslar.length} avans ve ${buPersoneleAitMesai.length} mesai kaydı var. Bu geçmiş kayıtlar SİLİNMEYECEK (veri kaybı olmasın diye), ama aynı kişi için yeni bir hesap açarsanız, bu eski kayıtlar yeni hesaba bağlı görünmeyecek — maaş hesaplamasında "0 ₺" gibi yanlış sonuçlara yol açabilir. Aynı kişiye yeniden hesap açacaksanız, bu eski avans/mesai kayıtlarını silip yeniden girmeniz önerilir.`;
+  }
 
   if (!confirm(`Bu kullanıcıyı silmek istediğinizden emin misiniz?\n\nNot: Kullanıcı artık panele giriş yapamayacak.${uyariMetni}`)) return;
 
@@ -7475,6 +7443,12 @@ window.deleteKullanici = async (uid) => {
     // kullanıcı bilgilendirilmiş şekilde oluşsun.
     for (const b of sorumluOlduguBinalar) {
       await updateDoc(doc(db, 'binalar', b.id), { sorumluTeknisyenId: '', sorumluTeknisyenAd: '' });
+    }
+    // Maaş tanımı, kişiye değil HESABA bağlı sayıldığı için silinir —
+    // aksi halde personelId'si artık var olmayan bir kullanıcıyı işaret
+    // eden, kafa karıştırıcı "hayalet" bir tanım olarak kalırdı.
+    if (buPersoneleAitMaasTanimi) {
+      await deleteDoc(doc(db, 'maaslar', buPersoneleAitMaasTanimi.id));
     }
     await deleteDoc(doc(db, 'kullanicilar', uid));
     auditLogYaz('Kullanıcı Silindi', `${silinenAd} (${silinenRol})`);
@@ -7488,6 +7462,15 @@ window.deleteKullanici = async (uid) => {
 // KareKara'daki adminResetPassword mantığı: Client SDK başkasının şifresini
 // doğrudan değiştiremediği için, eski hesabı silip (Firestore'da) aynı email
 // ile YENİ bir Authentication kaydı oluşturup yeni UID'yi Firestore'a yazıyoruz.
+//
+// ÖNEMLİ — KÖK SEBEP DÜZELTMESİ: Bu işlem yeni bir UID ürettiği için,
+// maaslar/avanslar/mesaiKayitlari/avansKullanimlar koleksiyonlarındaki
+// "personelId" alanı ESKİ UID'yi göstermeye devam ederdi — bu tam olarak
+// gerçek bir üretim hatasının kök nedeniydi (bir personelin şifresi
+// sıfırlandıktan sonra, maaş tanımı eski UID'de kalmış, avans/mesai
+// kayıtları yeni UID ile girilmiş, ikisi birbirini hiç bulamamıştı —
+// "Bu Ay Avans: 0 ₺" diye yanlış görünmüştü). Bu yüzden burada artık
+// TÜM bu koleksiyonlardaki ilgili kayıtlar da yeni UID'ye taşınıyor.
 window.resetKullaniciSifre = async (uid, currentEmail, adName) => {
   const newPass = prompt(`${adName} için yeni şifre girin:\n(En az 6 karakter)`);
   if (!newPass) return;
@@ -7511,10 +7494,40 @@ window.resetKullaniciSifre = async (uid, currentEmail, adName) => {
         result = await createUserWithEmailAndPassword(secondaryAuth, finalEmail, newPass);
       } else throw err;
     }
+    const yeniUid = result.user.uid;
 
     // Firestore: yeni UID'ye taşı, eski dokümanı sil
-    await setDoc(doc(db, 'kullanicilar', result.user.uid), { ...oldData, email: finalEmail });
+    await setDoc(doc(db, 'kullanicilar', yeniUid), { ...oldData, email: finalEmail });
     await deleteDoc(doc(db, 'kullanicilar', uid));
+
+    // personelId referanslarını ESKİ UID'den YENİ UID'ye taşı — aksi
+    // halde bu personelin maaş/avans/mesai geçmişi artık var olmayan bir
+    // kullanıcıyı işaret eden "hayalet" kayıtlar haline gelirdi.
+    const maasTanimi = G_MAASLAR.find(m => m.personelId === uid);
+    if (maasTanimi) {
+      await updateDoc(doc(db, 'maaslar', maasTanimi.id), { personelId: yeniUid });
+    }
+    for (const a of G_AVANSLAR.filter(a => a.personelId === uid)) {
+      await updateDoc(doc(db, 'avanslar', a.id), { personelId: yeniUid });
+    }
+    for (const ms of G_MESAI.filter(ms => ms.personelId === uid)) {
+      await updateDoc(doc(db, 'mesaiKayitlari', ms.id), { personelId: yeniUid });
+    }
+    for (const ak of G_AVANS_KULLANIM.filter(ak => ak.personelId === uid)) {
+      await updateDoc(doc(db, 'avansKullanimlar', ak.id), { personelId: yeniUid });
+    }
+    // Geçmiş maaş ödeme kayıtları (maasOdemeleri) de personelId taşır —
+    // bunlar da yeni UID'ye taşınmalı, yoksa geçmiş "Ödendi" işaretleri
+    // yeni hesapla eşleşmeyip tekrar "Bekliyor" görünebilir.
+    for (const o of G_MAAS_ODEMELERI.filter(o => o.personelId === uid)) {
+      await updateDoc(doc(db, 'maasOdemeleri', o.id), { personelId: yeniUid });
+    }
+    // Bina sorumlu teknisyeni referansı da güncellenir (id eşleşmesi
+    // koparsa "hayalet sorumlu" sorunuyla aynı hataya düşülür).
+    for (const b of G_BINALAR.filter(b => b.sorumluTeknisyenId === uid)) {
+      await updateDoc(doc(db, 'binalar', b.id), { sorumluTeknisyenId: yeniUid });
+    }
+
     await signOut(secondaryAuth);
 
     auditLogYaz('Şifre Sıfırlandı (Admin Tarafından)', adName);
@@ -8949,12 +8962,6 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
               <button onclick="topluMaasOdemeYap()" class="btn-sm admin-only" style="background:linear-gradient(135deg,#10B981,#059669);">✓ Tümünü Ödendi İşaretle</button>
               <button onclick="openModal('mMaasTanim')" class="btn-sm admin-only">+ Maaş Tanımla</button>
             </div>
-          </div>
-
-          <!-- GEÇİCİ TANI KUTUSU — sorun çözülünce kaldırılacak -->
-          <div style="background:#1E293B;color:#CBD5E1;padding:14px;border-radius:10px;margin-bottom:16px;font-size:11px;font-family:monospace;line-height:1.6;overflow-x:auto;">
-            <div style="color:#F59E0B;font-weight:700;margin-bottom:8px;">🔍 GEÇİCİ TANI BİLGİSİ (avans sorunu çözülünce kaldırılacak)</div>
-            <div id="avansTaniKutusu"></div>
           </div>
 
           <div id="maasOzet" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;"></div>
