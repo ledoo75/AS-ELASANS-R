@@ -5995,7 +5995,22 @@ window.renderMaaslar = function() {
   // Sorun çözülünce bu blok kaldırılacak. Her personelin ham avans
   // kayıtlarını (kesintiTipi, baslangicAyKey, taksitSayisi vb.)
   // olduğu gibi ekranda gösterir — konsola gerek kalmaz.
-  let taniHtml = '';
+  let taniHtml = '<div style="margin-bottom:14px;padding:8px;background:rgba(239,68,68,.15);border-radius:6px;border:1px solid rgba(239,68,68,.4);">';
+  taniHtml += `<b style="color:#F87171;">TÜM HAM AVANS KAYITLARI (filtresiz, Firestore'da gerçekte ne varsa) — toplam ${G_AVANSLAR.length} kayıt:</b><br/>`;
+  if (!G_AVANSLAR.length) {
+    taniHtml += '&nbsp;&nbsp;(G_AVANSLAR DİZİSİ TAMAMEN BOŞ — Firestore\'dan hiç veri gelmemiş olabilir!)<br/>';
+  } else {
+    G_AVANSLAR.forEach(a => {
+      taniHtml += `&nbsp;&nbsp;• personelAd="${a.personelAd}" | <b>personelId="${a.personelId}"</b> | tutar=${a.tutar} | tarih=${a.tarih} | kesintiTipi=${a.kesintiTipi}<br/>`;
+    });
+  }
+  taniHtml += '</div>';
+  taniHtml += '<div style="margin-bottom:14px;padding:8px;background:rgba(59,130,246,.15);border-radius:6px;border:1px solid rgba(59,130,246,.4);">';
+  taniHtml += `<b style="color:#60A5FA;">TÜM MAAŞ TANIMLARI (G_MAASLAR) — toplam ${G_MAASLAR.length} kayıt:</b><br/>`;
+  G_MAASLAR.forEach(m => {
+    taniHtml += `&nbsp;&nbsp;• personelAd="${m.personelAd}" | <b>personelId="${m.personelId}"</b><br/>`;
+  });
+  taniHtml += '</div>';
   G_MAASLAR.forEach(m => {
     const buAvanslar = G_AVANSLAR.filter(a => a.personelId === m.personelId);
     const buAyKesinti = personelAvansKesintisiHesapla(m.personelId, ayKey);
