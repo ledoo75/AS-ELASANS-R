@@ -1125,32 +1125,6 @@ function setupUI() {
     document.getElementById('topbarNewBakim').style.display = 'flex';
   }
 
-  // ── GEÇİCİ TANI — yetki sorununu kesin teşhis etmek için ──
-  // Önceki sürümde sayfa içi bir kutu kullanılmıştı ama kullanıcı
-  // ekranında görünmedi (muhtemelen dar pencere/sidebar nedeniyle
-  // CSS açısından gizli kaldı). Bu sefer alert() ile gösteriliyor —
-  // bu, hiçbir CSS/scroll/genişlik sorunundan etkilenmeyen, garanti
-  // şekilde ekrana çıkan bir yöntemdir.
-  if (role === 'bina') {
-    const binaNormDeger = binaAdiNormalize(u?.bina);
-    const ornekBinaAdi = G_BINALAR[0]?.ad || '(henüz bina yok)';
-    const ornekBinaNorm = binaAdiNormalize(ornekBinaAdi);
-    const tumBinaAdlari = G_BINALAR.map(b => `"${b.ad}"`).join(', ') || '(hiç bina yok)';
-    setTimeout(() => {
-      alert(
-        '🔍 GEÇİCİ TANI BİLGİSİ\n\n' +
-        'role: "' + role + '"\n' +
-        'u.bina (kullanıcı kaydındaki bina adı): "' + u?.bina + '"\n' +
-        'binaAdiNormalize(u.bina): "' + binaNormDeger + '"\n\n' +
-        'G_BINALAR.length (görünen cari sayısı): ' + G_BINALAR.length + '\n' +
-        'G_BINALAR içindeki TÜM bina adları: ' + tumBinaAdlari + '\n\n' +
-        'İlk binanın adı: "' + ornekBinaAdi + '"\n' +
-        'binaAdiNormalize(ilk bina adı): "' + ornekBinaNorm + '"\n' +
-        'Eşleşiyor mu (u.bina ile ilk bina): ' + (binaNormDeger === ornekBinaNorm ? 'EVET' : 'HAYIR')
-      );
-    }, 800); // setupUI'nin ve veri yüklemesinin oturması için kısa bekleme
-  }
-
 
   // Admin-only butonlar
   document.querySelectorAll('.admin-only').forEach(el => {
@@ -8727,9 +8701,6 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <svg viewBox="0 0 24 24" style="width:14px;height:14px;flex-shrink:0;fill:none;stroke:#00ADB5;stroke-width:2;stroke-linecap:round;"><path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16"/></svg>
       <p id="binaBannerText" style="font-size:11px;color:#00ADB5;font-weight:600;"></p>
     </div>
-
-    <!-- GEÇİCİ TANI KUTUSU — bina yöneticisinin yetki sorununu kesin teşhis için -->
-    <div id="genelTaniKutusu" style="display:none;margin:8px;padding:10px;background:#1E293B;color:#FCD34D;border-radius:8px;font-size:10px;font-family:monospace;line-height:1.6;word-break:break-all;max-height:300px;overflow-y:auto;"></div>
 
     <nav id="sidebarNav" style="flex:1;padding:10px 8px;overflow-y:auto;"></nav>
 
