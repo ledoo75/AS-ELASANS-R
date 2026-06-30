@@ -1125,27 +1125,32 @@ function setupUI() {
     document.getElementById('topbarNewBakim').style.display = 'flex';
   }
 
-  // ── GEÇİCİ TANI KUTUSU — yetki sorununu kesin teşhis etmek için ──
-  const genelTaniEl = document.getElementById('genelTaniKutusu');
-  if (genelTaniEl) {
-    genelTaniEl.style.display = 'block';
-    const uJson = JSON.stringify(u, null, 2);
+  // ── GEÇİCİ TANI — yetki sorununu kesin teşhis etmek için ──
+  // Önceki sürümde sayfa içi bir kutu kullanılmıştı ama kullanıcı
+  // ekranında görünmedi (muhtemelen dar pencere/sidebar nedeniyle
+  // CSS açısından gizli kaldı). Bu sefer alert() ile gösteriliyor —
+  // bu, hiçbir CSS/scroll/genişlik sorunundan etkilenmeyen, garanti
+  // şekilde ekrana çıkan bir yöntemdir.
+  if (role === 'bina') {
     const binaNormDeger = binaAdiNormalize(u?.bina);
     const ornekBinaAdi = G_BINALAR[0]?.ad || '(henüz bina yok)';
     const ornekBinaNorm = binaAdiNormalize(ornekBinaAdi);
-    genelTaniEl.innerHTML = `
-      <b style="color:#F87171;">🔍 GEÇİCİ TANI — currentUserData (u) tam içeriği:</b><br/>
-      <pre style="white-space:pre-wrap;margin:4px 0;">${uJson.replace(/</g,'&lt;')}</pre>
-      <hr style="border-color:rgba(255,255,255,.1);margin:6px 0;"/>
-      <b style="color:#60A5FA;">role değişkeni (setupUI parametresi):</b> "${role}"<br/>
-      <b style="color:#60A5FA;">u.bina:</b> "${u?.bina}"<br/>
-      <b style="color:#60A5FA;">binaAdiNormalize(u.bina):</b> "${binaNormDeger}"<br/>
-      <b style="color:#60A5FA;">Örnek bir Cari Yönetimi bina adı:</b> "${ornekBinaAdi}"<br/>
-      <b style="color:#60A5FA;">binaAdiNormalize(o örnek bina adı):</b> "${ornekBinaNorm}"<br/>
-      <b style="color:#60A5FA;">Bu ikisi eşit mi (eşleşme testi):</b> ${binaNormDeger === ornekBinaNorm ? 'EVET' : 'HAYIR'}<br/>
-      <b style="color:#60A5FA;">G_BINALAR.length (şu an global, bu render anında):</b> ${G_BINALAR.length}
-    `;
+    const tumBinaAdlari = G_BINALAR.map(b => `"${b.ad}"`).join(', ') || '(hiç bina yok)';
+    setTimeout(() => {
+      alert(
+        '🔍 GEÇİCİ TANI BİLGİSİ\n\n' +
+        'role: "' + role + '"\n' +
+        'u.bina (kullanıcı kaydındaki bina adı): "' + u?.bina + '"\n' +
+        'binaAdiNormalize(u.bina): "' + binaNormDeger + '"\n\n' +
+        'G_BINALAR.length (görünen cari sayısı): ' + G_BINALAR.length + '\n' +
+        'G_BINALAR içindeki TÜM bina adları: ' + tumBinaAdlari + '\n\n' +
+        'İlk binanın adı: "' + ornekBinaAdi + '"\n' +
+        'binaAdiNormalize(ilk bina adı): "' + ornekBinaNorm + '"\n' +
+        'Eşleşiyor mu (u.bina ile ilk bina): ' + (binaNormDeger === ornekBinaNorm ? 'EVET' : 'HAYIR')
+      );
+    }, 800); // setupUI'nin ve veri yüklemesinin oturması için kısa bekleme
   }
+
 
   // Admin-only butonlar
   document.querySelectorAll('.admin-only').forEach(el => {
