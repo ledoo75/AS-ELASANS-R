@@ -1125,6 +1125,28 @@ function setupUI() {
     document.getElementById('topbarNewBakim').style.display = 'flex';
   }
 
+  // ── GEÇİCİ TANI KUTUSU — yetki sorununu kesin teşhis etmek için ──
+  const genelTaniEl = document.getElementById('genelTaniKutusu');
+  if (genelTaniEl) {
+    genelTaniEl.style.display = 'block';
+    const uJson = JSON.stringify(u, null, 2);
+    const binaNormDeger = binaAdiNormalize(u?.bina);
+    const ornekBinaAdi = G_BINALAR[0]?.ad || '(henüz bina yok)';
+    const ornekBinaNorm = binaAdiNormalize(ornekBinaAdi);
+    genelTaniEl.innerHTML = `
+      <b style="color:#F87171;">🔍 GEÇİCİ TANI — currentUserData (u) tam içeriği:</b><br/>
+      <pre style="white-space:pre-wrap;margin:4px 0;">${uJson.replace(/</g,'&lt;')}</pre>
+      <hr style="border-color:rgba(255,255,255,.1);margin:6px 0;"/>
+      <b style="color:#60A5FA;">role değişkeni (setupUI parametresi):</b> "${role}"<br/>
+      <b style="color:#60A5FA;">u.bina:</b> "${u?.bina}"<br/>
+      <b style="color:#60A5FA;">binaAdiNormalize(u.bina):</b> "${binaNormDeger}"<br/>
+      <b style="color:#60A5FA;">Örnek bir Cari Yönetimi bina adı:</b> "${ornekBinaAdi}"<br/>
+      <b style="color:#60A5FA;">binaAdiNormalize(o örnek bina adı):</b> "${ornekBinaNorm}"<br/>
+      <b style="color:#60A5FA;">Bu ikisi eşit mi (eşleşme testi):</b> ${binaNormDeger === ornekBinaNorm ? 'EVET' : 'HAYIR'}<br/>
+      <b style="color:#60A5FA;">G_BINALAR.length (şu an global, bu render anında):</b> ${G_BINALAR.length}
+    `;
+  }
+
   // Admin-only butonlar
   document.querySelectorAll('.admin-only').forEach(el => {
     el.style.display = role === 'admin' ? '' : 'none';
@@ -8700,6 +8722,9 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <svg viewBox="0 0 24 24" style="width:14px;height:14px;flex-shrink:0;fill:none;stroke:#00ADB5;stroke-width:2;stroke-linecap:round;"><path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16"/></svg>
       <p id="binaBannerText" style="font-size:11px;color:#00ADB5;font-weight:600;"></p>
     </div>
+
+    <!-- GEÇİCİ TANI KUTUSU — bina yöneticisinin yetki sorununu kesin teşhis için -->
+    <div id="genelTaniKutusu" style="display:none;margin:8px;padding:10px;background:#1E293B;color:#FCD34D;border-radius:8px;font-size:10px;font-family:monospace;line-height:1.6;word-break:break-all;max-height:300px;overflow-y:auto;"></div>
 
     <nav id="sidebarNav" style="flex:1;padding:10px 8px;overflow-y:auto;"></nav>
 
