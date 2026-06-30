@@ -183,17 +183,29 @@ onAuthStateChanged(auth, async (user) => {
   if (user) {
     try {
       const userRef = doc(db, 'kullanicilar', user.uid);
-      let snap = await getDoc(userRef);
+      // ÖNEMLİ: getDoc() çağrısı, Firestore Security Rules tarafında bir
+      // sorun varsa (örn. iç içe get() çağrıları, kural mantığı hatası)
+      // bazen ne başarı ne de hata ile sonuçlanmadan SESSİZCE ASKIDA
+      // KALABİLİR — bu durumda doLogin()'deki 15 saniyelik zaman aşımı
+      // koruması işe yaramaz, çünkü o sadece signInWithEmailAndPassword'u
+      // kapsar (bu zaten tamamlanmış olur), buradaki getDoc'u kapsamaz.
+      // Bu yüzden burada AYRI bir zaman aşımı yarışı (Promise.race)
+      // kullanılır — giriş ekranının sonsuza dek dönen yükleme animasyonunda
+      // takılı kalmasını önler, kullanıcıya açık bir hata gösterir.
+      const zamanAsimi = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Firestore yanıt vermedi (12sn). Firestore Rules ayarlarını veya internet bağlantınızı kontrol edin.')), 12000)
+      );
+      let snap = await Promise.race([getDoc(userRef), zamanAsimi]);
 
       // Firestore'da profil yoksa otomatik oluştur
       if (!snap.exists()) {
         const autoProfile = AUTO_PROFILES[user.email];
         if (autoProfile) {
-          await setDoc(userRef, {
-            ...autoProfile,
-            olusturuldu: serverTimestamp()
-          });
-          snap = await getDoc(userRef);
+          await Promise.race([
+            setDoc(userRef, { ...autoProfile, olusturuldu: serverTimestamp() }),
+            zamanAsimi
+          ]);
+          snap = await Promise.race([getDoc(userRef), zamanAsimi]);
         } else {
           await signOut(auth);
           showLoginError('Profil yok. USERNAME_MAP/AUTO_PROFILES\'e eklenmemiş: ' + user.email);
@@ -217,6 +229,8 @@ onAuthStateChanged(auth, async (user) => {
       }));
     } catch (e) {
       // Firestore okuma/yazma hatası (çoğunlukla Security Rules izin vermiyor)
+      // VEYA yukarıdaki zaman aşımı koruması tetiklendiğinde buraya düşer —
+      // her iki durumda da kullanıcı artık sonsuz dönen animasyonda kalmaz.
       showLoginError('Firestore hatası: ' + (e.code || e.message));
       resetLoginButton();
       await signOut(auth).catch(()=>{});
