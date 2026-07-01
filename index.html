@@ -37,7 +37,8 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
          signOut, onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc,
-         onSnapshot, query, orderBy, limit, serverTimestamp, getDoc, setDoc }
+         onSnapshot, query, orderBy, limit, serverTimestamp, getDoc, setDoc,
+         initializeFirestore, persistentLocalCache, persistentMultipleTabManager }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -55,7 +56,21 @@ const firebaseConfig = {
 
 const app  = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db   = getFirestore(app);
+
+// Firestore — IndexedDB tabanlı offline cache etkin.
+// Bu sayede sayfa açılır açılmaz önbellekteki veri ANINDA gösterilir,
+// arka planda Firebase'den güncel veri gelince otomatik güncellenir.
+// Çoklu sekme desteği de etkin (aynı anda birden fazla sekmede açılabilir).
+let db;
+try {
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  });
+} catch(e) {
+  // persistentLocalCache zaten başlatılmışsa (örn. hot-reload) hata verebilir
+  // — o zaman normal getFirestore ile devam et.
+  db = getFirestore(app);
+}
 
 // İKİNCİL (SECONDARY) APP — KareKara yöntemi:
 // Yeni kullanıcı oluştururken bu ayrı app instance'ını kullanıyoruz,
