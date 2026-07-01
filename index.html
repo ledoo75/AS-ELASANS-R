@@ -3277,6 +3277,81 @@ function renderDashboardEkstraBloklar() {
       cekEl.innerHTML = satirHtml + satirHtml;
     }
   }
+  // ── Sözleşme Yenileme Takvimi ──
+  // Önümüzdeki 90 gün içinde bitecek veya zaten geçmiş (hâlâ aktif/beklemede)
+  // sözleşmeleri listeler. Admin'in "hangi müşteri yenileme bekliyor" sorusunu
+  // dashboard'dan çevirmesini sağlar.
+  const sozlesmeSeritEl = document.getElementById('dash-sozlesme-serit');
+  if (sozlesmeSeritEl) {
+    const bugunStr = new Date().toISOString().slice(0,10);
+    const yaklasanSozlesmeler = G_SOZLESMELER
+      .filter(s => s.bitisTarihi)
+      .map(s => {
+        const kalanGun = Math.ceil((new Date(s.bitisTarihi) - new Date(bugunStr)) / 86400000);
+        return { ...s, kalanGun };
+      })
+      .filter(s => s.kalanGun <= 90)
+      .sort((a, b) => a.kalanGun - b.kalanGun)
+      .slice(0, 8);
+
+    if (!yaklasanSozlesmeler.length) {
+      sozlesmeSeritEl.style.animation = 'none';
+      sozlesmeSeritEl.innerHTML = `<div style="padding:24px 16px;text-align:center;color:#64748B;font-size:11px;">Önümüzdeki 90 günde biten sözleşme yok 🎉</div>`;
+    } else {
+      const satirHtml = yaklasanSozlesmeler.map(s => {
+        const gecmis = s.kalanGun < 0;
+        const renk = gecmis ? '#EF4444' : s.kalanGun <= 30 ? '#F59E0B' : '#94A3B8';
+        const gunMetni = gecmis
+          ? `${Math.abs(s.kalanGun)} gün geçti`
+          : s.kalanGun === 0 ? 'Bugün bitiyor!'
+          : `${s.kalanGun} gün kaldı`;
+        return `
+        <div style="padding:9px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(30,41,59,.4);">
+          <div style="min-width:0;overflow:hidden;">
+            <div style="font-size:12px;color:#E2E8F0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.bina||'—'}</div>
+            <div style="font-size:9.5px;color:#64748B;margin-top:1px;">${s.tip||'Sözleşme'} · ${new Date(s.bitisTarihi).toLocaleDateString('tr-TR')}</div>
+          </div>
+          <span style="font-size:10px;font-weight:700;color:${renk};flex-shrink:0;">${gunMetni}</span>
+        </div>`;
+      }).join('');
+      sozlesmeSeritEl.style.animation = '';
+      sozlesmeSeritEl.innerHTML = satirHtml + satirHtml;
+    }
+  }
+
+  // ── İzinli Personel ──
+  const izinIcerikEl = document.getElementById('dash-izin-icerik');
+  if (izinIcerikEl) {
+    const bugunStr2 = new Date().toISOString().slice(0,10);
+    // G_MESAI_KAYITLARI'ndan "izin" tipindeki ve bugün geçerli olanları bul
+    const izinliPersonel = (G_MESAI || []).filter(m => {
+      if (m.tip !== 'izin') return false;
+      const bas = m.tarihBaslangic || m.tarih || '';
+      const bit = m.tarihBitis || m.tarih || '';
+      return bas <= bugunStr2 && bugunStr2 <= bit;
+    });
+
+    if (!izinliPersonel.length) {
+      izinIcerikEl.innerHTML = `<div style="padding:8px 0 4px;text-align:center;color:#64748B;font-size:11px;">Bugün izinli personel yok ✅</div>`;
+    } else {
+      izinIcerikEl.innerHTML = izinliPersonel.map(m => {
+        const kullanici = G_KULLANICILAR.find(u => u.id === m.personelId);
+        const ad = kullanici?.ad || m.personelAd || '—';
+        const initials = ad.split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+        const bitStr = m.tarihBitis && m.tarihBitis !== m.tarih
+          ? ` → ${new Date(m.tarihBitis+'T00:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})}`
+          : '';
+        return `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(30,41,59,.3);">
+          <div style="width:24px;height:24px;border-radius:7px;background:rgba(6,182,212,.2);display:flex;align-items:center;justify-content:center;color:#06B6D4;font-size:9px;font-weight:800;flex-shrink:0;">${initials}</div>
+          <div style="min-width:0;">
+            <div style="font-size:12px;color:#E2E8F0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${ad}</div>
+            <div style="font-size:9.5px;color:#64748B;">🏖️ İzinli${bitStr}</div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+  }
 }
 
 function renderPerformans() {
@@ -6407,6 +6482,9 @@ window.mesaiGunShift = (delta, buGun) => {
 window.toggleMesaiSaatAlanlari = () => {
   const durum = document.getElementById('f-mesai-durum').value;
   document.getElementById('f-mesai-saat-wrap').style.display = durum === 'calisti' ? 'grid' : 'none';
+  // İzinli seçilince bitis tarihi alanı açılır — çok günlü izin girişi için
+  const izinWrap = document.getElementById('f-mesai-izin-bitis-wrap');
+  if (izinWrap) izinWrap.style.display = durum === 'izinli' ? 'block' : 'none';
 };
 
 function saatFarkiHesapla(giris, cikis) {
@@ -6482,12 +6560,20 @@ window.saveMesai = async () => {
   const cikis       = document.getElementById('f-mesai-cikis').value;
   const not         = document.getElementById('f-mesai-not').value.trim();
   const editId      = document.getElementById('f-mesai-editId').value;
+  // İzin bitiş tarihi — sadece "izinli" seçilince anlamlı
+  const izinBitis   = durum === 'izinli'
+    ? (document.getElementById('f-mesai-izin-bitis').value || tarih)
+    : null;
 
   if (!personelId || !tarih) { alert('Personel ve tarih zorunludur.'); return; }
 
   const calisilanSaat = durum === 'calisti' ? saatFarkiHesapla(giris, cikis) : 0;
   const data = {
     personelId, personelAd, tarih, durum,
+    // İzin kayıtlarında dashboard'ın today-range filtresi için kullanılır
+    tarihBaslangic: tarih,
+    tarihBitis: izinBitis || tarih,
+    tip: durum === 'izinli' ? 'izin' : 'mesai',
     giris: durum==='calisti' ? giris : null,
     cikis: durum==='calisti' ? cikis : null,
     calisilanSaat, not, guncellendi: serverTimestamp()
@@ -6508,13 +6594,14 @@ window.saveMesai = async () => {
 window.editMesai = async (id) => {
   const m = G_MESAI.find(x => x.id === id);
   if (!m) return;
-  document.getElementById('f-mesai-personel').value = m.personelId;
-  document.getElementById('f-mesai-tarih').value     = m.tarih;
-  document.getElementById('f-mesai-durum').value     = m.durum;
-  document.getElementById('f-mesai-giris').value     = m.giris || '08:30';
-  document.getElementById('f-mesai-cikis').value     = m.cikis || '18:00';
-  document.getElementById('f-mesai-not').value       = m.not || '';
-  document.getElementById('f-mesai-editId').value    = id;
+  document.getElementById('f-mesai-personel').value        = m.personelId;
+  document.getElementById('f-mesai-tarih').value            = m.tarih;
+  document.getElementById('f-mesai-durum').value            = m.durum;
+  document.getElementById('f-mesai-giris').value            = m.giris || '08:30';
+  document.getElementById('f-mesai-cikis').value            = m.cikis || '18:00';
+  document.getElementById('f-mesai-not').value              = m.not || '';
+  document.getElementById('f-mesai-izin-bitis').value       = (m.tarihBitis && m.tarihBitis !== m.tarih) ? m.tarihBitis : '';
+  document.getElementById('f-mesai-editId').value           = id;
   toggleMesaiSaatAlanlari();
   mesaiOnizlemeGuncelle();
   document.getElementById('mMesaiTitle').textContent = 'Mesai Kaydını Düzenle';
@@ -6536,6 +6623,7 @@ function resetMesaiForm() {
   document.getElementById('f-mesai-giris').value = '08:30';
   document.getElementById('f-mesai-cikis').value = '18:00';
   document.getElementById('f-mesai-not').value = '';
+  document.getElementById('f-mesai-izin-bitis').value = '';
   toggleMesaiSaatAlanlari();
   document.getElementById('mesaiOnizlemeKutusu').style.display = 'none';
   document.getElementById('mMesaiTitle').textContent = 'Mesai Kaydı';
@@ -9254,6 +9342,30 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
               </div>
             </div>
           </div>
+
+          <!-- Sözleşme Yenileme Takvimi -->
+          <div class="card dash-renkli-kart admin-only" style="padding:0;overflow:hidden;cursor:pointer;border-left:4px solid #EF4444;" onclick="showPage('sozlesmeler',null)">
+            <div style="padding:13px 16px;display:flex;align-items:center;gap:10px;">
+              <div style="width:34px;height:34px;border-radius:10px;background:rgba(239,68,68,.15);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">📅</div>
+              <span style="font-size:10px;font-weight:700;color:#EF4444;text-transform:uppercase;letter-spacing:.06em;">Sözleşme Yenileme</span>
+            </div>
+            <div class="dash-serit-disari">
+              <div id="dash-sozlesme-serit" class="dash-serit-icerik" style="animation-duration:9s;">
+                <div style="padding:24px 16px;text-align:center;color:#64748B;font-size:11px;">Yükleniyor...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- İzinli Personel -->
+          <div class="card dash-renkli-kart admin-only" style="padding:0;overflow:hidden;cursor:pointer;border-left:4px solid #06B6D4;" onclick="showPage('muhasebe',null)">
+            <div style="padding:13px 16px;display:flex;align-items:center;gap:10px;">
+              <div style="width:34px;height:34px;border-radius:10px;background:rgba(6,182,212,.15);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">🏖️</div>
+              <span style="font-size:10px;font-weight:700;color:#06B6D4;text-transform:uppercase;letter-spacing:.06em;">İzinli Personel</span>
+            </div>
+            <div id="dash-izin-icerik" style="padding:0 16px 12px;">
+              <div style="padding:16px 0;text-align:center;color:#64748B;font-size:11px;">Yükleniyor...</div>
+            </div>
+          </div>
         </div>
 
         <!-- BİNA YÖNETİCİSİ İÇİN SADE GÖRÜNÜM -->
@@ -10670,6 +10782,13 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div id="f-mesai-saat-wrap" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Giriş Saati</label><input id="f-mesai-giris" type="time" class="db-input" value="08:30" oninput="mesaiOnizlemeGuncelle()"/></div>
         <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Çıkış Saati</label><input id="f-mesai-cikis" type="time" class="db-input" value="18:00" oninput="mesaiOnizlemeGuncelle()"/></div>
+      </div>
+
+      <!-- İzin bitiş tarihi — sadece "İzinli" seçilince görünür -->
+      <div id="f-mesai-izin-bitis-wrap" style="display:none;">
+        <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İzin Bitiş Tarihi</label>
+        <input id="f-mesai-izin-bitis" type="date" class="db-input"/>
+        <p style="font-size:10px;color:#64748B;margin-top:5px;">ℹ️ Birden fazla günlük izin için. Tek günlük izinlerde boş bırakabilirsiniz (başlangıç tarihi = bitiş tarihi).</p>
       </div>
 
       <!-- Canlı ücret önizlemesi -->
