@@ -328,6 +328,7 @@ window.doLogin = async () => {
   const beniHatirla = document.getElementById('luBeniHatirla')?.checked;
 
   if (!username || !pass) { showLoginError('Kullanıcı adı ve şifre giriniz.'); return; }
+  console.log('[doLogin] başladı, username=', username);
 
   // "Beni Hatırla" işaretliyse kullanıcı adı/şifreyi tarayıcıda sakla,
   // işaretli değilse önceden kaydedilmiş olabilecek bilgiyi temizle.
@@ -343,13 +344,16 @@ window.doLogin = async () => {
   }
 
   const email = username.includes('@') ? username : usernameToFakeEmail(username);
+  console.log('[doLogin] hesaplanan email=', email);
 
   err.style.display = 'none';
   btn.innerHTML = '<span class="spinner"></span>';
   btn.disabled = true;
+  console.log('[doLogin] spinner gösterildi, signInWithEmailAndPassword çağrılıyor...');
 
   // 15 saniye sonra hala spinner dönüyorsa zorla durdur ve sebebini göster
   const timeoutId = setTimeout(() => {
+    console.log('[doLogin] 15sn TIMEOUT tetiklendi');
     showLoginError('Zaman aşımı: Firebase\'e bağlanılamadı. İnternet/domain ayarlarını kontrol edin.');
     btn.innerHTML = 'Giriş Yap';
     btn.disabled = false;
@@ -357,14 +361,17 @@ window.doLogin = async () => {
 
   try {
     await signInWithEmailAndPassword(auth, email, pass);
+    console.log('[doLogin] signInWithEmailAndPassword BAŞARILI');
     clearTimeout(timeoutId);
     // onAuthStateChanged devralır — ama o da hata verebilir, aşağıda yakalıyoruz
   } catch (e) {
+    console.log('[doLogin] signInWithEmailAndPassword HATA VERDİ:', e.code, e.message);
     clearTimeout(timeoutId);
     showLoginError(firebaseHataMesajiCevir(e.code, e.message));
     btn.innerHTML = 'Giriş Yap';
     btn.disabled = false;
   }
+  console.log('[doLogin] fonksiyon sonuna gelindi');
 };
 
 window.doLogout = async () => {
@@ -480,6 +487,8 @@ let G_BAKIMLAR = [];
 let G_ARIZALAR = [];
 let G_COZUM_PARCA_SAYAC = 0; // Arıza çözüm modalındaki parça satırları için sayaç
 let G_CPB_PARCA_SAYAC = 0;   // Cari ekranı "Parça/Onarım Borcu Ekle" modalındaki sayaç
+let G_TEKLIF_KALEM_SAYAC = 0; // Teklif/Proforma formundaki kalem satırı sayacı
+let G_TEKLIFLER = [];         // Teklif/Proforma kayıtları
 let G_SOZLESMELER = [];
 let G_BINALAR = [];
 let G_AUDIT_LOG = []; // Sistem Audit Log — kim ne zaman ne yaptı (son 200 kayıt, eskiler otomatik silinir)
@@ -503,6 +512,7 @@ const NAV_DEFS = {
     { id:'asansorler',  icon:'elevator', label:'Asansör Dosyası' },
     { id:'bakimlar',    icon:'tool',     label:'Bakım Takibi' },
     { id:'arizalar',    icon:'alert',    label:'Arıza Kayıtları' },
+    { id:'teklifler',   icon:'quote',    label:'Teklif/Proforma' },
     { id:'sozlesmeler', icon:'file',     label:'Sözleşme & Fatura' },
     { id:'muhasebe',    icon:'cash',     label:'Muhasebe' },
     { id:'performans',  icon:'chart',    label:'Teknisyen Performans' },
@@ -570,7 +580,8 @@ let G_MESAI = [];               // günlük mesai/puantaj kayıtları
 const G_ARAMA = {
   binalar: '', bakimlar: '', arizalar: '', sozlesmeler: '',
   asansorler: '', odemeler: '', musteriCari: '', talepler: '',
-  maaslar: '', mesai: '', personelCari: '', giderler: '', cekler: ''
+  maaslar: '', mesai: '', personelCari: '', giderler: '', cekler: '',
+  teklifler: ''
 };
 
 // Genel amaçlı arama yardımcı fonksiyonu: bir nesnenin seçilen
@@ -805,6 +816,7 @@ window.aramaGuncelle = (sayfa, terim) => {
     personelCari: () => renderPersonelCari(),
     giderler: () => renderGiderler(),
     cekler: () => renderCekler(),
+    teklifler: () => renderTeklifler(),
   };
   renderMap[sayfa]?.();
 };
@@ -948,6 +960,15 @@ function subscribeAll() {
     renderSozlesmeler(data);
     rebuildBildirimler();
   }));
+
+  // Teklif/Proforma (yeni müşteriye fiyat teklifi — HASSAS TİCARİ VERİ, sadece admin)
+  if (role === 'admin') {
+    const teklifQ = query(collection(db, 'teklifler'), orderBy('tarih', 'desc'));
+    unsubscribers.push(onSnapshot(teklifQ, snap => {
+      G_TEKLIFLER = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (document.getElementById('pg-teklifler')?.classList.contains('active')) renderTeklifler();
+    }));
+  }
 
   // Sistem Audit Log — sadece admin görür, sadece son 200 kayıt çekilir
   // (zaten auditLogYaz() koleksiyonu 200'ün üzerine çıkarmıyor, limit
@@ -1122,6 +1143,7 @@ function setupUI() {
     checklist:`<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>`,
     route:    `<circle cx="6" cy="19" r="2.5" stroke-width="2"/><circle cx="18" cy="5" r="2.5" stroke-width="2"/><path stroke-linecap="round" stroke-width="2" d="M8.3 17.5L13 9M15.5 7.3L18 5M8 19h6a3 3 0 003-3v-1a3 3 0 013-3"/>`,
     inbox:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>`,
+    quote:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m-6 4h6m-6 4h3m6-12H6a2 2 0 00-2 2v14l4-3h10a2 2 0 002-2V5a2 2 0 00-2-2z"/>`,
   };
 
   const items  = (NAV_DEFS[role] || NAV_DEFS.bina).filter(item => izinliSet.has(item.id));
@@ -1156,7 +1178,7 @@ function setupUI() {
 // Sayfa bazlı erişim kısıtlaması — UI'da gizli olsa da konsoldan zorlanmaya karşı.
 // Artık kullaniciIzinliSayfalar() üzerinden, admin'in kullanıcıya özel
 // ayarladığı (veya rol varsayılanı) izinli sayfa listesine bakılıyor.
-const ADMIN_ONLY_PAGES = ['kullanicilar'];
+const ADMIN_ONLY_PAGES = ['kullanicilar', 'teklifler'];
 
 window.showPage = (name, btn) => {
   const role = currentUserData?.rol;
@@ -1191,6 +1213,7 @@ window.showPage = (name, btn) => {
   document.getElementById('pageTitle').textContent = titles[name] || name;
   if (name === 'takvim') renderCalendar();
   if (name === 'performans') renderPerformans();
+  if (name === 'teklifler') renderTeklifler();
   if (name === 'muhasebe') {
     renderMuhasebe();
     // Bina yöneticisi için "Ödemeler" sekmesi (admin'in genel tahsilat
@@ -7452,6 +7475,222 @@ async function tryCpbKaydet(binaAdi, tarih, baslik, not, parcalar, iscilik, gene
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   TEKLİF / PROFORMA OLUŞTURMA
+   Yeni müşteriye (henüz cari olarak kayıtlı olması ZORUNLU DEĞİL —
+   teklif aşamasında müşteri adı/iletişim serbest metin olarak girilir)
+   fiyat teklifi hazırlama. Kalem listesi (açıklama + miktar + birim
+   fiyat) Parça/Onarım Borcu formundakiyle aynı UX desenini kullanır.
+   Durum: taslak → gönderildi → kabul edildi / reddedildi.
+═══════════════════════════════════════════════════════════════ */
+const TEKLIF_DURUM_BILGI = {
+  taslak:     { etiket: 'Taslak',         renk: '#94A3B8' },
+  gonderildi: { etiket: 'Gönderildi',     renk: '#3B82F6' },
+  kabul:      { etiket: 'Kabul Edildi',   renk: '#10B981' },
+  red:        { etiket: 'Reddedildi',     renk: '#EF4444' },
+};
+
+window.resetTeklifForm = function() {
+  document.getElementById('f-teklif-musteriAdi').value = '';
+  document.getElementById('f-teklif-yetkili').value = '';
+  document.getElementById('f-teklif-telefon').value = '';
+  document.getElementById('f-teklif-adres').value = '';
+  document.getElementById('f-teklif-tarih').value = new Date().toISOString().slice(0,10);
+  document.getElementById('f-teklif-gecerlilik').value = '15';
+  document.getElementById('f-teklif-not').value = '';
+  document.getElementById('f-teklif-kdvDahil').checked = false;
+  document.getElementById('f-teklif-kalemListesi').innerHTML = '';
+  G_TEKLIF_KALEM_SAYAC = 0;
+  teklifKalemEkle(); // en az 1 boş satırla başlat
+  teklifToplamGuncelle();
+  document.getElementById('f-teklif-editId').value = '';
+  document.getElementById('mTeklifTitle').textContent = 'Yeni Teklif/Proforma Oluştur';
+  openModal('mTeklif');
+};
+
+window.teklifKalemEkle = (mevcutDeger) => {
+  const rowId = `teklif-kalem-${G_TEKLIF_KALEM_SAYAC++}`;
+  const wrap = document.getElementById('f-teklif-kalemListesi');
+  const row = document.createElement('div');
+  row.id = rowId;
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 56px 90px 90px 26px;gap:6px;align-items:center;margin-bottom:6px;';
+  row.innerHTML = `
+    <input type="text" class="db-input teklif-kalem-ad" placeholder="Açıklama (örn. Asansör Bakım Hizmeti - Aylık)" style="font-size:12px;padding:7px 9px;" value="${mevcutDeger?.ad || ''}" oninput="teklifToplamGuncelle()"/>
+    <input type="number" class="db-input teklif-kalem-miktar" placeholder="Miktar" min="1" value="${mevcutDeger?.miktar || 1}" style="font-size:12px;padding:7px 6px;" oninput="teklifToplamGuncelle()"/>
+    <input type="text" inputmode="decimal" class="db-input teklif-kalem-fiyat" placeholder="Birim ₺" value="${mevcutDeger?.birimFiyat || ''}" style="font-size:12px;padding:7px 6px;" oninput="teklifToplamGuncelle()"/>
+    <div class="teklif-kalem-tutar" style="font-size:12px;font-weight:700;color:#10B981;text-align:right;padding:0 4px;">0 ₺</div>
+    <button type="button" onclick="document.getElementById('${rowId}').remove(); teklifToplamGuncelle();" style="color:#EF4444;background:none;border:none;cursor:pointer;font-size:16px;line-height:1;">×</button>`;
+  wrap.appendChild(row);
+};
+
+function teklifKalemleriOku() {
+  return [...document.querySelectorAll('#f-teklif-kalemListesi > div')].map(row => {
+    const ad = row.querySelector('.teklif-kalem-ad').value.trim();
+    const miktar = parseFloat(row.querySelector('.teklif-kalem-miktar').value) || 0;
+    const birimFiyat = Math.max(0, tutarParse(row.querySelector('.teklif-kalem-fiyat').value) || 0);
+    const tutar = miktar * birimFiyat;
+    const tutarEl = row.querySelector('.teklif-kalem-tutar');
+    if (tutarEl) tutarEl.textContent = `${tutar.toLocaleString('tr-TR')} ₺`;
+    return { ad, miktar, birimFiyat, tutar };
+  }).filter(k => k.ad || k.tutar > 0);
+}
+
+window.teklifToplamGuncelle = () => {
+  const kalemler = teklifKalemleriOku();
+  const araToplam = kalemler.reduce((s,k) => s + k.tutar, 0);
+  const kdvDahil = document.getElementById('f-teklif-kdvDahil').checked;
+  const kdvTutari = kdvDahil ? araToplam * 0.20 : 0;
+  const genelToplam = araToplam + kdvTutari;
+  document.getElementById('f-teklif-araToplam').textContent = `${araToplam.toLocaleString('tr-TR')} ₺`;
+  document.getElementById('f-teklif-kdvGoster').textContent = `${kdvTutari.toLocaleString('tr-TR')} ₺`;
+  document.getElementById('f-teklif-genelToplam').textContent = `${genelToplam.toLocaleString('tr-TR')} ₺`;
+};
+
+window.teklifKaydet = async () => {
+  const musteriAdi = document.getElementById('f-teklif-musteriAdi').value.trim();
+  const yetkili = document.getElementById('f-teklif-yetkili').value.trim();
+  const telefon = document.getElementById('f-teklif-telefon').value.trim();
+  const adres = document.getElementById('f-teklif-adres').value.trim();
+  const tarih = document.getElementById('f-teklif-tarih').value || new Date().toISOString().slice(0,10);
+  const gecerlilikGun = parseInt(document.getElementById('f-teklif-gecerlilik').value) || 15;
+  const not = document.getElementById('f-teklif-not').value.trim();
+  const kdvDahil = document.getElementById('f-teklif-kdvDahil').checked;
+  const kalemler = teklifKalemleriOku();
+  const editId = document.getElementById('f-teklif-editId').value;
+
+  if (!musteriAdi) { alert('Müşteri/firma adı zorunludur.'); return; }
+  const araToplam = kalemler.reduce((s,k) => s + k.tutar, 0);
+  if (araToplam <= 0) { alert('En az bir kalem girmelisiniz.'); return; }
+  const kdvTutari = kdvDahil ? araToplam * 0.20 : 0;
+  const genelToplam = araToplam + kdvTutari;
+
+  const gecerlilikTarihi = new Date(tarih);
+  gecerlilikTarihi.setDate(gecerlilikTarihi.getDate() + gecerlilikGun);
+
+  const data = {
+    musteriAdi, yetkili, telefon, adres, tarih, gecerlilikGun,
+    gecerlilikTarihi: gecerlilikTarihi.toISOString().slice(0,10),
+    not, kdvDahil, kalemler, araToplam, kdvTutari, genelToplam,
+    hazirlayan: currentUserData?.ad || '—'
+  };
+
+  try {
+    if (editId) {
+      await updateDoc(doc(db, 'teklifler', editId), data);
+      auditLogYaz('Teklif Güncellendi', musteriAdi);
+    } else {
+      data.durum = 'taslak';
+      data.olusturuldu = serverTimestamp();
+      await addDoc(collection(db, 'teklifler'), data);
+      auditLogYaz('Teklif Oluşturuldu', musteriAdi);
+    }
+    closeModal('mTeklif');
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.teklifDurumGuncelle = async (id, yeniDurum) => {
+  try {
+    await updateDoc(doc(db, 'teklifler', id), { durum: yeniDurum });
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.teklifDuzenle = (id) => {
+  const t = G_TEKLIFLER.find(x => x.id === id);
+  if (!t) return;
+  document.getElementById('f-teklif-musteriAdi').value = t.musteriAdi || '';
+  document.getElementById('f-teklif-yetkili').value = t.yetkili || '';
+  document.getElementById('f-teklif-telefon').value = t.telefon || '';
+  document.getElementById('f-teklif-adres').value = t.adres || '';
+  document.getElementById('f-teklif-tarih').value = t.tarih || '';
+  document.getElementById('f-teklif-gecerlilik').value = t.gecerlilikGun || 15;
+  document.getElementById('f-teklif-not').value = t.not || '';
+  document.getElementById('f-teklif-kdvDahil').checked = !!t.kdvDahil;
+  document.getElementById('f-teklif-kalemListesi').innerHTML = '';
+  G_TEKLIF_KALEM_SAYAC = 0;
+  (t.kalemler || []).forEach(k => teklifKalemEkle(k));
+  if (!(t.kalemler || []).length) teklifKalemEkle();
+  teklifToplamGuncelle();
+  document.getElementById('f-teklif-editId').value = id;
+  document.getElementById('mTeklifTitle').textContent = 'Teklifi Düzenle';
+  openModal('mTeklif');
+};
+
+window.teklifSil = async (id, musteriAdi) => {
+  if (!confirm(`"${musteriAdi}" için hazırlanan teklifi silmek istediğinizden emin misiniz?`)) return;
+  try {
+    await deleteDoc(doc(db, 'teklifler', id));
+    auditLogYaz('Teklif Silindi', musteriAdi);
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.renderTeklifler = function() {
+  const tbody = document.getElementById('teklifTableBody');
+  if (!tbody) return;
+
+  let data = G_TEKLIFLER.filter(t => aramaEslesir(G_ARAMA.teklifler, t.musteriAdi, t.yetkili));
+
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">${G_ARAMA.teklifler ? 'Aramayla eşleşen teklif bulunamadı.' : 'Henüz teklif hazırlanmamış. "+ Yeni Teklif" ile başlayın.'}</td></tr>`;
+    return;
+  }
+
+  const bugunStr = new Date().toISOString().slice(0,10);
+  tbody.innerHTML = data.map(t => {
+    const durum = TEKLIF_DURUM_BILGI[t.durum] || TEKLIF_DURUM_BILGI.taslak;
+    const suresiGecmis = t.gecerlilikTarihi && t.gecerlilikTarihi < bugunStr && t.durum !== 'kabul' && t.durum !== 'red';
+    return `
+    <tr class="tbl-row">
+      <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${t.musteriAdi}${t.yetkili ? `<div style="font-size:10px;color:#475569;">${t.yetkili}</div>` : ''}</td>
+      <td style="padding:12px;font-size:12px;color:#64748B;font-family:monospace;">${t.tarih || '—'}</td>
+      <td style="padding:12px;font-size:12px;color:${suresiGecmis ? '#EF4444' : '#64748B'};font-family:monospace;">${t.gecerlilikTarihi || '—'}${suresiGecmis ? ' ⚠' : ''}</td>
+      <td style="padding:12px;text-align:right;font-size:13px;font-weight:700;color:#10B981;">${(t.genelToplam||0).toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:12px;text-align:center;">
+        <select onchange="teklifDurumGuncelle('${t.id}', this.value)" style="background:${durum.renk}22;color:${durum.renk};border:1px solid ${durum.renk}44;border-radius:6px;padding:4px 8px;font-size:11px;font-weight:700;">
+          ${Object.entries(TEKLIF_DURUM_BILGI).map(([k,v]) => `<option value="${k}" ${t.durum===k?'selected':''}>${v.etiket}</option>`).join('')}
+        </select>
+      </td>
+      <td style="padding:12px;text-align:right;white-space:nowrap;">
+        <button onclick="downloadTeklifPDF('${t.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">📄 PDF</button>
+        <button onclick="teklifDuzenle('${t.id}')" style="font-size:11px;color:#3B82F6;background:none;border:none;cursor:pointer;margin-left:8px;">Düzenle</button>
+        <button onclick="teklifSil('${t.id}','${(t.musteriAdi||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;margin-left:8px;">Sil</button>
+      </td>
+    </tr>`;
+  }).join('');
+};
+
+window.downloadTeklifPDF = async (id) => {
+  const t = G_TEKLIFLER.find(x => x.id === id);
+  if (!t) { alert('Teklif bulunamadı.'); return; }
+  if (typeof window.html2canvas === 'undefined') {
+    alert('PDF kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.');
+    return;
+  }
+
+  document.getElementById('pt-teklifNo').textContent = 'TKLF-' + (t.id || Date.now().toString()).slice(0,8).toUpperCase();
+  document.getElementById('pt-tarih').textContent = t.tarih ? new Date(t.tarih).toLocaleDateString('tr-TR') : new Date().toLocaleDateString('tr-TR');
+  document.getElementById('pt-gecerlilik').textContent = t.gecerlilikTarihi ? new Date(t.gecerlilikTarihi).toLocaleDateString('tr-TR') : '—';
+  document.getElementById('pt-musteriAdi').textContent = t.musteriAdi || '—';
+  document.getElementById('pt-musteriYetkili').textContent = t.yetkili || '';
+  document.getElementById('pt-musteriTel').textContent = t.telefon || '';
+  document.getElementById('pt-musteriAdres').textContent = t.adres || '';
+  document.getElementById('pt-not').textContent = t.not || 'Bu teklif, belirtilen geçerlilik tarihine kadar geçerlidir.';
+
+  document.getElementById('pt-kalemler').innerHTML = (t.kalemler || []).map((k,i) => `
+    <tr style="background:${i%2===0?'#fff':'#F8FAFC'};border-bottom:1px solid #F1F5F9;">
+      <td style="padding:9px 16px;color:#0F172A;font-size:12px;">${k.ad}</td>
+      <td style="padding:9px 16px;text-align:center;color:#64748B;font-size:12px;">${k.miktar}</td>
+      <td style="padding:9px 16px;text-align:right;color:#64748B;font-size:12px;">${(k.birimFiyat||0).toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:9px 16px;text-align:right;color:#0F172A;font-size:12px;font-weight:700;">${(k.tutar||0).toLocaleString('tr-TR')} ₺</td>
+    </tr>`).join('');
+
+  document.getElementById('pt-araToplam').textContent = `${(t.araToplam||0).toLocaleString('tr-TR')} ₺`;
+  document.getElementById('pt-kdvSatiri').style.display = t.kdvDahil ? 'flex' : 'none';
+  document.getElementById('pt-kdv').textContent = `${(t.kdvTutari||0).toLocaleString('tr-TR')} ₺`;
+  document.getElementById('pt-genelToplam').textContent = `${(t.genelToplam||0).toLocaleString('tr-TR')} ₺`;
+
+  await renderHtmlToPdf('pdfTeklifSablon', `Teklif_${(t.musteriAdi||'').replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.pdf`);
+};
+
+/* ═══════════════════════════════════════════════════════════════
    KULLANICI OLUŞTUR (Admin paneli üzerinden)
 ═══════════════════════════════════════════════════════════════ */
 /* ═══════════════════════════════════════════════════════════════
@@ -11332,6 +11571,228 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
   </div>
 
+</div>
+
+<!-- ════════════════════════════════════
+     TEKLİF / PROFORMA SAYFASI (pg-teklifler)
+════════════════════════════════════ -->
+<div id="pg-teklifler" class="db-page" style="display:none;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+    <div>
+      <h2 style="font-size:15px;font-weight:800;color:var(--text-primary,#E2E8F0);">Teklif / Proforma</h2>
+      <p style="font-size:11px;color:#475569;margin-top:2px;">Yeni müşteriye asansör hizmet teklifi hazırlama</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <div class="search-box-wrap">
+        <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input type="text" class="db-input" placeholder="Müşteri, yetkili ara..." oninput="aramaGuncelle('teklifler', this.value)"/>
+      </div>
+      <button onclick="resetTeklifForm()" class="btn-sm">+ Yeni Teklif</button>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:rgba(30,41,59,.6);">
+            <th style="padding:11px 18px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Müşteri / Firma</th>
+            <th style="padding:11px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Teklif Tarihi</th>
+            <th style="padding:11px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Geçerlilik</th>
+            <th style="padding:11px;text-align:right;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Toplam</th>
+            <th style="padding:11px;text-align:center;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
+            <th style="padding:11px;text-align:right;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">İşlemler</th>
+          </tr>
+        </thead>
+        <tbody id="teklifTableBody">
+          <tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════
+     TEKLİF FORM MODALI
+════════════════════════════════════ -->
+<div id="modal-mTeklif" class="modal-wrap" onclick="if(event.target===this)closeModal('mTeklif')">
+  <div class="modal-box" style="max-width:680px;max-height:92vh;overflow-y:auto;">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#0B1220;z-index:2;">
+      <h3 id="mTeklifTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">Yeni Teklif/Proforma Oluştur</h3>
+      <button onclick="closeModal('mTeklif')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <input type="hidden" id="f-teklif-editId"/>
+
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+      <!-- Müşteri Bilgileri -->
+      <div style="background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.15);border-radius:10px;padding:14px;">
+        <div style="font-size:10px;font-weight:700;color:#3B82F6;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">🏢 Müşteri / Firma Bilgileri</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div style="grid-column:1/-1;"><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Müşteri / Firma Adı *</label><input id="f-teklif-musteriAdi" type="text" class="db-input" placeholder="Örn: GÖKSÜ İNŞAAT A.Ş."/></div>
+          <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Yetkili Kişi</label><input id="f-teklif-yetkili" type="text" class="db-input" placeholder="Mehmet Karadağ"/></div>
+          <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Telefon</label><input id="f-teklif-telefon" type="text" class="db-input" placeholder="0533 000 00 00"/></div>
+          <div style="grid-column:1/-1;"><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Adres / Proje Yeri</label><input id="f-teklif-adres" type="text" class="db-input" placeholder="Esenyurt, İstanbul"/></div>
+        </div>
+      </div>
+
+      <!-- Teklif Bilgileri -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Teklif Tarihi</label><input id="f-teklif-tarih" type="date" class="db-input"/></div>
+        <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Geçerlilik (gün)</label>
+          <select id="f-teklif-gecerlilik" class="db-input">
+            <option value="7">7 gün</option>
+            <option value="15" selected>15 gün</option>
+            <option value="30">30 gün</option>
+            <option value="60">60 gün</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Hızlı Kalem Ekle (Asansör Sektörü Standartları) -->
+      <div style="background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.15);border-radius:10px;padding:14px;">
+        <div style="font-size:10px;font-weight:700;color:#10B981;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">⚡ Hızlı Kalem Ekle (Asansör Standart Kalemleri)</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          <button type="button" onclick="teklifKalemEkle({ad:'Periyodik Bakım Hizmeti (Aylık)',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">🔧 Periyodik Bakım</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Asansör Montajı (Komple)',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">🏗️ Montaj</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Revizyon / Modernizasyon',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">♻️ Revizyon</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Arıza Giderim / Onarım',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">⚠️ Onarım</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Yıllık Periyodik Muayene (TSE)',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">📋 Muayene</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Yedek Parça',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">🔩 Yedek Parça</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'İşçilik / Servis Ücreti',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">👷 İşçilik</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(100,116,139,.1);color:#94A3B8;border:1px solid rgba(100,116,139,.25);border-radius:6px;cursor:pointer;">+ Serbest Kalem</button>
+        </div>
+      </div>
+
+      <!-- Kalem Listesi -->
+      <div>
+        <div style="display:grid;grid-template-columns:1fr 56px 90px 90px 26px;gap:6px;margin-bottom:6px;">
+          <span style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;">Açıklama</span>
+          <span style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;">Miktar</span>
+          <span style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;">Birim ₺</span>
+          <span style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;text-align:right;">Tutar</span>
+          <span></span>
+        </div>
+        <div id="f-teklif-kalemListesi"></div>
+      </div>
+
+      <!-- KDV ve Toplam -->
+      <div style="background:rgba(30,41,59,.4);border-radius:10px;padding:12px 14px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#94A3B8;cursor:pointer;margin-bottom:8px;">
+          <input type="checkbox" id="f-teklif-kdvDahil" onchange="teklifToplamGuncelle()"/> KDV dahil et (%20)
+        </label>
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:#64748B;margin-bottom:4px;"><span>Ara Toplam</span><span id="f-teklif-araToplam">0 ₺</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:#64748B;margin-bottom:6px;"><span>KDV (%20)</span><span id="f-teklif-kdvGoster">0 ₺</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:800;color:#E2E8F0;border-top:1px solid rgba(30,41,59,.6);padding-top:6px;"><span>GENEL TOPLAM</span><span id="f-teklif-genelToplam" style="color:#10B981;">0 ₺</span></div>
+      </div>
+
+      <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Notlar / Teklif Kapsamı</label><textarea id="f-teklif-not" class="db-input" rows="3" placeholder="Teklif kapsamı, garanti süresi, ödeme şartları vb. bilgiler..." style="resize:vertical;"></textarea></div>
+    </div>
+
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;position:sticky;bottom:0;background:#0B1220;">
+      <button onclick="closeModal('mTeklif')" class="btn-ghost">İptal</button>
+      <button onclick="teklifKaydet()" class="btn-sm">💾 Teklifi Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════
+     TEKLİF PDF ŞABLONU (ekran dışı, sadece PDF üretiminde kullanılır)
+════════════════════════════════════ -->
+<div id="pdfTeklifSablon" style="position:fixed;left:-9999px;top:0;width:800px;background:#fff;font-family:'Inter',system-ui,sans-serif;color:#0F172A;">
+
+  <!-- Başlık Bandı -->
+  <div style="background:linear-gradient(135deg,#0F172A 0%,#1E3A5F 100%);padding:32px 40px;display:flex;justify-content:space-between;align-items:flex-start;">
+    <div>
+      <div style="font-size:22px;font-weight:900;color:#fff;letter-spacing:-.5px;">AS-EL ASANSÖR</div>
+      <div style="font-size:11px;color:#94A3B8;margin-top:4px;letter-spacing:.08em;">TEKNİK SERVİS VE BAKIM HİZMETLERİ</div>
+      <div style="margin-top:12px;font-size:10px;color:#64748B;line-height:1.6;">
+        Esenyurt / İstanbul<br/>
+        Tel: 0533 497 73 17<br/>
+        info@as-elasansor.com.tr
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <div style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:14px 20px;">
+        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;">Teklif No</div>
+        <div id="pt-teklifNo" style="font-size:16px;font-weight:800;color:#00ADB5;font-family:monospace;"></div>
+        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:.1em;margin-top:10px;margin-bottom:4px;">Teklif Tarihi</div>
+        <div id="pt-tarih" style="font-size:13px;font-weight:700;color:#fff;"></div>
+        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:.1em;margin-top:8px;margin-bottom:4px;">Geçerlilik</div>
+        <div id="pt-gecerlilik" style="font-size:13px;font-weight:700;color:#FCD34D;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Teklif Başlığı + Müşteri Bilgileri -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:2px solid #E2E8F0;">
+    <div style="padding:22px 40px;border-right:1px solid #F1F5F9;">
+      <div style="font-size:10px;font-weight:700;color:#00ADB5;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">SAYIN</div>
+      <div id="pt-musteriAdi" style="font-size:16px;font-weight:800;color:#0F172A;"></div>
+      <div id="pt-musteriYetkili" style="font-size:12px;color:#475569;margin-top:2px;"></div>
+      <div id="pt-musteriTel" style="font-size:12px;color:#475569;margin-top:2px;"></div>
+      <div id="pt-musteriAdres" style="font-size:11px;color:#64748B;margin-top:6px;line-height:1.4;"></div>
+    </div>
+    <div style="padding:22px 40px;background:#F8FAFC;">
+      <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">KONU</div>
+      <div style="font-size:13px;font-weight:700;color:#0F172A;">Asansör Hizmet Teklifi</div>
+      <div style="font-size:11px;color:#64748B;margin-top:6px;line-height:1.5;">
+        Sayın ilgili,<br/>
+        Talebiniz doğrultusunda aşağıdaki hizmet teklifimizi sunarız.
+      </div>
+    </div>
+  </div>
+
+  <!-- Kalemler Tablosu -->
+  <div style="padding:28px 40px;">
+    <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px;">TEKLİF KALEMLERİ</div>
+    <table style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr style="background:#0F172A;">
+          <th style="padding:10px 16px;text-align:left;color:#fff;font-size:10px;text-transform:uppercase;font-weight:700;border-radius:8px 0 0 0;">Açıklama</th>
+          <th style="padding:10px 12px;text-align:center;color:#fff;font-size:10px;text-transform:uppercase;font-weight:700;">Miktar</th>
+          <th style="padding:10px 12px;text-align:right;color:#fff;font-size:10px;text-transform:uppercase;font-weight:700;">Birim Fiyat</th>
+          <th style="padding:10px 16px;text-align:right;color:#fff;font-size:10px;text-transform:uppercase;font-weight:700;border-radius:0 8px 0 0;">Tutar</th>
+        </tr>
+      </thead>
+      <tbody id="pt-kalemler"></tbody>
+    </table>
+
+    <!-- Toplam Kutusu -->
+    <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+      <div style="min-width:260px;">
+        <div style="display:flex;justify-content:space-between;padding:7px 0;font-size:12px;color:#475569;border-bottom:1px solid #F1F5F9;">
+          <span>Ara Toplam</span><span id="pt-araToplam" style="font-weight:600;"></span>
+        </div>
+        <div id="pt-kdvSatiri" style="display:flex;justify-content:space-between;padding:7px 0;font-size:12px;color:#475569;border-bottom:1px solid #F1F5F9;">
+          <span>KDV (%20)</span><span id="pt-kdv" style="font-weight:600;"></span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:10px 14px;margin-top:4px;background:#0F172A;border-radius:8px;">
+          <span style="font-size:13px;font-weight:800;color:#fff;">GENEL TOPLAM</span>
+          <span id="pt-genelToplam" style="font-size:15px;font-weight:900;color:#00ADB5;"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notlar + İmza -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid #E2E8F0;padding:22px 40px;">
+    <div style="padding-right:24px;border-right:1px solid #F1F5F9;">
+      <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;">KAPSAM VE NOTLAR</div>
+      <div id="pt-not" style="font-size:11px;color:#475569;line-height:1.6;"></div>
+    </div>
+    <div style="padding-left:24px;">
+      <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px;">ONAY</div>
+      <div style="border-bottom:1px solid #CBD5E1;margin-bottom:4px;height:36px;"></div>
+      <div style="font-size:9.5px;color:#94A3B8;">AS-EL Asansör Yetkilisi İmza/Kaşe</div>
+      <div style="border-bottom:1px solid #CBD5E1;margin-bottom:4px;height:36px;margin-top:16px;"></div>
+      <div style="font-size:9.5px;color:#94A3B8;">Müşteri Onayı İmza/Kaşe</div>
+    </div>
+  </div>
+
+  <!-- Alt Bilgi -->
+  <div style="background:#F8FAFC;padding:12px 40px;border-top:1px solid #E2E8F0;text-align:center;">
+    <div style="font-size:9px;color:#94A3B8;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17 · Bu teklif belgesi, yukarıda belirtilen geçerlilik tarihine kadar geçerlidir.</div>
+  </div>
 </div>
 
 </body>
