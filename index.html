@@ -504,6 +504,7 @@ let G_COZUM_PARCA_SAYAC = 0; // Arıza çözüm modalındaki parça satırları 
 let G_CPB_PARCA_SAYAC = 0;   // Cari ekranı "Parça/Onarım Borcu Ekle" modalındaki sayaç
 let G_TEKLIF_KALEM_SAYAC = 0; // Teklif/Proforma formundaki kalem satırı sayacı
 let G_TEKLIFLER = [];         // Teklif/Proforma kayıtları
+let G_IZIN_TALEPLERI = [];    // İzin talep ve onay kayıtları
 let G_SOZLESMELER = [];
 let G_BINALAR = [];
 let G_AUDIT_LOG = []; // Sistem Audit Log — kim ne zaman ne yaptı (son 200 kayıt, eskiler otomatik silinir)
@@ -530,6 +531,7 @@ const NAV_DEFS = {
     { id:'teklifler',   icon:'quote',    label:'Teklif/Proforma' },
     { id:'sozlesmeler', icon:'file',     label:'Sözleşme & Fatura' },
     { id:'muhasebe',    icon:'cash',     label:'Muhasebe' },
+    { id:'izin',        icon:'beach',    label:'İzin Yönetimi' },
     { id:'performans',  icon:'chart',    label:'Teknisyen Performans' },
     { id:'kullanicilar',icon:'users',    label:'Kullanıcılar' },
   ],
@@ -543,6 +545,7 @@ const NAV_DEFS = {
     { id:'asansorler',icon:'elevator', label:'Asansör Dosyası' },
     { id:'bakimlar',  icon:'tool',     label:'Bakım Takibi' },
     { id:'arizalar',  icon:'alert',    label:'Arıza Kayıtları' },
+    { id:'izin',      icon:'beach',    label:'İzin Taleplerim' },
   ],
   bina: [
     { id:'dashboard', icon:'grid',  label:'Genel Bakış' },
@@ -985,6 +988,21 @@ function subscribeAll() {
     }));
   }
 
+  // İzin Talepleri — admin tümünü görür, teknisyen sadece kendi taleplerini
+  {
+    const izinQ = role === 'admin'
+      ? query(collection(db, 'izinTalepleri'), orderBy('talepTarihi', 'desc'))
+      : query(collection(db, 'izinTalepleri'), orderBy('talepTarihi', 'desc'));
+    unsubscribers.push(onSnapshot(izinQ, snap => {
+      const tumTalepler = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      G_IZIN_TALEPLERI = role === 'admin'
+        ? tumTalepler
+        : tumTalepler.filter(t => t.personelId === currentUserData?.uid || t.personelId === currentUser?.uid);
+      if (document.getElementById('pg-izin')?.classList.contains('active')) renderIzinSayfasi();
+      renderDashboardEkstraBloklar();
+    }));
+  }
+
   // Sistem Audit Log — sadece admin görür, sadece son 200 kayıt çekilir
   // (zaten auditLogYaz() koleksiyonu 200'ün üzerine çıkarmıyor, limit
   // burada sadece ekstra bir güvenlik/performans sınırı).
@@ -1159,6 +1177,7 @@ function setupUI() {
     route:    `<circle cx="6" cy="19" r="2.5" stroke-width="2"/><circle cx="18" cy="5" r="2.5" stroke-width="2"/><path stroke-linecap="round" stroke-width="2" d="M8.3 17.5L13 9M15.5 7.3L18 5M8 19h6a3 3 0 003-3v-1a3 3 0 013-3"/>`,
     inbox:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>`,
     quote:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m-6 4h6m-6 4h3m6-12H6a2 2 0 00-2 2v14l4-3h10a2 2 0 002-2V5a2 2 0 00-2-2z"/>`,
+    beach:    `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1M4.22 4.22l.707.707m11.314 11.314l.707.707M1 12h1m18 0h1M4.22 19.78l.707-.707M18.364 5.636l.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z"/>`,
   };
 
   const items  = (NAV_DEFS[role] || NAV_DEFS.bina).filter(item => izinliSet.has(item.id));
@@ -1229,6 +1248,7 @@ window.showPage = (name, btn) => {
   if (name === 'takvim') renderCalendar();
   if (name === 'performans') renderPerformans();
   if (name === 'teklifler') renderTeklifler();
+  if (name === 'izin') renderIzinSayfasi();
   if (name === 'muhasebe') {
     renderMuhasebe();
     // Bina yöneticisi için "Ödemeler" sekmesi (admin'in genel tahsilat
@@ -4276,6 +4296,300 @@ function renderMuayeneSayac() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   İZİN YÖNETİMİ MODÜLÜ
+   ─────────────────────────────────────────────────────────────
+   • Personel izin talebi oluşturur (başlangıç/bitiş tarihi, tür, not)
+   • Admin onaylar veya reddeder — onaylanınca mesaiKayitlari'na otomatik
+     "izinli" kaydı oluşturulur ve izin bakiyesinden düşülür
+   • Admin direkt izin de ekleyebilir (talep sürecini atlar)
+   • Tüm personelin izin bakiyesi, kalan hak, geçmiş izinler görünür
+   • Diğer bölümlerle bağlantı:
+     - Muhasebe/Maaşlar: izin bakiyesi ve gelmedi saatleri maaş tablosuna yansır
+     - Dashboard: izinli personel kartı (bugün kim izinde)
+     - Mesai: onaylanan izinler otomatik mesai kaydı oluşturur
+═══════════════════════════════════════════════════════════════ */
+
+const IZIN_TURLERI = {
+  yillik:   { etiket: 'Yıllık İzin',       renk: '#10B981', icon: '🏖️',  bakiyedenDus: true  },
+  hastalik: { etiket: 'Hastalık İzni',      renk: '#F59E0B', icon: '🏥',  bakiyedenDus: false },
+  mazeret:  { etiket: 'Mazeret İzni',       renk: '#3B82F6', icon: '📋',  bakiyedenDus: false },
+  ucretsiz: { etiket: 'Ücretsiz İzin',      renk: '#8B5CF6', icon: '💼',  bakiyedenDus: false },
+  dogum:    { etiket: 'Doğum/Evlilik İzni', renk: '#EC4899', icon: '👶',  bakiyedenDus: false },
+};
+
+const IZIN_DURUM = {
+  beklemede: { etiket: 'Beklemede', renk: '#F59E0B' },
+  onaylandi: { etiket: 'Onaylandı', renk: '#10B981' },
+  reddedildi:{ etiket: 'Reddedildi',renk: '#EF4444' },
+};
+
+// İki tarih arasındaki iş günü sayısını hesapla (Cumartesi/Pazar hariç)
+function isGunuSayisi(baslangicStr, bitisStr) {
+  const bas = new Date(baslangicStr + 'T00:00:00');
+  const bit = new Date(bitisStr + 'T00:00:00');
+  let sayi = 0;
+  const dt = new Date(bas);
+  while (dt <= bit) {
+    const g = dt.getDay();
+    if (g !== 0 && g !== 6) sayi++;
+    dt.setDate(dt.getDate() + 1);
+  }
+  return sayi;
+}
+
+window.resetIzinTalepForm = () => {
+  document.getElementById('f-izin-personel').value = '';
+  document.getElementById('f-izin-tur').value = 'yillik';
+  document.getElementById('f-izin-baslangic').value = new Date().toISOString().slice(0,10);
+  document.getElementById('f-izin-bitis').value = new Date().toISOString().slice(0,10);
+  document.getElementById('f-izin-not').value = '';
+  document.getElementById('f-izin-editId').value = '';
+  izinGunHesapla();
+  const isAdmin = currentUserData?.rol === 'admin';
+  document.getElementById('f-izin-personel-wrap').style.display = isAdmin ? 'block' : 'none';
+  document.getElementById('mIzinTitle').textContent = isAdmin ? 'İzin Ekle / Talep Oluştur' : 'İzin Talebi Gönder';
+  openModal('mIzin');
+};
+
+window.izinGunHesapla = () => {
+  const bas = document.getElementById('f-izin-baslangic').value;
+  const bit = document.getElementById('f-izin-bitis').value;
+  if (!bas || !bit) return;
+  const gun = isGunuSayisi(bas, bit);
+  const el = document.getElementById('f-izin-gun-bilgi');
+  if (el) el.textContent = `${gun} iş günü`;
+};
+
+window.izinTalepKaydet = async () => {
+  const isAdmin = currentUserData?.rol === 'admin';
+  const personelId = isAdmin
+    ? document.getElementById('f-izin-personel').value
+    : currentUser?.uid;
+  const personelAd = isAdmin
+    ? (document.getElementById('f-izin-personel').selectedOptions[0]?.dataset?.ad || '')
+    : currentUserData?.ad || '';
+  const tur        = document.getElementById('f-izin-tur').value;
+  const baslangic  = document.getElementById('f-izin-baslangic').value;
+  const bitis      = document.getElementById('f-izin-bitis').value;
+  const not        = document.getElementById('f-izin-not').value.trim();
+  const editId     = document.getElementById('f-izin-editId').value;
+
+  if (!personelId) { alert('Personel seçmelisiniz.'); return; }
+  if (!baslangic || !bitis) { alert('Başlangıç ve bitiş tarihi zorunludur.'); return; }
+  if (baslangic > bitis) { alert('Bitiş tarihi başlangıç tarihinden önce olamaz.'); return; }
+
+  const gunSayisi = isGunuSayisi(baslangic, bitis);
+  const durum = isAdmin ? 'onaylandi' : 'beklemede';
+
+  const data = {
+    personelId, personelAd, tur, baslangic, bitis, gunSayisi, not, durum,
+    talepTarihi: new Date().toISOString().slice(0,10),
+    talepEden: currentUserData?.ad || '—',
+    guncellendi: serverTimestamp()
+  };
+
+  try {
+    if (editId) {
+      await updateDoc(doc(db, 'izinTalepleri', editId), data);
+      auditLogYaz('İzin Talebi Güncellendi', `${personelAd} · ${baslangic} → ${bitis}`);
+    } else {
+      data.olusturuldu = serverTimestamp();
+      const ref = await addDoc(collection(db, 'izinTalepleri'), data);
+      auditLogYaz('İzin Talebi Oluşturuldu', `${personelAd} · ${baslangic} → ${bitis}`);
+      // Admin direkt onayladıysa mesaiKayitlari'na da yaz
+      if (isAdmin && durum === 'onaylandi') {
+        await izinMesaiKaydiOlustur(ref.id, data);
+      }
+    }
+    closeModal('mIzin');
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+// Onaylanan izin için mesaiKayitlari'na otomatik kayıt oluşturur
+async function izinMesaiKaydiOlustur(talepId, data) {
+  // Baslangıç-bitiş arasındaki her iş günü için ayrı mesai kaydı ekle
+  const bas = new Date(data.baslangic + 'T00:00:00');
+  const bit = new Date(data.bitis + 'T00:00:00');
+  const dt  = new Date(bas);
+  const batch = [];
+  while (dt <= bit) {
+    const g = dt.getDay();
+    if (g !== 0 && g !== 6) { // Hafta içi
+      batch.push(addDoc(collection(db, 'mesaiKayitlari'), {
+        personelId:     data.personelId,
+        personelAd:     data.personelAd,
+        tarih:          dt.toISOString().slice(0,10),
+        tarihBaslangic: data.baslangic,
+        tarihBitis:     data.bitis,
+        durum:          'izinli',
+        tip:            IZIN_TURLERI[data.tur]?.bakiyedenDus ? 'izin' : 'izin_' + data.tur,
+        izinTur:        data.tur,
+        izinTalepId:    talepId,
+        not:            data.not || '',
+        giris: null, cikis: null, calisilanSaat: 0,
+        olusturuldu:    serverTimestamp()
+      }));
+    }
+    dt.setDate(dt.getDate() + 1);
+  }
+  await Promise.all(batch);
+}
+
+window.izinOnayla = async (id) => {
+  const talep = G_IZIN_TALEPLERI.find(t => t.id === id);
+  if (!talep) return;
+  try {
+    await updateDoc(doc(db, 'izinTalepleri', id), { durum: 'onaylandi', onaylayanAd: currentUserData?.ad, onayTarihi: new Date().toISOString().slice(0,10) });
+    await izinMesaiKaydiOlustur(id, talep);
+    auditLogYaz('İzin Onaylandı', `${talep.personelAd} · ${talep.baslangic} → ${talep.bitis}`);
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.izinReddet = async (id) => {
+  const sebep = prompt('Red sebebi (opsiyonel):');
+  if (sebep === null) return; // iptal
+  const talep = G_IZIN_TALEPLERI.find(t => t.id === id);
+  try {
+    await updateDoc(doc(db, 'izinTalepleri', id), { durum: 'reddedildi', redSebebi: sebep || '', onaylayanAd: currentUserData?.ad });
+    auditLogYaz('İzin Reddedildi', `${talep?.personelAd} · ${sebep || '—'}`);
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+window.izinSil = async (id) => {
+  const talep = G_IZIN_TALEPLERI.find(t => t.id === id);
+  if (!confirm(`"${talep?.personelAd}" için bu izin kaydını silmek istediğinizden emin misiniz?\n\nDikkat: Onaylı izinler silinirse mesai kayıtları silinmez, ayrıca Mesai/Puantaj sekmesinden de silmeniz gerekebilir.`)) return;
+  try {
+    await deleteDoc(doc(db, 'izinTalepleri', id));
+    auditLogYaz('İzin Silindi', talep?.personelAd || '—');
+  } catch(e) { alert('Hata: ' + e.message); }
+};
+
+function renderIzinSayfasi() {
+  const isAdmin = currentUserData?.rol === 'admin';
+  const role    = currentUserData?.rol;
+
+  // ── Personel İzin Bakiye Kartları (admin için) ──
+  const bakiyeEl = document.getElementById('izin-bakiye-grid');
+  if (bakiyeEl && isAdmin) {
+    const teknisyenler = G_KULLANICILAR.filter(u => u.rol === 'admin' || u.rol === 'teknisyen');
+    if (!teknisyenler.length) {
+      bakiyeEl.innerHTML = `<div style="padding:16px;color:#475569;font-size:12px;">Henüz personel kaydı yok.</div>`;
+    } else {
+      bakiyeEl.innerHTML = teknisyenler.map(u => {
+        const ozet = personelIzinOzeti(u.id);
+        const renk = ozet.kalanBakiye < 0 ? '#EF4444' : ozet.kalanBakiye <= 3 ? '#F59E0B' : '#10B981';
+        const bugunIzinli = G_IZIN_TALEPLERI.some(t =>
+          t.personelId === u.id && t.durum === 'onaylandi' &&
+          t.baslangic <= new Date().toISOString().slice(0,10) &&
+          t.bitis >= new Date().toISOString().slice(0,10)
+        );
+        return `
+        <div class="card" style="padding:14px;position:relative;${bugunIzinli ? 'border:1px solid rgba(16,185,129,.4);' : ''}">
+          ${bugunIzinli ? `<div style="position:absolute;top:10px;right:10px;font-size:10px;background:rgba(16,185,129,.15);color:#10B981;padding:2px 7px;border-radius:12px;font-weight:700;">🏖️ Bugün İzinli</div>` : ''}
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+            <div style="width:36px;height:36px;border-radius:10px;background:rgba(0,173,181,.15);display:flex;align-items:center;justify-content:center;color:#00ADB5;font-weight:800;font-size:13px;flex-shrink:0;">${(u.initials||u.ad?.slice(0,2)||'?').toUpperCase()}</div>
+            <div>
+              <div style="font-size:13px;font-weight:700;color:#E2E8F0;">${u.ad}</div>
+              <div style="font-size:10px;color:#475569;">${ozet.iseGirisTarihi ? `${ozet.tamYil} yıl kıdem` : 'İşe giriş tarihi yok'}</div>
+            </div>
+          </div>
+          ${ozet.iseGirisTarihi ? `
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;margin-bottom:10px;">
+              <div style="background:rgba(30,41,59,.4);border-radius:8px;padding:8px;">
+                <div style="font-size:18px;font-weight:800;color:#E2E8F0;">${ozet.kazanilanToplamGun}</div>
+                <div style="font-size:9px;color:#475569;">Kazanılan</div>
+              </div>
+              <div style="background:rgba(30,41,59,.4);border-radius:8px;padding:8px;">
+                <div style="font-size:18px;font-weight:800;color:#F59E0B;">${ozet.toplamDusumGun}</div>
+                <div style="font-size:9px;color:#475569;">Kullanılan</div>
+              </div>
+              <div style="background:rgba(30,41,59,.4);border-radius:8px;padding:8px;">
+                <div style="font-size:18px;font-weight:800;color:${renk};">${ozet.kalanBakiye}</div>
+                <div style="font-size:9px;color:#475569;">Kalan</div>
+              </div>
+            </div>
+            ${ozet.birikimliEksikDakika > 0 ? `<div style="font-size:10px;color:#F59E0B;margin-bottom:8px;">⏱ Birikmekte: ${(ozet.birikimliEksikDakika/60).toFixed(1)} saat eksik (${ozet.eksikDakikaGun} gün düşüldü)</div>` : ''}
+          ` : `<div style="font-size:10px;color:#475569;margin-bottom:10px;">Kullanıcı kaydına işe giriş tarihi ekleyin.</div>`}
+          <button onclick="izinPersonelFiltrele('${u.id}')" style="width:100%;padding:6px;font-size:11px;font-weight:600;background:rgba(0,173,181,.1);color:#00ADB5;border:1px solid rgba(0,173,181,.2);border-radius:7px;cursor:pointer;">İzin Geçmişi</button>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // ── Bekleyen Talepler ──
+  const bekleyenEl = document.getElementById('izin-bekleyen-liste');
+  if (bekleyenEl) {
+    const bekleyenler = G_IZIN_TALEPLERI.filter(t => t.durum === 'beklemede');
+    if (!bekleyenler.length) {
+      bekleyenEl.innerHTML = `<div style="padding:20px;text-align:center;color:#475569;font-size:12px;">Bekleyen izin talebi yok ✅</div>`;
+    } else {
+      bekleyenEl.innerHTML = bekleyenler.map(t => {
+        const tur = IZIN_TURLERI[t.tur] || IZIN_TURLERI.yillik;
+        return `
+        <div style="padding:12px 16px;border-bottom:1px solid rgba(30,41,59,.4);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div style="font-size:16px;">${tur.icon}</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;color:#E2E8F0;">${t.personelAd}</div>
+            <div style="font-size:11px;color:#64748B;">${tur.etiket} · ${t.baslangic} → ${t.bitis} (${t.gunSayisi} iş günü)</div>
+            ${t.not ? `<div style="font-size:10px;color:#475569;margin-top:2px;">Not: ${t.not}</div>` : ''}
+          </div>
+          ${isAdmin ? `
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button onclick="izinOnayla('${t.id}')" style="padding:6px 12px;font-size:11px;font-weight:700;background:rgba(16,185,129,.15);color:#10B981;border:1px solid rgba(16,185,129,.3);border-radius:7px;cursor:pointer;">✓ Onayla</button>
+            <button onclick="izinReddet('${t.id}')" style="padding:6px 12px;font-size:11px;font-weight:700;background:rgba(239,68,68,.1);color:#EF4444;border:1px solid rgba(239,68,68,.2);border-radius:7px;cursor:pointer;">✕ Reddet</button>
+          </div>` : `<span style="font-size:11px;color:#F59E0B;font-weight:700;">Beklemede</span>`}
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // ── Tüm İzin Listesi ──
+  const filterPersonelId = window._izinPersonelFiltre || null;
+  const tumEl = document.getElementById('izin-tum-liste');
+  if (tumEl) {
+    let liste = G_IZIN_TALEPLERI.filter(t => t.durum !== 'beklemede');
+    if (filterPersonelId) liste = liste.filter(t => t.personelId === filterPersonelId);
+    if (!liste.length) {
+      tumEl.innerHTML = `<tr><td colspan="6" style="padding:24px;text-align:center;color:#475569;font-size:13px;">${filterPersonelId ? 'Bu personele ait onaylı izin kaydı yok.' : 'Henüz onaylanmış veya reddedilmiş izin kaydı yok.'}</td></tr>`;
+    } else {
+      tumEl.innerHTML = liste.map(t => {
+        const tur   = IZIN_TURLERI[t.tur] || IZIN_TURLERI.yillik;
+        const durum = IZIN_DURUM[t.durum] || IZIN_DURUM.beklemede;
+        return `
+        <tr class="tbl-row">
+          <td style="padding:11px 16px;font-size:13px;font-weight:600;color:#E2E8F0;">${t.personelAd}</td>
+          <td style="padding:11px;font-size:12px;color:#94A3B8;">${tur.icon} ${tur.etiket}</td>
+          <td style="padding:11px;font-size:12px;color:#E2E8F0;font-family:monospace;">${t.baslangic} → ${t.bitis}</td>
+          <td style="padding:11px;text-align:center;font-size:12px;font-weight:700;color:#00ADB5;">${t.gunSayisi} gün</td>
+          <td style="padding:11px;text-align:center;"><span style="font-size:11px;font-weight:700;color:${durum.renk};background:${durum.renk}22;padding:3px 8px;border-radius:5px;">${durum.etiket}</span></td>
+          <td style="padding:11px;text-align:right;">
+            ${isAdmin ? `<button onclick="izinSil('${t.id}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;">Sil</button>` : ''}
+          </td>
+        </tr>`;
+      }).join('');
+    }
+  }
+}
+
+window.izinPersonelFiltrele = (personelId) => {
+  window._izinPersonelFiltre = personelId;
+  renderIzinSayfasi();
+  document.getElementById('izin-filtre-bilgi').textContent =
+    G_KULLANICILAR.find(u => u.id === personelId)?.ad || '';
+  document.getElementById('izin-filtre-temizle').style.display = 'inline';
+  document.getElementById('izin-tum-baslik').textContent = 'Seçili Personel — İzin Geçmişi';
+};
+
+window.izinFiltreyiTemizle = () => {
+  window._izinPersonelFiltre = null;
+  document.getElementById('izin-filtre-bilgi').textContent = '';
+  document.getElementById('izin-filtre-temizle').style.display = 'none';
+  document.getElementById('izin-tum-baslik').textContent = 'Onaylanan / Reddedilen İzinler';
+  renderIzinSayfasi();
+};
+
+
+/* ═══════════════════════════════════════════════════════════════
    ASANSÖR GEÇMİŞ & ZAMAN ÇİZELGESİ
    Seçilen asansöre ait TÜM kayıtları (bakımlar, arızalar, muayeneler,
    montaj) tek bir kronolojik zaman çizelgesinde gösterir. Her kayıt
@@ -5757,7 +6071,7 @@ function doldurPersonelSecimi() {
   const secenekHtml = '<option value="">— Seçiniz —</option>' +
     personeller.map(p => `<option value="${p.id}" data-ad="${(p.ad||'').replace(/"/g,'')}">${p.ad}</option>`).join('');
 
-  ['f-avans-personel', 'f-maas-personel', 'f-mesai-personel'].forEach(id => {
+  ['f-avans-personel', 'f-maas-personel', 'f-mesai-personel', 'f-izin-personel'].forEach(id => {
     const sel = document.getElementById(id);
     if (!sel) return;
     const mevcut = sel.value;
@@ -6188,21 +6502,13 @@ function personelIzinOzeti(kullaniciId) {
   G_MESAI.filter(m => m.personelId === kullaniciId && m.durum === 'calisti').forEach(m => {
     const tarih = new Date((m.tarih||'') + 'T00:00:00');
     const gun = tarih.getDay();
-    if (gun === 0) return; // Pazar — mesai yoksa beklenti de yok
-
-    // O gün için beklenen standart dakika
-    let beklenenDakika;
-    if (gun === 6) {
-      // Cumartesi: 08:30 → 13:00 = 270 dakika
-      beklenenDakika = saateCevir(CUMARTESI_VARDIYA_BITIS) - saateCevir(HAFTAICI_VARDIYA_BASLA);
-    } else {
-      // Hafta içi: 510 dakika
-      beklenenDakika = STANDART_GUNLUK_DAKIKA;
-    }
+    // Cumartesi (6) ve Pazar (0): isteğe bağlı, gelmeseler eksik saymaz
+    // Sadece hafta içi (Pzt-Cuma) için eksik saat birikimi yapılır
+    if (gun === 0 || gun === 6) return;
 
     const { normalDakika, fazlaDakika } = gunlukFazlaMesaiHesapla(m.tarih, m.giris, m.cikis);
     const calisilanDakika = normalDakika + fazlaDakika;
-    const eksikDakika = beklenenDakika - calisilanDakika;
+    const eksikDakika = STANDART_GUNLUK_DAKIKA - calisilanDakika;
 
     if (eksikDakika > 0) {
       birikimliEksikDakika += eksikDakika;
@@ -9830,6 +10136,57 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div id="calDayDetail" style="display:none;margin-top:14px;"></div>
       </div>
 
+
+      <!-- İZİN YÖNETİMİ -->
+      <div id="pg-izin" class="db-page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+          <div>
+            <h2 style="font-size:15px;font-weight:800;color:var(--text-primary,#E2E8F0);">İzin Yönetimi</h2>
+            <p style="font-size:11px;color:#475569;margin-top:2px;">İzin talepleri, onay ve personel izin bakiyeleri</p>
+          </div>
+          <button onclick="resetIzinTalepForm()" class="btn-sm">+ İzin Talebi / Ekle</button>
+        </div>
+
+        <!-- Personel İzin Bakiye Kartları (admin için) -->
+        <div class="admin-only" style="margin-bottom:20px;">
+          <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">Personel İzin Bakiyeleri</div>
+          <div id="izin-bakiye-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;"></div>
+        </div>
+
+        <!-- Bekleyen Talepler -->
+        <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
+          <div style="padding:12px 16px;border-bottom:1px solid rgba(30,41,59,.4);display:flex;align-items:center;justify-content:space-between;">
+            <span style="font-size:12px;font-weight:700;color:#F59E0B;">⏳ Bekleyen Talepler</span>
+            <span id="izin-bekleyen-sayi" style="font-size:11px;color:#475569;"></span>
+          </div>
+          <div id="izin-bekleyen-liste"></div>
+        </div>
+
+        <!-- Tüm İzinler Listesi -->
+        <div class="card" style="padding:0;overflow:hidden;">
+          <div style="padding:12px 16px;border-bottom:1px solid rgba(30,41,59,.4);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+            <span id="izin-tum-baslik" style="font-size:12px;font-weight:700;color:#E2E8F0;">Onaylanan / Reddedilen İzinler</span>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span id="izin-filtre-bilgi" style="font-size:11px;color:#00ADB5;font-weight:700;"></span>
+              <button id="izin-filtre-temizle" onclick="izinFiltreyiTemizle()" style="display:none;font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;">× Filtreyi Kaldır</button>
+            </div>
+          </div>
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;">
+              <thead><tr style="background:rgba(30,41,59,.6);">
+                <th style="padding:10px 16px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;">Personel</th>
+                <th style="padding:10px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;">İzin Türü</th>
+                <th style="padding:10px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;">Tarih Aralığı</th>
+                <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;">Süre</th>
+                <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;">Durum</th>
+                <th style="padding:10px;"></th>
+              </tr></thead>
+              <tbody id="izin-tum-liste"><tr><td colspan="6" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- TEKLİF / PROFORMA -->
       <!-- ════════════════════════════════════
      TEKLİF / PROFORMA SAYFASI (pg-teklifler)
@@ -10545,6 +10902,73 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 </div>
 
 <!-- Arıza Modal -->
+<!-- ════════════════════════════════════
+     İZİN TALEBİ / EKLEME MODALI
+════════════════════════════════════ -->
+<div id="modal-mIzin" class="modal-wrap" onclick="if(event.target===this)closeModal('mIzin')">
+  <div class="modal-box" style="max-width:480px;">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <h3 id="mIzinTitle" style="font-size:14px;font-weight:700;color:#E2E8F0;">İzin Ekle / Talep Oluştur</h3>
+      <button onclick="closeModal('mIzin')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <input type="hidden" id="f-izin-editId"/>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
+
+      <!-- Personel seçimi (sadece admin için) -->
+      <div id="f-izin-personel-wrap">
+        <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Personel *</label>
+        <select id="f-izin-personel" class="db-input">
+          <option value="">— Seçiniz —</option>
+        </select>
+      </div>
+
+      <!-- İzin Türü -->
+      <div>
+        <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İzin Türü *</label>
+        <select id="f-izin-tur" class="db-input">
+          <option value="yillik">🏖️ Yıllık İzin (bakiyeden düşülür)</option>
+          <option value="hastalik">🏥 Hastalık İzni</option>
+          <option value="mazeret">📋 Mazeret İzni</option>
+          <option value="ucretsiz">💼 Ücretsiz İzin</option>
+          <option value="dogum">👶 Doğum/Evlilik İzni</option>
+        </select>
+      </div>
+
+      <!-- Tarih Aralığı -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Başlangıç *</label>
+          <input id="f-izin-baslangic" type="date" class="db-input" oninput="izinGunHesapla()"/>
+        </div>
+        <div>
+          <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bitiş *</label>
+          <input id="f-izin-bitis" type="date" class="db-input" oninput="izinGunHesapla()"/>
+        </div>
+      </div>
+      <div style="background:rgba(0,173,181,.08);border:1px solid rgba(0,173,181,.2);border-radius:8px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:12px;color:#94A3B8;">Toplam iş günü:</span>
+        <span id="f-izin-gun-bilgi" style="font-size:14px;font-weight:800;color:#00ADB5;">—</span>
+      </div>
+
+      <div>
+        <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Not / Açıklama</label>
+        <textarea id="f-izin-not" class="db-input" rows="2" placeholder="Opsiyonel açıklama..." style="resize:vertical;"></textarea>
+      </div>
+
+      <div style="background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.15);border-radius:8px;padding:10px 14px;">
+        <div style="font-size:10px;color:#F59E0B;line-height:1.6;">
+          ℹ️ <b>Yıllık İzin</b> seçilirse izin bakiyesinden düşülür. Diğer izin türleri bakiyeyi etkilemez.<br/>
+          Admin onaylayan izinler otomatik olarak Mesai/Puantaj kaydına da işlenir.
+        </div>
+      </div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeModal('mIzin')" class="btn-ghost">İptal</button>
+      <button onclick="izinTalepKaydet()" class="btn-sm">💾 Kaydet</button>
+    </div>
+  </div>
+</div>
+
 <!-- ════════════════════════════════════
      ASANSÖR GEÇMİŞ & ZAMAN ÇİZELGESİ MODALI
 ════════════════════════════════════ -->
