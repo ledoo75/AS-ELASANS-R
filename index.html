@@ -7512,25 +7512,36 @@ window.teklifKalemEkle = (mevcutDeger) => {
   const wrap = document.getElementById('f-teklif-kalemListesi');
   const row = document.createElement('div');
   row.id = rowId;
-  row.style.cssText = 'display:grid;grid-template-columns:1fr 56px 90px 90px 26px;gap:6px;align-items:center;margin-bottom:6px;';
+  row.style.cssText = 'border:1px solid rgba(30,41,59,.5);border-radius:8px;padding:10px;margin-bottom:8px;background:rgba(15,23,42,.3);';
+  const adVal = (mevcutDeger?.ad || '').replace(/"/g, '&quot;');
+  const detayVal = (mevcutDeger?.detay || '').replace(/`/g, '\\`');
   row.innerHTML = `
-    <input type="text" class="db-input teklif-kalem-ad" placeholder="Açıklama (örn. Asansör Bakım Hizmeti - Aylık)" style="font-size:12px;padding:7px 9px;" value="${mevcutDeger?.ad || ''}" oninput="teklifToplamGuncelle()"/>
-    <input type="number" class="db-input teklif-kalem-miktar" placeholder="Miktar" min="1" value="${mevcutDeger?.miktar || 1}" style="font-size:12px;padding:7px 6px;" oninput="teklifToplamGuncelle()"/>
-    <input type="text" inputmode="decimal" class="db-input teklif-kalem-fiyat" placeholder="Birim ₺" value="${mevcutDeger?.birimFiyat || ''}" style="font-size:12px;padding:7px 6px;" oninput="teklifToplamGuncelle()"/>
-    <div class="teklif-kalem-tutar" style="font-size:12px;font-weight:700;color:#10B981;text-align:right;padding:0 4px;">0 ₺</div>
-    <button type="button" onclick="document.getElementById('${rowId}').remove(); teklifToplamGuncelle();" style="color:#EF4444;background:none;border:none;cursor:pointer;font-size:16px;line-height:1;">×</button>`;
+    <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;">
+      <div style="flex:1;">
+        <input type="text" class="db-input teklif-kalem-ad" placeholder="Kalem başlığı (örn. Revizyon Hizmeti)" style="font-size:12px;padding:7px 9px;font-weight:600;margin-bottom:6px;" value="${adVal}" oninput="teklifToplamGuncelle()"/>
+        <textarea class="db-input teklif-kalem-detay" placeholder="Kapsam detayı (opsiyonel — değiştirilecek parçalar, yapılacak işler...)" style="font-size:11px;padding:7px 9px;resize:vertical;min-height:54px;color:#94A3B8;width:100%;box-sizing:border-box;">${mevcutDeger?.detay || ''}</textarea>
+      </div>
+      <button type="button" onclick="document.getElementById('${rowId}').remove(); teklifToplamGuncelle();" style="color:#EF4444;background:none;border:none;cursor:pointer;font-size:18px;line-height:1;flex-shrink:0;margin-top:4px;">×</button>
+    </div>
+    <div style="display:grid;grid-template-columns:80px 100px 1fr;gap:8px;align-items:center;">
+      <input type="number" class="db-input teklif-kalem-miktar" placeholder="Adet" min="1" value="${mevcutDeger?.miktar || 1}" style="font-size:12px;padding:7px 6px;" oninput="teklifToplamGuncelle()"/>
+      <input type="text" inputmode="decimal" class="db-input teklif-kalem-fiyat" placeholder="Birim Fiyat ₺" value="${mevcutDeger?.birimFiyat || ''}" style="font-size:12px;padding:7px 6px;" oninput="teklifToplamGuncelle()"/>
+      <div style="text-align:right;font-size:13px;font-weight:700;color:#10B981;" class="teklif-kalem-tutar">0 ₺</div>
+    </div>`;
   wrap.appendChild(row);
+  if (mevcutDeger?.birimFiyat) teklifToplamGuncelle();
 };
 
 function teklifKalemleriOku() {
   return [...document.querySelectorAll('#f-teklif-kalemListesi > div')].map(row => {
     const ad = row.querySelector('.teklif-kalem-ad').value.trim();
+    const detay = row.querySelector('.teklif-kalem-detay')?.value.trim() || '';
     const miktar = parseFloat(row.querySelector('.teklif-kalem-miktar').value) || 0;
     const birimFiyat = Math.max(0, tutarParse(row.querySelector('.teklif-kalem-fiyat').value) || 0);
     const tutar = miktar * birimFiyat;
     const tutarEl = row.querySelector('.teklif-kalem-tutar');
     if (tutarEl) tutarEl.textContent = `${tutar.toLocaleString('tr-TR')} ₺`;
-    return { ad, miktar, birimFiyat, tutar };
+    return { ad, detay, miktar, birimFiyat, tutar };
   }).filter(k => k.ad || k.tutar > 0);
 }
 
@@ -7676,10 +7687,13 @@ window.downloadTeklifPDF = async (id) => {
 
   document.getElementById('pt-kalemler').innerHTML = (t.kalemler || []).map((k,i) => `
     <tr style="background:${i%2===0?'#fff':'#F8FAFC'};border-bottom:1px solid #F1F5F9;">
-      <td style="padding:9px 16px;color:#0F172A;font-size:12px;">${k.ad}</td>
-      <td style="padding:9px 16px;text-align:center;color:#64748B;font-size:12px;">${k.miktar}</td>
-      <td style="padding:9px 16px;text-align:right;color:#64748B;font-size:12px;">${(k.birimFiyat||0).toLocaleString('tr-TR')} ₺</td>
-      <td style="padding:9px 16px;text-align:right;color:#0F172A;font-size:12px;font-weight:700;">${(k.tutar||0).toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:9px 16px;color:#0F172A;font-size:12px;">
+        <div style="font-weight:600;">${k.ad}</div>
+        ${k.detay ? `<div style="font-size:10.5px;color:#64748B;margin-top:3px;white-space:pre-line;line-height:1.5;">${k.detay}</div>` : ''}
+      </td>
+      <td style="padding:9px 16px;text-align:center;color:#64748B;font-size:12px;vertical-align:top;">${k.miktar}</td>
+      <td style="padding:9px 16px;text-align:right;color:#64748B;font-size:12px;vertical-align:top;">${(k.birimFiyat||0).toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:9px 16px;text-align:right;color:#0F172A;font-size:12px;font-weight:700;vertical-align:top;">${(k.tutar||0).toLocaleString('tr-TR')} ₺</td>
     </tr>`).join('');
 
   document.getElementById('pt-araToplam').textContent = `${(t.araToplam||0).toLocaleString('tr-TR')} ₺`;
@@ -11653,26 +11667,19 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div style="background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.15);border-radius:10px;padding:14px;">
         <div style="font-size:10px;font-weight:700;color:#10B981;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">⚡ Hızlı Kalem Ekle (Asansör Standart Kalemleri)</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;">
-          <button type="button" onclick="teklifKalemEkle({ad:'Periyodik Bakım Hizmeti (Aylık)',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">🔧 Periyodik Bakım</button>
-          <button type="button" onclick="teklifKalemEkle({ad:'Asansör Montajı (Komple)',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">🏗️ Montaj</button>
-          <button type="button" onclick="teklifKalemEkle({ad:'Revizyon / Modernizasyon',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">♻️ Revizyon</button>
-          <button type="button" onclick="teklifKalemEkle({ad:'Arıza Giderim / Onarım',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">⚠️ Onarım</button>
-          <button type="button" onclick="teklifKalemEkle({ad:'Yıllık Periyodik Muayene (TSE)',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">📋 Muayene</button>
-          <button type="button" onclick="teklifKalemEkle({ad:'Yedek Parça',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">🔩 Yedek Parça</button>
-          <button type="button" onclick="teklifKalemEkle({ad:'İşçilik / Servis Ücreti',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">👷 İşçilik</button>
-          <button type="button" onclick="teklifKalemEkle({ad:'',miktar:1,birimFiyat:0})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(100,116,139,.1);color:#94A3B8;border:1px solid rgba(100,116,139,.25);border-radius:6px;cursor:pointer;">+ Serbest Kalem</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Periyodik Bakım Hizmeti',miktar:1,birimFiyat:0,detay:'Aylık periyodik bakım kapsamı:\n• Makine dairesi: motor, redüktör, fren, halatlar kontrolü ve yağlama\n• Kabin: aydınlatma, buton, kapı sistemi, hız regülatörü kontrolü\n• Kuyuluk: tampon, alt nihayet şalteri, kılavuz ray yağlama\n• TSE standartlarına uygun güvenlik testleri'})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">🔧 Periyodik Bakım</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Asansör Montajı',miktar:1,birimFiyat:0,detay:'Komple asansör montajı kapsamı:\n• Tahrik makinesi ve dişli kutusu montajı\n• Kabin, çerçeve ve karşı ağırlık montajı\n• Kılavuz ray ve braketi montajı\n• Kapı sistemi (kabin + kat kapıları) montajı\n• Elektrik panosu, kablolama ve bağlantılar\n• Devreye alma ve test (TSE belgesi dahil)'})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">🏗️ Montaj</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Revizyon / Modernizasyon',miktar:1,birimFiyat:0,detay:'Revizyon kapsamında değiştirilecek parçalar:\n\nMAKİNE DAİRESİ:\n• Tahrik motoru\n• Dişli kutusu / redüktör\n• Fren sistemi\n• Halat seti\n\nKABİN:\n• Kapı operatörü ve mekanizması\n• Kabin aydınlatması (LED)\n• Buton paneli ve gösterge\n• Kabin iç kaplaması (opsiyonel)\n\nKUYULUK & RAY:\n• Alt ve üst tamponlar\n• Ray braketleri\n• Hız regülatörü'})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">♻️ Revizyon</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Arıza Giderim / Onarım',miktar:1,birimFiyat:0,detay:'Arıza tespiti ve onarımı.\n(Arıza detayını buraya yazınız)'})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">⚠️ Onarım</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Yıllık Periyodik Muayene (TSE)',miktar:1,birimFiyat:0,detay:'6331 sayılı İş Sağlığı ve Güvenliği Kanunu kapsamında yıllık zorunlu periyodik muayene.\n• Yetkili muayene kuruluşu tarafından gerçekleştirilir\n• Muayene raporu ve TSE belgesi düzenlenir\n• Elektrik, mekanik ve güvenlik sistemleri eksiksiz denetlenir'})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">📋 Muayene</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'Yedek Parça',miktar:1,birimFiyat:0,detay:'(Parça adı ve açıklamasını buraya yazınız)'})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">🔩 Yedek Parça</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'İşçilik / Servis Ücreti',miktar:1,birimFiyat:0,detay:'Teknik servis ve işçilik ücreti.'})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(16,185,129,.1);color:#10B981;border:1px solid rgba(16,185,129,.25);border-radius:6px;cursor:pointer;">👷 İşçilik</button>
+          <button type="button" onclick="teklifKalemEkle({ad:'',miktar:1,birimFiyat:0,detay:''})" style="padding:6px 10px;font-size:11px;font-weight:600;background:rgba(100,116,139,.1);color:#94A3B8;border:1px solid rgba(100,116,139,.25);border-radius:6px;cursor:pointer;">+ Serbest Kalem</button>
         </div>
       </div>
 
       <!-- Kalem Listesi -->
       <div>
-        <div style="display:grid;grid-template-columns:1fr 56px 90px 90px 26px;gap:6px;margin-bottom:6px;">
-          <span style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;">Açıklama</span>
-          <span style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;">Miktar</span>
-          <span style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;">Birim ₺</span>
-          <span style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;text-align:right;">Tutar</span>
-          <span></span>
-        </div>
         <div id="f-teklif-kalemListesi"></div>
       </div>
 
