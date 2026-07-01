@@ -6957,7 +6957,14 @@ async function renderHtmlToPdf(elementId, fileName) {
     wrapper.style.top = '-99999px';
     wrapper.style.zIndex = '-1';
 
-    const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+    const canvas = await html2canvas(el, {
+      scale: 3,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      allowTaint: false,
+      imageTimeout: 0,
+    });
     const imgData = canvas.toDataURL('image/png');
 
     const { jsPDF } = window.jspdf;
@@ -7687,13 +7694,13 @@ window.downloadTeklifPDF = async (id) => {
 
   document.getElementById('pt-kalemler').innerHTML = (t.kalemler || []).map((k,i) => `
     <tr style="background:${i%2===0?'#fff':'#F8FAFC'};border-bottom:1px solid #F1F5F9;">
-      <td style="padding:9px 16px;color:#0F172A;font-size:12px;">
+      <td style="padding:11px 16px;color:#0F172A;font-size:13px;">
         <div style="font-weight:600;">${k.ad}</div>
-        ${k.detay ? `<div style="font-size:10.5px;color:#64748B;margin-top:3px;white-space:pre-line;line-height:1.5;">${k.detay}</div>` : ''}
+        ${k.detay ? `<div style="font-size:11.5px;color:#64748B;margin-top:4px;white-space:pre-line;line-height:1.6;">${k.detay}</div>` : ''}
       </td>
-      <td style="padding:9px 16px;text-align:center;color:#64748B;font-size:12px;vertical-align:top;">${k.miktar}</td>
-      <td style="padding:9px 16px;text-align:right;color:#64748B;font-size:12px;vertical-align:top;">${(k.birimFiyat||0).toLocaleString('tr-TR')} ₺</td>
-      <td style="padding:9px 16px;text-align:right;color:#0F172A;font-size:12px;font-weight:700;vertical-align:top;">${(k.tutar||0).toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:11px 16px;text-align:center;color:#64748B;font-size:13px;vertical-align:top;">${k.miktar}</td>
+      <td style="padding:11px 16px;text-align:right;color:#64748B;font-size:13px;vertical-align:top;">${(k.birimFiyat||0).toLocaleString('tr-TR')} ₺</td>
+      <td style="padding:11px 16px;text-align:right;color:#0F172A;font-size:13px;font-weight:700;vertical-align:top;">${(k.tutar||0).toLocaleString('tr-TR')} ₺</td>
     </tr>`).join('');
 
   document.getElementById('pt-araToplam').textContent = `${(t.araToplam||0).toLocaleString('tr-TR')} ₺`;
@@ -11706,7 +11713,7 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 <!-- ════════════════════════════════════
      TEKLİF PDF ŞABLONU (ekran dışı, sadece PDF üretiminde kullanılır)
 ════════════════════════════════════ -->
-<div id="pdfTeklifSablon" style="position:fixed;left:-9999px;top:0;width:800px;background:#fff;font-family:'Inter',system-ui,sans-serif;color:#0F172A;">
+<div id="pdfTeklifSablon" style="position:fixed;left:-9999px;top:0;width:794px;background:#fff;font-family:'Inter',system-ui,sans-serif;color:#0F172A;font-size:13px;line-height:1.5;">
 
   <!-- Başlık Bandı -->
   <div style="background:linear-gradient(135deg,#0F172A 0%,#1E3A5F 100%);padding:32px 40px;display:flex;justify-content:space-between;align-items:flex-start;">
@@ -11722,9 +11729,9 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <rect x="62.5" y="67" width="3" height="8" fill="#1E293B"/>
       </svg>
       <div>
-        <div style="font-size:22px;font-weight:900;color:#fff;letter-spacing:-.5px;">AS-EL ASANSÖR</div>
-        <div style="font-size:11px;color:#94A3B8;margin-top:4px;letter-spacing:.08em;">TEKNİK SERVİS VE BAKIM HİZMETLERİ</div>
-        <div style="margin-top:12px;font-size:10px;color:#64748B;line-height:1.6;">
+        <div style="font-size:26px;font-weight:900;color:#fff;letter-spacing:-.5px;">AS-EL ASANSÖR</div>
+        <div style="font-size:12px;color:#94A3B8;margin-top:4px;letter-spacing:.08em;">TEKNİK SERVİS VE BAKIM HİZMETLERİ</div>
+        <div style="margin-top:12px;font-size:11px;color:#64748B;line-height:1.7;">
           Esenyurt / İstanbul<br/>
           Tel: 0533 497 73 17<br/>
           info@as-elasansor.com.tr
@@ -11733,12 +11740,12 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
     <div style="text-align:right;">
       <div style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:14px 20px;">
-        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;">Teklif No</div>
-        <div id="pt-teklifNo" style="font-size:16px;font-weight:800;color:#00ADB5;font-family:monospace;"></div>
-        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:.1em;margin-top:10px;margin-bottom:4px;">Teklif Tarihi</div>
-        <div id="pt-tarih" style="font-size:13px;font-weight:700;color:#fff;"></div>
-        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:.1em;margin-top:8px;margin-bottom:4px;">Geçerlilik</div>
-        <div id="pt-gecerlilik" style="font-size:13px;font-weight:700;color:#FCD34D;"></div>
+        <div style="font-size:11px;color:#94A3B8;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;">Teklif No</div>
+        <div id="pt-teklifNo" style="font-size:17px;font-weight:800;color:#00ADB5;font-family:monospace;"></div>
+        <div style="font-size:11px;color:#94A3B8;text-transform:uppercase;letter-spacing:.1em;margin-top:10px;margin-bottom:4px;">Teklif Tarihi</div>
+        <div id="pt-tarih" style="font-size:14px;font-weight:700;color:#fff;"></div>
+        <div style="font-size:11px;color:#94A3B8;text-transform:uppercase;letter-spacing:.1em;margin-top:8px;margin-bottom:4px;">Geçerlilik</div>
+        <div id="pt-gecerlilik" style="font-size:14px;font-weight:700;color:#FCD34D;"></div>
       </div>
     </div>
   </div>
@@ -11746,16 +11753,16 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
   <!-- Teklif Başlığı + Müşteri Bilgileri -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:2px solid #E2E8F0;">
     <div style="padding:22px 40px;border-right:1px solid #F1F5F9;">
-      <div style="font-size:10px;font-weight:700;color:#00ADB5;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">SAYIN</div>
-      <div id="pt-musteriAdi" style="font-size:16px;font-weight:800;color:#0F172A;"></div>
-      <div id="pt-musteriYetkili" style="font-size:12px;color:#475569;margin-top:2px;"></div>
-      <div id="pt-musteriTel" style="font-size:12px;color:#475569;margin-top:2px;"></div>
-      <div id="pt-musteriAdres" style="font-size:11px;color:#64748B;margin-top:6px;line-height:1.4;"></div>
+      <div style="font-size:11px;font-weight:700;color:#00ADB5;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;">SAYIN</div>
+      <div id="pt-musteriAdi" style="font-size:18px;font-weight:800;color:#0F172A;"></div>
+      <div id="pt-musteriYetkili" style="font-size:13px;color:#475569;margin-top:3px;"></div>
+      <div id="pt-musteriTel" style="font-size:13px;color:#475569;margin-top:2px;"></div>
+      <div id="pt-musteriAdres" style="font-size:12px;color:#64748B;margin-top:6px;line-height:1.5;"></div>
     </div>
     <div style="padding:22px 40px;background:#F8FAFC;">
-      <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">KONU</div>
-      <div style="font-size:13px;font-weight:700;color:#0F172A;">Asansör Hizmet Teklifi</div>
-      <div style="font-size:11px;color:#64748B;margin-top:6px;line-height:1.5;">
+      <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">KONU</div>
+      <div style="font-size:14px;font-weight:700;color:#0F172A;">Asansör Hizmet Teklifi</div>
+      <div style="font-size:12px;color:#64748B;margin-top:6px;line-height:1.6;">
         Sayın ilgili,<br/>
         Talebiniz doğrultusunda aşağıdaki hizmet teklifimizi sunarız.
       </div>
@@ -11764,14 +11771,14 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
   <!-- Kalemler Tablosu -->
   <div style="padding:28px 40px;">
-    <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px;">TEKLİF KALEMLERİ</div>
+    <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px;">TEKLİF KALEMLERİ</div>
     <table style="width:100%;border-collapse:collapse;">
       <thead>
         <tr style="background:#0F172A;">
-          <th style="padding:10px 16px;text-align:left;color:#fff;font-size:10px;text-transform:uppercase;font-weight:700;border-radius:8px 0 0 0;">Açıklama</th>
-          <th style="padding:10px 12px;text-align:center;color:#fff;font-size:10px;text-transform:uppercase;font-weight:700;">Miktar</th>
-          <th style="padding:10px 12px;text-align:right;color:#fff;font-size:10px;text-transform:uppercase;font-weight:700;">Birim Fiyat</th>
-          <th style="padding:10px 16px;text-align:right;color:#fff;font-size:10px;text-transform:uppercase;font-weight:700;border-radius:0 8px 0 0;">Tutar</th>
+          <th style="padding:11px 16px;text-align:left;color:#fff;font-size:11px;text-transform:uppercase;font-weight:700;border-radius:8px 0 0 0;">Açıklama</th>
+          <th style="padding:11px 12px;text-align:center;color:#fff;font-size:11px;text-transform:uppercase;font-weight:700;">Miktar</th>
+          <th style="padding:11px 12px;text-align:right;color:#fff;font-size:11px;text-transform:uppercase;font-weight:700;">Birim Fiyat</th>
+          <th style="padding:11px 16px;text-align:right;color:#fff;font-size:11px;text-transform:uppercase;font-weight:700;border-radius:0 8px 0 0;">Tutar</th>
         </tr>
       </thead>
       <tbody id="pt-kalemler"></tbody>
@@ -11779,16 +11786,16 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 
     <!-- Toplam Kutusu -->
     <div style="display:flex;justify-content:flex-end;margin-top:16px;">
-      <div style="min-width:260px;">
-        <div style="display:flex;justify-content:space-between;padding:7px 0;font-size:12px;color:#475569;border-bottom:1px solid #F1F5F9;">
+      <div style="min-width:280px;">
+        <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;color:#475569;border-bottom:1px solid #F1F5F9;">
           <span>Ara Toplam</span><span id="pt-araToplam" style="font-weight:600;"></span>
         </div>
-        <div id="pt-kdvSatiri" style="display:flex;justify-content:space-between;padding:7px 0;font-size:12px;color:#475569;border-bottom:1px solid #F1F5F9;">
+        <div id="pt-kdvSatiri" style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;color:#475569;border-bottom:1px solid #F1F5F9;">
           <span>KDV (%20)</span><span id="pt-kdv" style="font-weight:600;"></span>
         </div>
-        <div style="display:flex;justify-content:space-between;padding:10px 14px;margin-top:4px;background:#0F172A;border-radius:8px;">
-          <span style="font-size:13px;font-weight:800;color:#fff;">GENEL TOPLAM</span>
-          <span id="pt-genelToplam" style="font-size:15px;font-weight:900;color:#00ADB5;"></span>
+        <div style="display:flex;justify-content:space-between;padding:12px 16px;margin-top:6px;background:#0F172A;border-radius:8px;">
+          <span style="font-size:14px;font-weight:800;color:#fff;">GENEL TOPLAM</span>
+          <span id="pt-genelToplam" style="font-size:17px;font-weight:900;color:#00ADB5;"></span>
         </div>
       </div>
     </div>
@@ -11797,21 +11804,21 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
   <!-- Notlar + İmza -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid #E2E8F0;padding:22px 40px;">
     <div style="padding-right:24px;border-right:1px solid #F1F5F9;">
-      <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;">KAPSAM VE NOTLAR</div>
-      <div id="pt-not" style="font-size:11px;color:#475569;line-height:1.6;"></div>
+      <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;">KAPSAM VE NOTLAR</div>
+      <div id="pt-not" style="font-size:12px;color:#475569;line-height:1.7;"></div>
     </div>
     <div style="padding-left:24px;">
-      <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px;">ONAY</div>
-      <div style="border-bottom:1px solid #CBD5E1;margin-bottom:4px;height:36px;"></div>
-      <div style="font-size:9.5px;color:#94A3B8;">AS-EL Asansör Yetkilisi İmza/Kaşe</div>
-      <div style="border-bottom:1px solid #CBD5E1;margin-bottom:4px;height:36px;margin-top:16px;"></div>
-      <div style="font-size:9.5px;color:#94A3B8;">Müşteri Onayı İmza/Kaşe</div>
+      <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px;">ONAY</div>
+      <div style="border-bottom:1px solid #CBD5E1;margin-bottom:4px;height:40px;"></div>
+      <div style="font-size:10px;color:#94A3B8;">AS-EL Asansör Yetkilisi İmza/Kaşe</div>
+      <div style="border-bottom:1px solid #CBD5E1;margin-bottom:4px;height:40px;margin-top:18px;"></div>
+      <div style="font-size:10px;color:#94A3B8;">Müşteri Onayı İmza/Kaşe</div>
     </div>
   </div>
 
   <!-- Alt Bilgi -->
-  <div style="background:#F8FAFC;padding:12px 40px;border-top:1px solid #E2E8F0;text-align:center;">
-    <div style="font-size:9px;color:#94A3B8;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17 · Bu teklif belgesi, yukarıda belirtilen geçerlilik tarihine kadar geçerlidir.</div>
+  <div style="background:#F8FAFC;padding:13px 40px;border-top:1px solid #E2E8F0;text-align:center;">
+    <div style="font-size:10px;color:#94A3B8;">AS-EL Asansör · Esenyurt / İstanbul · 0533 497 73 17 · Bu teklif belgesi, yukarıda belirtilen geçerlilik tarihine kadar geçerlidir.</div>
   </div>
 </div>
 
