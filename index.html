@@ -4155,6 +4155,10 @@ function renderAsansorler() {
         <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3m4 0h0M14 17h7M14 21h7"/></svg>
         QR Kod
       </button>
+      <button onclick="asansorGecmisAc('${a.id}','${(a.bina+' - '+a.kabin).replace(/'/g,"\\'")}')" style="width:100%;padding:8px;font-size:11px;font-weight:700;background:rgba(139,92,246,.1);color:#A78BFA;border:1px solid rgba(139,92,246,.25);border-radius:8px;cursor:pointer;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:6px;">
+        <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        📅 Geçmiş & Zaman Çizelgesi
+      </button>
       <div style="display:flex;gap:8px;">
         <button onclick="muayeneGuncelle('${a.id}')" class="btn-sm admin-only" style="flex:1;padding:7px;font-size:11px;">✓ Muayene Yapıldı</button>
         <button onclick="editAsansor('${a.id}')" class="btn-ghost admin-only" style="flex:1;padding:7px;font-size:11px;">Düzenle</button>
@@ -4180,6 +4184,104 @@ function renderMuayeneSayac() {
     else { badge.style.display = 'none'; }
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   ASANSÖR GEÇMİŞ & ZAMAN ÇİZELGESİ
+   Seçilen asansöre ait TÜM kayıtları (bakımlar, arızalar, muayeneler,
+   montaj) tek bir kronolojik zaman çizelgesinde gösterir. Her kayıt
+   türünün rengi ve ikonu farklıdır — tek bakışta geçmiş okunabilir.
+═══════════════════════════════════════════════════════════════ */
+window.asansorGecmisAc = (asansorId, asansorAd) => {
+  const asansor = G_ASANSORLER.find(a => a.id === asansorId);
+  if (!asansor) return;
+
+  // Tüm kaynak koleksiyonlardan bu asansöre ait olayları topla
+  const olaylar = [];
+
+  // Montaj tarihi (asansörün kendisinden)
+  if (asansor.montajTarihi) {
+    olaylar.push({
+      tarih: asansor.montajTarihi,
+      tip: 'montaj',
+      baslik: 'Asansör Montajı',
+      detay: `Marka: ${asansor.marka||'—'} · Kapasite: ${asansor.kapasite||'—'} kg · Durak: ${asansor.durak||'—'}`,
+      renk: '#3B82F6', ikon: '🏗️'
+    });
+  }
+
+  // Muayene tarihi
+  if (asansor.sonMuayeneTarihi) {
+    const m = muayeneDurumu(asansor.sonMuayeneTarihi);
+    olaylar.push({
+      tarih: asansor.sonMuayeneTarihi,
+      tip: 'muayene',
+      baslik: 'Periyodik Muayene',
+      detay: `Sonraki muayene: ${m.sonrakiTarih ? m.sonrakiTarih.toLocaleDateString('tr-TR') : '—'}`,
+      renk: '#8B5CF6', ikon: '📋'
+    });
+  }
+
+  // Bakımlar — bu asansörün binasına + kabinine göre eşleştir
+  G_BAKIMLAR.forEach(b => {
+    if (binaAdiNormalize(b.bina) !== binaAdiNormalize(asansor.bina)) return;
+    if (asansor.kabin && b.kabin && binaAdiNormalize(b.kabin) !== binaAdiNormalize(asansor.kabin)) return;
+    olaylar.push({
+      tarih: b.tarih || b.olusturuldu?.toDate?.()?.toISOString?.()?.slice(0,10) || '',
+      tip: 'bakim',
+      baslik: b.tip || 'Periyodik Bakım',
+      detay: [b.teknisyen ? `Teknisyen: ${b.teknisyen}` : '', b.notlar ? `Not: ${b.notlar}` : ''].filter(Boolean).join(' · ') || '—',
+      durum: b.durum,
+      renk: '#10B981', ikon: '🔧'
+    });
+  });
+
+  // Arızalar
+  G_ARIZALAR.forEach(a => {
+    if (binaAdiNormalize(a.bina) !== binaAdiNormalize(asansor.bina)) return;
+    if (asansor.kabin && a.kabin && binaAdiNormalize(a.kabin) !== binaAdiNormalize(asansor.kabin)) return;
+    olaylar.push({
+      tarih: a.tarih || '',
+      tip: 'ariza',
+      baslik: a.tip || 'Arıza',
+      detay: [a.aciklama ? a.aciklama : '', a.cozenTeknisyen ? `Çözen: ${a.cozenTeknisyen}` : '', a.cozumNotu ? `Çözüm: ${a.cozumNotu}` : ''].filter(Boolean).join(' · ') || '—',
+      durum: a.durum,
+      renk: a.durum === 'cozuldu' ? '#F59E0B' : '#EF4444',
+      ikon: a.durum === 'cozuldu' ? '✅' : '⚠️'
+    });
+  });
+
+  // Tarihe göre azalan sırala (en yeni üstte)
+  olaylar.sort((a, b) => (b.tarih || '').localeCompare(a.tarih || ''));
+
+  // Modal içeriğini doldur
+  document.getElementById('mGecmisBaslik').textContent = `${asansorAd} — Geçmiş`;
+  document.getElementById('mGecmisAltyazi').textContent = `${olaylar.length} kayıt · Montajdan bugüne tüm geçmiş`;
+
+  const timeline = document.getElementById('mGecmisTimeline');
+  if (!olaylar.length) {
+    timeline.innerHTML = `<div style="padding:32px;text-align:center;color:#475569;font-size:13px;">Bu asansöre ait henüz kayıt bulunmuyor.</div>`;
+  } else {
+    timeline.innerHTML = olaylar.map((o, i) => `
+      <div style="display:flex;gap:14px;padding-bottom:${i < olaylar.length-1 ? '0' : '0'};">
+        <!-- Sol: ikon + dikey çizgi -->
+        <div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0;">
+          <div style="width:36px;height:36px;border-radius:50%;background:${o.renk}22;border:2px solid ${o.renk};display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">${o.ikon}</div>
+          ${i < olaylar.length-1 ? `<div style="width:2px;flex:1;min-height:20px;background:rgba(30,41,59,.6);margin:4px 0;"></div>` : ''}
+        </div>
+        <!-- Sağ: içerik -->
+        <div style="flex:1;padding-bottom:${i < olaylar.length-1 ? '16px' : '0'};">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:13px;font-weight:700;color:#E2E8F0;">${o.baslik}</span>
+            <span style="font-size:11px;font-family:monospace;color:#64748B;white-space:nowrap;">${o.tarih ? new Date(o.tarih+'T00:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'long',year:'numeric'}) : '—'}</span>
+          </div>
+          <div style="font-size:11px;color:#64748B;margin-top:4px;line-height:1.5;">${o.detay}</div>
+          ${o.durum ? `<span style="display:inline-block;margin-top:5px;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${o.renk}22;color:${o.renk};">${o.durum}</span>` : ''}
+        </div>
+      </div>`).join('');
+  }
+
+  openModal('mGecmis');
+};
 
 /* ═══════════════════════════════════════════════════════════════
    BİLDİRİM MERKEZİ
@@ -10141,6 +10243,36 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
 </div>
 
 <!-- Arıza Modal -->
+<!-- ════════════════════════════════════
+     ASANSÖR GEÇMİŞ & ZAMAN ÇİZELGESİ MODALI
+════════════════════════════════════ -->
+<div id="modal-mGecmis" class="modal-wrap" onclick="if(event.target===this)closeModal('mGecmis')">
+  <div class="modal-box" style="max-width:580px;max-height:88vh;display:flex;flex-direction:column;">
+    <!-- Başlık -->
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <div>
+        <h3 id="mGecmisBaslik" style="font-size:14px;font-weight:700;color:#E2E8F0;"></h3>
+        <p id="mGecmisAltyazi" style="font-size:11px;color:#475569;margin-top:2px;"></p>
+      </div>
+      <button onclick="closeModal('mGecmis')" style="color:#475569;background:none;border:none;cursor:pointer;flex-shrink:0;">
+        <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- Renk açıklaması -->
+    <div style="padding:10px 20px;border-bottom:1px solid rgba(30,41,59,.4);display:flex;gap:14px;flex-wrap:wrap;flex-shrink:0;background:rgba(15,23,42,.3);">
+      <span style="font-size:10px;color:#64748B;">🏗️ <span style="color:#3B82F6;">Montaj</span></span>
+      <span style="font-size:10px;color:#64748B;">🔧 <span style="color:#10B981;">Bakım</span></span>
+      <span style="font-size:10px;color:#64748B;">⚠️ <span style="color:#EF4444;">Arıza</span></span>
+      <span style="font-size:10px;color:#64748B;">✅ <span style="color:#F59E0B;">Çözülen Arıza</span></span>
+      <span style="font-size:10px;color:#64748B;">📋 <span style="color:#8B5CF6;">Muayene</span></span>
+    </div>
+
+    <!-- Zaman çizelgesi (kaydırılabilir) -->
+    <div id="mGecmisTimeline" style="flex:1;overflow-y:auto;padding:20px;"></div>
+  </div>
+</div>
+
 <div id="modal-mAriza" class="modal-wrap" onclick="if(event.target===this)closeModal('mAriza')">
   <div class="modal-box">
     <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
