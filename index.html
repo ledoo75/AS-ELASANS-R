@@ -6104,13 +6104,130 @@ window.maasOdemeGeriAl = async (id) => {
 // listesini hesaplar — renderMaaslar() ile AYNI mantığı kullanır, ki
 // ekranda görünen ile dışa aktarılan birbirini tutsun. Hem Excel hem PDF
 // toplu export'u bu ortak fonksiyonu kullanır.
+/* ═══════════════════════════════════════════════════════════════
+   YILLIK İZİN HAKKI SİSTEMİ
+   ─────────────────────────────────────────────────────────────
+   Kural özeti:
+   • Her tam çalışma yılı sonunda (ise giriş tarihi üzerinden)
+     personel yillikIzinGun (varsayılan 14) gün izin hakkı kazanır.
+   • Yıl dolmadan izin kullanılabilir → bakiye eksi olabilir.
+   • "Gelmedi (izinsiz)" günleri de izin bakiyesinden düşülür
+     (yani işe gelmeyen personelin yıllık izni erir).
+   • Hesap her çağrıda anlık yapılır (Firestore'da bakiye saklanmaz,
+     bu sayede geçmişe dönük düzeltme veya mesai silinmesi anında
+     bakiyeye yansır).
+═══════════════════════════════════════════════════════════════ */
+
+/**
+ * personelIzinOzeti(kullaniciId, bugune_kadar_ayKey)
+ *
+ * Döndürür:
+ *   kazanilanToplamGun  — ise girişinden bugüne kadar kazanılan toplam izin
+ *   kullanilanGun       — kullanılan izin günü ("izinli" + "gelmedi" günleri)
+ *   kalanBakiye         — kazanılan - kullanılan (eksi olabilir)
+ *   tamYil              — kaç tam yıl doldurulmuş
+ *   yillikIzinGun       — o personelin yıllık izin hakkı
+ *   iseGirisTarihi      — kullanıcı kaydından gelen tarih
+ */
+function personelIzinOzeti(kullaniciId) {
+  const kullanici = G_KULLANICILAR.find(u => u.id === kullaniciId);
+  if (!kullanici?.iseGirisTarihi) {
+    return { kazanilanToplamGun: 0, kullanilanGun: 0, kalanBakiye: 0, tamYil: 0,
+             yillikIzinGun: 14, iseGirisTarihi: null, eksikDakikaGun: 0, toplamDusumGun: 0 };
+  }
+
+  const yillikIzinGun = kullanici.yillikIzinGun || 14;
+  const giris = new Date(kullanici.iseGirisTarihi + 'T00:00:00');
+  const bugun = new Date();
+
+  // Kaç tam yıl dolduğunu hesapla
+  let tamYil = bugun.getFullYear() - giris.getFullYear();
+  if (
+    bugun.getMonth() < giris.getMonth() ||
+    (bugun.getMonth() === giris.getMonth() && bugun.getDate() < giris.getDate())
+  ) { tamYil--; }
+  if (tamYil < 0) tamYil = 0;
+
+  const kazanilanToplamGun = tamYil * yillikIzinGun;
+
+  // 1) Açık izin günleri + gelmedi günleri
+  let kullanilanGun = 0;
+  G_MESAI.filter(m =>
+    m.personelId === kullaniciId &&
+    (m.durum === 'izinli' || m.durum === 'gelmedi')
+  ).forEach(m => {
+    if (m.tarihBaslangic && m.tarihBitis && m.tarihBitis !== m.tarihBaslangic) {
+      const bas = new Date(m.tarihBaslangic + 'T00:00:00');
+      const bit = new Date(m.tarihBitis + 'T00:00:00');
+      kullanilanGun += Math.max(1, Math.round((bit - bas) / 86400000) + 1);
+    } else {
+      kullanilanGun += 1;
+    }
+  });
+
+  // 2) Eksik saat birikimi → tam güne dönüşünce izinden düş
+  // "Çalıştı" kayıtlarında, beklenen (standart) dakikadan AZ çalışılan
+  // günlerin eksik dakikaları toplanır. Toplam STANDART_GUNLUK_DAKIKA'ya
+  // ulaştığında 1 izin günü düşülür (kesirli günler bir sonraki döneme taşınır).
+  let birikimliEksikDakika = 0;
+  G_MESAI.filter(m => m.personelId === kullaniciId && m.durum === 'calisti').forEach(m => {
+    const tarih = new Date((m.tarih||'') + 'T00:00:00');
+    const gun = tarih.getDay();
+    if (gun === 0) return; // Pazar — mesai yoksa beklenti de yok
+
+    // O gün için beklenen standart dakika
+    let beklenenDakika;
+    if (gun === 6) {
+      // Cumartesi: 08:30 → 13:00 = 270 dakika
+      beklenenDakika = saateCevir(CUMARTESI_VARDIYA_BITIS) - saateCevir(HAFTAICI_VARDIYA_BASLA);
+    } else {
+      // Hafta içi: 510 dakika
+      beklenenDakika = STANDART_GUNLUK_DAKIKA;
+    }
+
+    const { normalDakika, fazlaDakika } = gunlukFazlaMesaiHesapla(m.tarih, m.giris, m.cikis);
+    const calisilanDakika = normalDakika + fazlaDakika;
+    const eksikDakika = beklenenDakika - calisilanDakika;
+
+    if (eksikDakika > 0) {
+      birikimliEksikDakika += eksikDakika;
+    }
+  });
+
+  // Toplam birikmiş eksik dakikayı tam gün sayısına çevir
+  const eksikDakikaGun = Math.floor(birikimliEksikDakika / STANDART_GUNLUK_DAKIKA);
+  const toplamDusumGun  = kullanilanGun + eksikDakikaGun; // toplam izin bakiyesinden düşülecek
+  const kalanBakiye     = kazanilanToplamGun - toplamDusumGun;
+
+  return {
+    kazanilanToplamGun, kullanilanGun, eksikDakikaGun,
+    toplamDusumGun, kalanBakiye, tamYil, yillikIzinGun,
+    iseGirisTarihi: kullanici.iseGirisTarihi,
+    birikimliEksikDakika,
+    // Bir sonraki düşüme kaç dakika kaldığını göster (kullanıcı bilgisi için)
+    sonrakiDusumeDakika: STANDART_GUNLUK_DAKIKA - (birikimliEksikDakika % STANDART_GUNLUK_DAKIKA)
+  };
+}
+
 function maasListesiHesapla(ayKey) {
   let toplamMaas = 0, toplamFazlaMesai = 0, toplamAvans = 0, toplamNet = 0, toplamKalanBakiye = 0;
   const satirlar = G_MAASLAR.map(m => {
     const buAyAvans = personelAvansKesintisiHesapla(m.personelId, ayKey);
     const kalanBakiye = personelKalanAvansBakiyesi(m.personelId, ayKey);
     const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
-    const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans;
+    const izinOzeti = personelIzinOzeti(m.personelId);
+
+    // "Gelmedi (izinsiz)" günleri için maaş kesintisi:
+    // Günlük brüt maaş = aylık maaş / 30
+    const buAyGelmediGun = G_MESAI.filter(k =>
+      k.personelId === m.personelId &&
+      k.durum === 'gelmedi' &&
+      (k.tarih || '').startsWith(ayKey)
+    ).length;
+    const gunlukMaas = m.aylikMaas / 30;
+    const gelmediKesinti = Math.round(buAyGelmediGun * gunlukMaas);
+
+    const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans - gelmediKesinti;
     const odemeKaydi = G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey);
 
     toplamMaas += m.aylikMaas;
@@ -6120,9 +6237,12 @@ function maasListesiHesapla(ayKey) {
     toplamKalanBakiye += kalanBakiye;
 
     return {
+      personelId: m.personelId,
       personelAd: m.personelAd, aylikMaas: m.aylikMaas,
       fazlaMesaiSaat: mesai.fazlaSaat, fazlaMesaiUcreti: mesai.fazlaMesaiUcreti,
+      buAyGelmediGun, gelmediKesinti,
       avans: buAyAvans, kalanBakiye, netOdenecek,
+      izinOzeti,
       odendiMi: !!odemeKaydi, odemeTarihi: odemeKaydi?.odemeTarihi || null
     };
   }).sort((a,b) => a.personelAd.localeCompare(b.personelAd, 'tr'));
@@ -6267,6 +6387,9 @@ const HAFTAICI_VARDIYA_BITIS = '18:00';
 const CUMARTESI_VARDIYA_BITIS = '13:00'; // bu saatten sonrası fazla mesai
 const OGLE_ARASI_BASLA = '12:00'; // hafta içi vardiyadan düşülen 1 saatlik öğle arası
 const OGLE_ARASI_BITIS = '13:00';
+// Standart günlük net çalışma: 08:30→18:00 = 570dk − 60dk öğle = 510dk (8.5 saat)
+// Eksik dakika toplamı bu değere bölünerek yıllık izinden kaç gün düşüleceği bulunur.
+const STANDART_GUNLUK_DAKIKA = 510;
 
 function saateCevir(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
@@ -6391,16 +6514,33 @@ window.renderMaaslar = function() {
     const buAyAvans = personelAvansKesintisiHesapla(m.personelId, ayKey);
     const kalanBakiye = personelKalanAvansBakiyesi(m.personelId, ayKey);
     const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
-    const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans;
+    const izinOzeti = personelIzinOzeti(m.personelId);
+
+    // "Gelmedi" günleri için maaş kesintisi
+    const buAyGelmediGun = G_MESAI.filter(k =>
+      k.personelId === m.personelId && k.durum === 'gelmedi' && (k.tarih||'').startsWith(ayKey)
+    ).length;
+    const gelmediKesinti = Math.round(buAyGelmediGun * (m.aylikMaas / 30));
+
+    const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans - gelmediKesinti;
     const odemeKaydi = G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey);
 
     toplamMaas += m.aylikMaas;
     toplamFazlaMesai += mesai.fazlaMesaiUcreti;
     if (odemeKaydi) { toplamOdenen += odemeKaydi.netOdenen; odenenSayisi++; }
 
+    // İzin bakiyesi renk kodu
+    const izinRenk = izinOzeti.kalanBakiye < 0 ? '#EF4444' : izinOzeti.kalanBakiye <= 3 ? '#F59E0B' : '#10B981';
+    const izinBilgi = izinOzeti.iseGirisTarihi
+      ? `${izinOzeti.kalanBakiye} gün`
+      : '—';
+
     return `
     <tr class="tbl-row">
-      <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">${m.personelAd}</td>
+      <td style="padding:12px 18px;font-size:13px;font-weight:600;color:#E2E8F0;">
+        ${m.personelAd}
+        ${izinOzeti.iseGirisTarihi ? `<div style="font-size:9px;color:#475569;margin-top:2px;">${izinOzeti.tamYil} yıl kıdem · İşe: ${new Date(izinOzeti.iseGirisTarihi+'T00:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short',year:'numeric'})}</div>` : ''}
+      </td>
       <td style="padding:12px;text-align:right;font-size:12px;color:#94A3B8;">${m.aylikMaas.toLocaleString('tr-TR')} ₺</td>
       <td style="padding:12px;text-align:right;font-size:12px;">
         ${mesai.fazlaSaat > 0
@@ -6410,8 +6550,6 @@ window.renderMaaslar = function() {
       <td style="padding:12px;text-align:right;font-size:12px;color:#F59E0B;">
         ${buAyAvans.toLocaleString('tr-TR')} ₺
         ${(() => {
-          // Bu personelin bu ay kesinti taşıyan taksitli avanslarını listele
-          // (örn. "Taksit 2/3" gibi) — birden fazla taksitli avans varsa hepsi gösterilir.
           const taksitDetaylari = G_AVANSLAR.filter(a => a.personelId === m.personelId && (a.kesintiTipi === 'taksit' || a.kesintiTipi === 'aylikTutar'))
             .map(a => {
               const tutar = avansBuAyKesintisi(a, ayKey);
@@ -6421,6 +6559,20 @@ window.renderMaaslar = function() {
             }).filter(Boolean);
           return taksitDetaylari.length ? `<div style="font-size:9px;color:#475569;margin-top:1px;">${taksitDetaylari.join(', ')}${kalanBakiye > 0 ? ` · <span style="color:#EF4444;">Kalan: ${kalanBakiye.toLocaleString('tr-TR')} ₺</span>` : ''}</div>` : '';
         })()}
+      </td>
+      <td style="padding:12px;text-align:center;font-size:12px;">
+        ${buAyGelmediGun > 0
+          ? `<span style="color:#EF4444;font-weight:700;">${buAyGelmediGun} gün</span><div style="font-size:9px;color:#EF4444;margin-top:1px;">-${gelmediKesinti.toLocaleString('tr-TR')} ₺ kesinti</div>`
+          : `<span style="color:#475569;">—</span>`}
+      </td>
+      <td style="padding:12px;text-align:center;font-size:12px;">
+        <span style="font-weight:700;color:${izinRenk};">${izinBilgi}</span>
+        ${izinOzeti.iseGirisTarihi ? `
+          <div style="font-size:9px;color:#475569;margin-top:1px;">${izinOzeti.kullanilanGun} izin + ${izinOzeti.eksikDakikaGun} eksik saat günü</div>
+          ${izinOzeti.birikimliEksikDakika > 0 && izinOzeti.sonrakiDusumeDakika < STANDART_GUNLUK_DAKIKA
+            ? `<div style="font-size:9px;color:#F59E0B;margin-top:1px;">⏱ ${Math.round(izinOzeti.sonrakiDusumeDakika/60*10)/10} saat daha → 1 gün düşer</div>`
+            : ''}
+        ` : ''}
       </td>
       <td style="padding:12px;text-align:right;font-size:13px;font-weight:800;color:#10B981;">${netOdenecek.toLocaleString('tr-TR')} ₺</td>
       <td style="padding:12px;text-align:right;">
@@ -7960,6 +8112,8 @@ window.createKullanici = async () => {
   const password = document.getElementById('f-kul-sifre').value;
   const rol      = document.getElementById('f-kul-rol').value;
   const bina     = document.getElementById('f-kul-bina').value.trim();
+  const iseGirisTarihi = document.getElementById('f-kul-iseGirisTarihi').value || null;
+  const yillikIzinGun  = parseInt(document.getElementById('f-kul-yillikIzinGun').value) || 14;
   const btn      = document.getElementById('kulSaveBtn');
   const errEl    = document.getElementById('kullaniciFormErr');
 
@@ -8002,6 +8156,8 @@ window.createKullanici = async () => {
       rolLabel: rolLabelMap[rol] || rol,
       initials: ad.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
       bina: rol === 'bina' ? bina : null,
+      iseGirisTarihi,
+      yillikIzinGun,
       kurucu: false,
       olusturuldu: serverTimestamp()
     });
@@ -9852,11 +10008,13 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Aylık Maaş</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Fazla Mesai (×1.5)</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bu Ay Avans</th>
+                  <th style="text-align:center;padding:11px 12px;font-size:10px;font-weight:700;color:#EF4444;text-transform:uppercase;letter-spacing:.08em;">Gelmedi / Kesinti</th>
+                  <th style="text-align:center;padding:11px 12px;font-size:10px;font-weight:700;color:#10B981;text-transform:uppercase;letter-spacing:.08em;">🏖️ İzin Bakiyesi</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Net Ödenecek</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
                   <th style="padding:11px 12px;"></th>
                 </tr></thead>
-                <tbody id="maasTableBody"><tr><td colspan="7" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
+                <tbody id="maasTableBody"><tr><td colspan="9" style="padding:24px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr></tbody>
               </table>
             </div>
           </div>
@@ -10205,6 +10363,23 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <input id="f-kul-bina" type="text" class="db-input" placeholder="Cari listesinden seçin veya yazın" list="kulBinaListesi"/>
         <datalist id="kulBinaListesi"></datalist>
         <p style="font-size:10px;color:#64748B;margin-top:5px;">ℹ️ Cari Yönetimi'ndeki binalar otomatik listelenir, dilerseniz farklı bir isim de yazabilirsiniz.</p>
+      </div>
+
+      <!-- İzin / İK Bilgileri -->
+      <div style="background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.15);border-radius:10px;padding:12px 14px;">
+        <div style="font-size:10px;font-weight:700;color:#10B981;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">🏖️ İzin / İK Bilgileri</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">İşe Giriş Tarihi</label>
+            <input id="f-kul-iseGirisTarihi" type="date" class="db-input"/>
+            <p style="font-size:10px;color:#64748B;margin-top:4px;">Her yıl doldukça 14 gün izin hakkı kazanır.</p>
+          </div>
+          <div>
+            <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Yıllık İzin (gün/yıl)</label>
+            <input id="f-kul-yillikIzinGun" type="number" class="db-input" value="14" min="0" max="30" placeholder="14"/>
+            <p style="font-size:10px;color:#64748B;margin-top:4px;">Yasal minimum 14, farklı sözleşme için değiştirin.</p>
+          </div>
+        </div>
       </div>
 
       <!-- Rol açıklama kutusu -->
