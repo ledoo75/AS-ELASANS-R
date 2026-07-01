@@ -9424,6 +9424,46 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
         <div id="calDayDetail" style="display:none;margin-top:14px;"></div>
       </div>
 
+      <!-- TEKLİF / PROFORMA -->
+      <!-- ════════════════════════════════════
+     TEKLİF / PROFORMA SAYFASI (pg-teklifler)
+════════════════════════════════════ -->
+<div id="pg-teklifler" class="db-page" style="display:none;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+    <div>
+      <h2 style="font-size:15px;font-weight:800;color:var(--text-primary,#E2E8F0);">Teklif / Proforma</h2>
+      <p style="font-size:11px;color:#475569;margin-top:2px;">Yeni müşteriye asansör hizmet teklifi hazırlama</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <div class="search-box-wrap">
+        <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input type="text" class="db-input" placeholder="Müşteri, yetkili ara..." oninput="aramaGuncelle('teklifler', this.value)"/>
+      </div>
+      <button onclick="resetTeklifForm()" class="btn-sm">+ Yeni Teklif</button>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:rgba(30,41,59,.6);">
+            <th style="padding:11px 18px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Müşteri / Firma</th>
+            <th style="padding:11px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Teklif Tarihi</th>
+            <th style="padding:11px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Geçerlilik</th>
+            <th style="padding:11px;text-align:right;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Toplam</th>
+            <th style="padding:11px;text-align:center;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
+            <th style="padding:11px;text-align:right;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">İşlemler</th>
+          </tr>
+        </thead>
+        <tbody id="teklifTableBody">
+          <tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
       <!-- SÖZLEŞME & FATURA -->
       <div id="pg-sozlesmeler" class="db-page">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
@@ -11571,45 +11611,6 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
   </div>
 
-</div>
-
-<!-- ════════════════════════════════════
-     TEKLİF / PROFORMA SAYFASI (pg-teklifler)
-════════════════════════════════════ -->
-<div id="pg-teklifler" class="db-page" style="display:none;">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
-    <div>
-      <h2 style="font-size:15px;font-weight:800;color:var(--text-primary,#E2E8F0);">Teklif / Proforma</h2>
-      <p style="font-size:11px;color:#475569;margin-top:2px;">Yeni müşteriye asansör hizmet teklifi hazırlama</p>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <div class="search-box-wrap">
-        <svg class="search-box-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
-        <input type="text" class="db-input" placeholder="Müşteri, yetkili ara..." oninput="aramaGuncelle('teklifler', this.value)"/>
-      </div>
-      <button onclick="resetTeklifForm()" class="btn-sm">+ Yeni Teklif</button>
-    </div>
-  </div>
-
-  <div class="card" style="padding:0;overflow:hidden;">
-    <div style="overflow-x:auto;">
-      <table style="width:100%;border-collapse:collapse;">
-        <thead>
-          <tr style="background:rgba(30,41,59,.6);">
-            <th style="padding:11px 18px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Müşteri / Firma</th>
-            <th style="padding:11px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Teklif Tarihi</th>
-            <th style="padding:11px;text-align:left;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Geçerlilik</th>
-            <th style="padding:11px;text-align:right;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Toplam</th>
-            <th style="padding:11px;text-align:center;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
-            <th style="padding:11px;text-align:right;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">İşlemler</th>
-          </tr>
-        </thead>
-        <tbody id="teklifTableBody">
-          <tr><td colspan="6" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Yükleniyor...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
 </div>
 
 <!-- ════════════════════════════════════
