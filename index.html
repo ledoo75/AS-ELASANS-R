@@ -3355,33 +3355,84 @@ function renderDashboardEkstraBloklar() {
   }
 
   // ── İzinli Personel ──
+  // G_MESAI yerine G_IZIN_TALEPLERI kullanıyoruz — mesai kayıtları gün gün
+  // oluşturulduğu için G_MESAI'dan çekildiğinde aynı kişi birden fazla satırda
+  // görünüyordu. Talep tablosundan çekince her izin dönemi tek satır olur.
   const izinIcerikEl = document.getElementById('dash-izin-icerik');
   if (izinIcerikEl) {
     const bugunStr2 = new Date().toISOString().slice(0,10);
-    // G_MESAI_KAYITLARI'ndan "izin" tipindeki ve bugün geçerli olanları bul
-    const izinliPersonel = (G_MESAI || []).filter(m => {
-      if (m.tip !== 'izin') return false;
-      const bas = m.tarihBaslangic || m.tarih || '';
-      const bit = m.tarihBitis || m.tarih || '';
-      return bas <= bugunStr2 && bugunStr2 <= bit;
+
+    // Bugün geçerli olan onaylanmış izin taleplerini bul (tekrarsız personel bazında)
+    const bugunIzinli = (G_IZIN_TALEPLERI || []).filter(t =>
+      t.durum === 'onaylandi' &&
+      t.baslangic <= bugunStr2 &&
+      t.bitis >= bugunStr2
+    );
+
+    // Aynı personelin aynı anda birden fazla izni olsa da tek satır göster
+    const tekBugunIzinli = [];
+    const gorulenPersonel = new Set();
+    bugunIzinli.forEach(t => {
+      if (!gorulenPersonel.has(t.personelId)) {
+        gorulenPersonel.add(t.personelId);
+        tekBugunIzinli.push(t);
+      }
     });
 
-    if (!izinliPersonel.length) {
-      izinIcerikEl.innerHTML = `<div style="padding:8px 0 4px;text-align:center;color:#64748B;font-size:11px;">Bugün izinli personel yok ✅</div>`;
+    if (!tekBugunIzinli.length) {
+      // G_MESAI'dan da kontrol et (eski kayıtlar için fallback)
+      const eskiIzinli = (G_MESAI || []).filter(m => {
+        if (m.durum !== 'izinli') return false;
+        const bas = m.tarihBaslangic || m.tarih || '';
+        const bit = m.tarihBitis || m.tarih || '';
+        return bas <= bugunStr2 && bugunStr2 <= bit;
+      });
+      const tekEskiIzinli = [];
+      const gorulenEski = new Set();
+      eskiIzinli.forEach(m => {
+        if (!gorulenEski.has(m.personelId)) {
+          gorulenEski.add(m.personelId);
+          tekEskiIzinli.push(m);
+        }
+      });
+
+      if (!tekEskiIzinli.length) {
+        izinIcerikEl.innerHTML = `<div style="padding:8px 0 4px;text-align:center;color:#64748B;font-size:11px;">Bugün izinli personel yok ✅</div>`;
+      } else {
+        izinIcerikEl.innerHTML = tekEskiIzinli.map(m => {
+          const kullanici = G_KULLANICILAR.find(u => u.id === m.personelId);
+          const ad = kullanici?.ad || m.personelAd || '—';
+          const initials = ad.split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+          const bas = m.tarihBaslangic || m.tarih || '';
+          const bit = m.tarihBitis || m.tarih || '';
+          const aralikStr = bas && bit && bas !== bit
+            ? `${new Date(bas+'T00:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})} → ${new Date(bit+'T00:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})}`
+            : bas ? new Date(bas+'T00:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'}) : '';
+          return `
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(30,41,59,.3);">
+            <div style="width:24px;height:24px;border-radius:7px;background:rgba(6,182,212,.2);display:flex;align-items:center;justify-content:center;color:#06B6D4;font-size:9px;font-weight:800;flex-shrink:0;">${initials}</div>
+            <div style="min-width:0;">
+              <div style="font-size:12px;color:#E2E8F0;font-weight:600;">${ad}</div>
+              <div style="font-size:9.5px;color:#64748B;">🏖️ İzinli · ${aralikStr}</div>
+            </div>
+          </div>`;
+        }).join('');
+      }
     } else {
-      izinIcerikEl.innerHTML = izinliPersonel.map(m => {
-        const kullanici = G_KULLANICILAR.find(u => u.id === m.personelId);
-        const ad = kullanici?.ad || m.personelAd || '—';
+      izinIcerikEl.innerHTML = tekBugunIzinli.map(t => {
+        const kullanici = G_KULLANICILAR.find(u => u.id === t.personelId);
+        const ad = kullanici?.ad || t.personelAd || '—';
         const initials = ad.split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
-        const bitStr = m.tarihBitis && m.tarihBitis !== m.tarih
-          ? ` → ${new Date(m.tarihBitis+'T00:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})}`
-          : '';
+        const aralikStr = t.baslangic !== t.bitis
+          ? `${new Date(t.baslangic+'T00:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})} → ${new Date(t.bitis+'T00:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})}`
+          : new Date(t.baslangic+'T00:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'});
+        const turIcon = { yillik:'🏖️', hastalik:'🏥', mazeret:'📋', ucretsiz:'💼', dogum:'👶' }[t.tur] || '🏖️';
         return `
         <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(30,41,59,.3);">
           <div style="width:24px;height:24px;border-radius:7px;background:rgba(6,182,212,.2);display:flex;align-items:center;justify-content:center;color:#06B6D4;font-size:9px;font-weight:800;flex-shrink:0;">${initials}</div>
           <div style="min-width:0;">
-            <div style="font-size:12px;color:#E2E8F0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${ad}</div>
-            <div style="font-size:9.5px;color:#64748B;">🏖️ İzinli${bitStr}</div>
+            <div style="font-size:12px;color:#E2E8F0;font-weight:600;">${ad}</div>
+            <div style="font-size:9.5px;color:#64748B;">${turIcon} ${aralikStr}</div>
           </div>
         </div>`;
       }).join('');
