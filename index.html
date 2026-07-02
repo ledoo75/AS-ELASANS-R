@@ -2984,6 +2984,10 @@ window.deleteSozlesme = async (id, bina) => {
 window.resetSozlesmeForm = function() {
   ['f-soz-bina','f-soz-tutar','f-soz-gun','f-soz-baslangic','f-soz-sonodeme','f-soz-not'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('f-soz-sure').value = '12';
+  const bilgiEl = document.getElementById('sozlesmeTeklifBilgi');
+  if (bilgiEl) { bilgiEl.style.display = 'none'; bilgiEl.innerHTML = ''; }
+  const modalTitle = document.getElementById('mSozlesmeTitle');
+  if (modalTitle) modalTitle.textContent = 'Yeni Sözleşme Ekle';
   document.getElementById('sozBitisTarihiGoster').textContent = '—';
   document.getElementById('f-soz-editId').value = '';
   document.getElementById('f-soz-pdfOlustur').checked = true;
@@ -6857,6 +6861,13 @@ function fazlaMesaiHesapla(personelId, aylikMaas, ayKey) {
   return { toplamCalisilanSaat, fazlaSaat, saatlikUcret, fazlaMesaiUcreti };
 }
 
+// Maaş tablosunda eksik saat kesinti modunu değiştirir ve tabloyu yeniler.
+// Seçim localStorage'a kaydedilir (ay bazlı, personel bazlı).
+window.eksikSaatModDegistir = (personelId, ayKey, mod) => {
+  try { localStorage.setItem(`eksikSaatMod_${personelId}_${ayKey}`, mod); } catch(e) {}
+  renderMaaslar();
+};
+
 window.renderMaaslar = function() {
   const tbody = document.getElementById('maasTableBody');
   const ozetEl = document.getElementById('maasOzet');
@@ -6868,44 +6879,76 @@ window.renderMaaslar = function() {
   if (!document.getElementById('maasAySecim').value) document.getElementById('maasAySecim').value = ayKey;
 
   if (!G_MAASLAR.length) {
-    tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz maaş tanımı yapılmamış. "+ Maaş Tanımla" ile başlayın.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Henüz maaş tanımı yapılmamış. "+ Maaş Tanımla" ile başlayın.</td></tr>`;
     if (ozetEl) ozetEl.innerHTML = '';
     return;
   }
 
   const filtreliMaaslar = G_MAASLAR.filter(m => aramaEslesir(G_ARAMA.maaslar, m.personelAd));
   if (!filtreliMaaslar.length) {
-    tbody.innerHTML = `<tr><td colspan="7" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Aramayla eşleşen personel bulunamadı.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" style="padding:28px;text-align:center;color:#475569;font-size:13px;">Aramayla eşleşen personel bulunamadı.</td></tr>`;
     if (ozetEl) ozetEl.innerHTML = '';
     return;
   }
 
   let toplamMaas = 0, toplamOdenen = 0, odenenSayisi = 0, toplamFazlaMesai = 0;
 
-  tbody.innerHTML = filtreliMaaslar.map(m => {
-    const buAyAvans = personelAvansKesintisiHesapla(m.personelId, ayKey);
-    const kalanBakiye = personelKalanAvansBakiyesi(m.personelId, ayKey);
-    const mesai = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
-    const izinOzeti = personelIzinOzeti(m.personelId);
+  // Eksik saat kesinti modu — localStorage'da personel bazlı saklanır.
+  // Anahtar: "eksikSaatMod_${personelId}_${ayKey}"
+  // Değerler: "izin" | "maas" | "ikisi"
+  function eksikSaatModuOku(personelId) {
+    try { return localStorage.getItem(`eksikSaatMod_${personelId}_${ayKey}`) || 'izin'; }
+    catch(e) { return 'izin'; }
+  }
 
-    // "Gelmedi" günleri için maaş kesintisi
+  tbody.innerHTML = filtreliMaaslar.map(m => {
+    const buAyAvans   = personelAvansKesintisiHesapla(m.personelId, ayKey);
+    const kalanBakiye = personelKalanAvansBakiyesi(m.personelId, ayKey);
+    const mesai       = fazlaMesaiHesapla(m.personelId, m.aylikMaas, ayKey);
+    const izinOzeti   = personelIzinOzeti(m.personelId);
+    const eksikMod    = eksikSaatModuOku(m.personelId);
+
+    // "Gelmedi" günleri kesintisi (tam gün gelmeme)
     const buAyGelmediGun = G_MESAI.filter(k =>
       k.personelId === m.personelId && k.durum === 'gelmedi' && (k.tarih||'').startsWith(ayKey)
     ).length;
     const gelmediKesinti = Math.round(buAyGelmediGun * (m.aylikMaas / 30));
 
-    const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans - gelmediKesinti;
-    const odemeKaydi = G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey);
+    // Bu ay biriken eksik dakika (geç gelme / erken çıkma)
+    const buAyEksikDakika = G_MESAI.filter(k =>
+      k.personelId === m.personelId && k.durum === 'calisti' && (k.tarih||'').startsWith(ayKey)
+    ).reduce((toplam, k) => {
+      const gun = new Date((k.tarih||'')+'T00:00:00').getDay();
+      if (gun === 0 || gun === 6) return toplam;
+      const { normalDakika, fazlaDakika } = gunlukFazlaMesaiHesapla(k.tarih, k.giris, k.cikis);
+      const eksik = STANDART_GUNLUK_DAKIKA - (normalDakika + fazlaDakika);
+      return toplam + (eksik > 0 ? eksik : 0);
+    }, 0);
+
+    // Saatlik ücret = aylık maaş / (MESAI_REFERANS_SAAT)
+    const saatlikUcret = m.aylikMaas / MESAI_REFERANS_SAAT;
+    const eksikSaatKesinti = eksikMod === 'maas' || eksikMod === 'ikisi'
+      ? Math.round((buAyEksikDakika / 60) * saatlikUcret)
+      : 0;
+
+    const netOdenecek = m.aylikMaas + mesai.fazlaMesaiUcreti - buAyAvans - gelmediKesinti - eksikSaatKesinti;
+    const odemeKaydi  = G_MAAS_ODEMELERI.find(o => o.personelId === m.personelId && o.ayKey === ayKey);
 
     toplamMaas += m.aylikMaas;
     toplamFazlaMesai += mesai.fazlaMesaiUcreti;
     if (odemeKaydi) { toplamOdenen += odemeKaydi.netOdenen; odenenSayisi++; }
 
-    // İzin bakiyesi renk kodu
     const izinRenk = izinOzeti.kalanBakiye < 0 ? '#EF4444' : izinOzeti.kalanBakiye <= 3 ? '#F59E0B' : '#10B981';
-    const izinBilgi = izinOzeti.iseGirisTarihi
-      ? `${izinOzeti.kalanBakiye} gün`
-      : '—';
+    const izinBilgi = izinOzeti.iseGirisTarihi ? `${izinOzeti.kalanBakiye} gün` : '—';
+    const buAyEksikSaat = (buAyEksikDakika / 60).toFixed(1);
+
+    // Mod buton yardımcısı
+    const modBtn = (deger, etiket, renk) =>
+      `<button onclick="eksikSaatModDegistir('${m.personelId}','${ayKey}','${deger}')"
+        style="padding:3px 7px;font-size:9px;font-weight:700;border-radius:4px;cursor:pointer;
+               background:${eksikMod===deger ? renk+'33' : 'transparent'};
+               color:${eksikMod===deger ? renk : '#475569'};
+               border:1px solid ${eksikMod===deger ? renk : 'rgba(71,85,105,.3)'};">${etiket}</button>`;
 
     return `
     <tr class="tbl-row">
@@ -6934,14 +6977,30 @@ window.renderMaaslar = function() {
       </td>
       <td style="padding:12px;text-align:center;font-size:12px;">
         ${buAyGelmediGun > 0
-          ? `<span style="color:#EF4444;font-weight:700;">${buAyGelmediGun} gün</span><div style="font-size:9px;color:#EF4444;margin-top:1px;">-${gelmediKesinti.toLocaleString('tr-TR')} ₺ kesinti</div>`
+          ? `<span style="color:#EF4444;font-weight:700;">${buAyGelmediGun} gün</span><div style="font-size:9px;color:#EF4444;margin-top:1px;">-${gelmediKesinti.toLocaleString('tr-TR')} ₺</div>`
           : `<span style="color:#475569;">—</span>`}
+      </td>
+      <td style="padding:12px;text-align:center;font-size:11px;">
+        ${buAyEksikDakika > 0 ? `
+          <div style="font-weight:700;color:#F59E0B;margin-bottom:5px;">⏱ ${buAyEksikSaat} saat eksik</div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center;">
+            ${modBtn('izin', '→ İzin', '#8B5CF6')}
+            ${modBtn('maas', '→ Maaş', '#EF4444')}
+            ${modBtn('ikisi', 'Her İkisi', '#F59E0B')}
+          </div>
+          ${eksikMod === 'maas' || eksikMod === 'ikisi'
+            ? `<div style="font-size:9px;color:#EF4444;margin-top:4px;">-${eksikSaatKesinti.toLocaleString('tr-TR')} ₺ kesilecek</div>`
+            : ''}
+          ${(eksikMod === 'izin' || eksikMod === 'ikisi') && izinOzeti.iseGirisTarihi
+            ? `<div style="font-size:9px;color:#8B5CF6;margin-top:2px;">${izinOzeti.eksikDakikaGun} gün izinden düştü</div>`
+            : ''}
+        ` : `<span style="color:#10B981;font-size:10px;">✓ Tam</span>`}
       </td>
       <td style="padding:12px;text-align:center;font-size:12px;">
         <span style="font-weight:700;color:${izinRenk};">${izinBilgi}</span>
         ${izinOzeti.iseGirisTarihi ? `
           <div style="font-size:9px;color:#475569;margin-top:1px;">${izinOzeti.kullanilanGun} izin + ${izinOzeti.eksikDakikaGun} eksik saat günü</div>
-          ${izinOzeti.birikimliEksikDakika > 0 && izinOzeti.sonrakiDusumeDakika < STANDART_GUNLUK_DAKIKA
+          ${izinOzeti.sonrakiDusumeDakika < STANDART_GUNLUK_DAKIKA && izinOzeti.birikimliEksikDakika > 0
             ? `<div style="font-size:9px;color:#F59E0B;margin-top:1px;">⏱ ${Math.round(izinOzeti.sonrakiDusumeDakika/60*10)/10} saat daha → 1 gün düşer</div>`
             : ''}
         ` : ''}
@@ -8354,6 +8413,89 @@ window.teklifSil = async (id, musteriAdi) => {
   } catch(e) { alert('Hata: ' + e.message); }
 };
 
+/* ═══════════════════════════════════════════════════════════════
+   TEKLİF → SÖZLEŞME DÖNÜŞÜMÜ
+   "Kabul Edildi" durumundaki bir teklifi, sözleşme formuna otomatik
+   aktarır. Admin gerekli düzeltmeleri yapıp kaydedebilir.
+   Dönüşüm kuralları:
+     • Müşteri adı → Bina/Cari alanı
+     • Teklif toplamı → Sözleşme tutarı (aylık → toplam ÷ süre seçeneği)
+     • Teklif notları → Sözleşme notu
+     • İlk kalem adından sözleşme tipi otomatik tahmin edilir
+     • Başlangıç tarihi → bugün
+     • Süre → 12 ay (admin değiştirebilir)
+     • Teklif ID → sözleşmede referans olarak saklanır
+═══════════════════════════════════════════════════════════════ */
+window.teklifdenSozlesmeOlustur = (teklifId) => {
+  const t = G_TEKLIFLER.find(x => x.id === teklifId);
+  if (!t) { alert('Teklif bulunamadı.'); return; }
+
+  if (t.durum !== 'kabul') {
+    alert('Yalnızca "Kabul Edildi" durumundaki teklifler sözleşmeye dönüştürülebilir.\n\nÖnce teklif durumunu "Kabul Edildi" olarak güncelleyin.');
+    return;
+  }
+
+  // Sözleşme tipini teklif kalemlerinden tahmin et
+  const ilkKalem = (t.kalemler || [])[0]?.ad?.toLowerCase() || '';
+  let sozlesmeTipi = 'Bakım';
+  if (ilkKalem.includes('montaj')) sozlesmeTipi = 'Montaj';
+  else if (ilkKalem.includes('revizyon') || ilkKalem.includes('modernizasyon')) sozlesmeTipi = 'Revizyon';
+  else if (ilkKalem.includes('onarım') || ilkKalem.includes('arıza')) sozlesmeTipi = 'Onarım';
+
+  // Aylık tutar tahmini:
+  // Eğer birden fazla kalem varsa, toplam/12 ile aylık tutar tahmin edilir.
+  // Tek kalem ve "aylık" içeriyorsa zaten aylık fiyat olarak kabul edilir.
+  const tekKalemAylik = t.kalemler?.length === 1 &&
+    (t.kalemler[0]?.ad?.toLowerCase().includes('aylık') || t.kalemler[0]?.miktar === 1);
+  const aylikTutar = tekKalemAylik
+    ? (t.genelToplam || 0)
+    : Math.round((t.genelToplam || 0) / 12);
+
+  // Sözleşme notuna teklif referansını ekle
+  const sozlesmeNotu = [
+    t.not || '',
+    `[Kaynak: TKLF-${teklifId.slice(0,8).toUpperCase()} · ${t.musteriAdi}]`
+  ].filter(Boolean).join('\n');
+
+  // Sözleşme formunu doldur
+  resetSozlesmeForm();
+  document.getElementById('f-soz-bina').value      = t.musteriAdi || '';
+  document.getElementById('f-soz-tip').value        = sozlesmeTipi;
+  document.getElementById('f-soz-tutar').value      = aylikTutar || '';
+  document.getElementById('f-soz-gun').value        = '5'; // varsayılan ödeme günü
+  document.getElementById('f-soz-baslangic').value  = new Date().toISOString().slice(0,10);
+  document.getElementById('f-soz-sure').value       = '12';
+  document.getElementById('f-soz-not').value        = sozlesmeNotu;
+
+  // Bitiş ve son ödeme tarihlerini hesapla
+  const baslangicDate = new Date();
+  const bitisDate = new Date(baslangicDate);
+  bitisDate.setMonth(bitisDate.getMonth() + 12);
+  document.getElementById('f-soz-baslangic').dispatchEvent(new Event('input'));
+
+  // Modal başlığını güncelle
+  const modalTitle = document.getElementById('mSozlesmeTitle');
+  if (modalTitle) modalTitle.textContent = `Yeni Sözleşme (Teklif'ten Dönüştürüldü)`;
+
+  // Kullanıcıyı bilgilendir ve modalı aç
+  openModal('mSozlesme');
+
+  // Kısa gecikmeyle uyarı göster (modal açıldıktan sonra)
+  setTimeout(() => {
+    const bilgiEl = document.getElementById('sozlesmeTeklifBilgi');
+    if (bilgiEl) {
+      bilgiEl.style.display = 'flex';
+      bilgiEl.innerHTML = `
+        <svg viewBox="0 0 24 24" style="width:14px;height:14px;flex-shrink:0;fill:none;stroke:#10B981;stroke-width:2;"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        <span>Teklif <b>TKLF-${teklifId.slice(0,8).toUpperCase()}</b> bilgileri aktarıldı.
+        ${!tekKalemAylik ? `Toplam tutar (${(t.genelToplam||0).toLocaleString('tr-TR')} ₺) 12 aya bölünüp aylık tutar hesaplandı.` : ''}
+        Bilgileri kontrol edip kaydedin.</span>`;
+    }
+  }, 100);
+
+  auditLogYaz('Teklif → Sözleşme Dönüşümü Başlatıldı', `${t.musteriAdi} (TKLF-${teklifId.slice(0,8).toUpperCase()})`);
+};
+
 window.renderTeklifler = function() {
   const tbody = document.getElementById('teklifTableBody');
   if (!tbody) return;
@@ -8383,7 +8525,8 @@ window.renderTeklifler = function() {
       <td style="padding:12px;text-align:right;white-space:nowrap;">
         <button onclick="downloadTeklifPDF('${t.id}')" style="font-size:11px;color:#00ADB5;background:none;border:none;cursor:pointer;">📄 PDF</button>
         <button onclick="teklifDuzenle('${t.id}')" style="font-size:11px;color:#3B82F6;background:none;border:none;cursor:pointer;margin-left:8px;">Düzenle</button>
-        <button onclick="teklifSil('${t.id}','${(t.musteriAdi||'').replace(/'/g,"\\'")}')" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;margin-left:8px;">Sil</button>
+        ${t.durum === 'kabul' ? `<button onclick="teklifdenSozlesmeOlustur('${t.id}')" style="font-size:11px;color:#10B981;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.25);border-radius:5px;cursor:pointer;padding:3px 8px;margin-left:8px;font-weight:700;">🔄 Sözleşme Yap</button>` : ''}
+        <button onclick="teklifSil('${t.id}','${(t.musteriAdi||'').replace(/'/g,"\\'")}')\" style="font-size:11px;color:#EF4444;background:none;border:none;cursor:pointer;margin-left:8px;">Sil</button>
       </td>
     </tr>`;
   }).join('');
@@ -10431,7 +10574,8 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Aylık Maaş</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Fazla Mesai (×1.5)</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Bu Ay Avans</th>
-                  <th style="text-align:center;padding:11px 12px;font-size:10px;font-weight:700;color:#EF4444;text-transform:uppercase;letter-spacing:.08em;">Gelmedi / Kesinti</th>
+                  <th style="text-align:center;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Gelmedi / Kesinti</th>
+                  <th style="text-align:center;padding:11px 12px;font-size:10px;font-weight:700;color:#F59E0B;text-transform:uppercase;letter-spacing:.08em;">⏱ Eksik Saat</th>
                   <th style="text-align:center;padding:11px 12px;font-size:10px;font-weight:700;color:#10B981;text-transform:uppercase;letter-spacing:.08em;">🏖️ İzin Bakiyesi</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Net Ödenecek</th>
                   <th style="text-align:right;padding:11px 12px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;">Durum</th>
@@ -11173,6 +11317,8 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <button onclick="closeModal('mSozlesme')" style="color:#475569;background:none;border:none;cursor:pointer;"><svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg></button>
     </div>
     <input type="hidden" id="f-soz-editId"/>
+    <!-- Teklif dönüşümü bilgi banner'ı — sadece teklifden dönüşüm yapıldığında gösterilir -->
+    <div id="sozlesmeTeklifBilgi" style="display:none;margin:12px 20px -4px;padding:10px 14px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:8px;font-size:11px;color:#10B981;gap:8px;align-items:flex-start;"></div>
     <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;">
       <div><label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Bina Adı *</label>
         <input id="f-soz-bina" type="text" class="db-input" placeholder="Tuna Apartmanı" list="sozBinaListesi"/>
