@@ -411,6 +411,16 @@ const TEMA_RENKLERI = {
   mor:     { main: '#8B5CF6', dark: '#7C3AED' },
 };
 
+// Hex renkten daha koyu (dark) tonunu otomatik üretir — özel renk
+// seçildiğinde ikinci CSS değişkeni için kullanılır.
+function hexKoyulastir(hex, oran = 0.15) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  const koy = (v) => Math.max(0, Math.round(v * (1 - oran)));
+  return `rgb(${koy(r)},${koy(g)},${koy(b)})`;
+}
+
 window.setTema = (temaAdi) => {
   const renk = TEMA_RENKLERI[temaAdi];
   if (!renk) return;
@@ -418,15 +428,45 @@ window.setTema = (temaAdi) => {
   document.documentElement.style.setProperty('--theme-main', renk.main);
   document.documentElement.style.setProperty('--theme-dark', renk.dark);
 
-  // Aktif nokta vurgusu
   document.querySelectorAll('.theme-dot').forEach(d => {
     d.classList.toggle('theme-dot-active', d.dataset.theme === temaAdi);
   });
+  // Özel renk aktifken nokta seçimini kaldır
+  const ozelDot = document.getElementById('ozelRenkDot');
+  if (ozelDot) ozelDot.classList.remove('theme-dot-active');
 
   localStorage.setItem('asel_tema', temaAdi);
+  localStorage.removeItem('asel_ozel_renk');
+};
+
+// Özel hex renk uygula
+window.ozelRenkUygula = (hex) => {
+  if (!hex || !/^#[0-9A-Fa-f]{6}$/.test(hex)) return;
+  const dark = hexKoyulastir(hex);
+  document.documentElement.style.setProperty('--theme-main', hex);
+  document.documentElement.style.setProperty('--theme-dark', dark);
+  // Tüm standart dotları pasif yap
+  document.querySelectorAll('.theme-dot').forEach(d => d.classList.remove('theme-dot-active'));
+  const ozelDot = document.getElementById('ozelRenkDot');
+  if (ozelDot) {
+    ozelDot.style.background = hex;
+    ozelDot.classList.add('theme-dot-active');
+  }
+  localStorage.setItem('asel_ozel_renk', hex);
+  localStorage.removeItem('asel_tema');
 };
 
 function temaYukle() {
+  const ozelRenk = localStorage.getItem('asel_ozel_renk');
+  if (ozelRenk) {
+    ozelRenkUygula(ozelRenk);
+    // Renk seçicinin değerini de güncelle
+    setTimeout(() => {
+      const picker = document.getElementById('ozelRenkPicker');
+      if (picker) picker.value = ozelRenk;
+    }, 50);
+    return;
+  }
   const kayitliTema = localStorage.getItem('asel_tema') || 'turkuaz';
   setTema(kayitliTema);
 }
@@ -919,6 +959,23 @@ function subscribeAll() {
   unsubscribers.push(onSnapshot(ayarlarRef, snap => {
     if (snap.exists()) {
       G_AYLIK_HATIRLATMA_GUNU = snap.data().aylikHatirlatmaGunu || 25;
+      // Franchising: Firma bilgilerini Firestore'dan yükle ve uygula
+      const firma = snap.data().firma || {};
+      if (firma.ad) {
+        document.querySelectorAll('.firma-adi-dinamik').forEach(el => el.textContent = firma.ad);
+        document.title = firma.ad + ' Paneli';
+      }
+      if (firma.telefon) document.querySelectorAll('.firma-tel-dinamik').forEach(el => el.textContent = firma.telefon);
+      if (firma.adres) document.querySelectorAll('.firma-adres-dinamik').forEach(el => el.textContent = firma.adres);
+      if (firma.email) document.querySelectorAll('.firma-email-dinamik').forEach(el => el.textContent = firma.email);
+      // Formu doldur
+      if (document.getElementById('firma-ad')) {
+        document.getElementById('firma-ad').value = firma.ad || '';
+        document.getElementById('firma-telefon').value = firma.telefon || '';
+        document.getElementById('firma-email').value = firma.email || '';
+        document.getElementById('firma-adres').value = firma.adres || '';
+        document.getElementById('firma-vergiNo').value = firma.vergiNo || '';
+      }
     }
     if (document.getElementById('pg-aylik')?.classList.contains('active')) renderAylikTakip();
     rebuildBildirimler();
@@ -928,11 +985,7 @@ function subscribeAll() {
   const binaQ = query(collection(db, 'binalar'), orderBy('ad'));
   unsubscribers.push(onSnapshot(binaQ, snap => {
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const hamSayisi = data.length;
     data = binaRoluGuvenliFiltre(data, b => b.ad);
-    // Kalıcı tanı logu: bina rolü filtresinin gerçekten çalışıp
-    // çalışmadığını her zaman doğrulamak için (F12 > Console'da görülür).
-    console.log('[binalar listener] role=', role, '| bina=', bina, '| ham kayıt=', hamSayisi, '| filtrelenmiş kayıt=', data.length);
     G_BINALAR = data;
     renderBinalar(data);
     renderBinaSayac(data.length);
@@ -1192,7 +1245,7 @@ function setupUI() {
   // Bina yöneticisi banner
   if (role === 'bina') {
     document.getElementById('binaBanner').style.display = 'flex';
-    document.getElementById('binaBannerText').textContent = `"${u.bina}" binası görüntüleniyor. [v2026-06-30-rules-fix, G_BINALAR: ${G_BINALAR.length}]`;
+    document.getElementById('binaBannerText').textContent = `"${u.bina}" binası görüntüleniyor.`;
     document.getElementById('topbarNewBakim').style.display = 'none';
   } else {
     document.getElementById('binaBanner').style.display = 'none';
@@ -1601,6 +1654,22 @@ window.aylikHatirlatmaGunuKaydet = async () => {
     G_AYLIK_HATIRLATMA_GUNU = gun;
     rebuildBildirimler();
   } catch (e) { alert('Ayar kaydedilemedi: ' + e.message); }
+};
+
+window.firmaBilgileriKaydet = async () => {
+  const firma = {
+    ad:      (document.getElementById('firma-ad')?.value || '').trim(),
+    telefon: (document.getElementById('firma-telefon')?.value || '').trim(),
+    email:   (document.getElementById('firma-email')?.value || '').trim(),
+    adres:   (document.getElementById('firma-adres')?.value || '').trim(),
+    vergiNo: (document.getElementById('firma-vergiNo')?.value || '').trim(),
+  };
+  try {
+    await setDoc(doc(db, 'ayarlar', 'genel'), { firma }, { merge: true });
+    const okEl = document.getElementById('firmaBilgisiOk');
+    if (okEl) { okEl.style.display = 'block'; setTimeout(() => okEl.style.display = 'none', 3000); }
+    auditLogYaz('Firma Bilgileri Güncellendi', firma.ad || '—');
+  } catch(e) { alert('Hata: ' + e.message); }
 };
 
 function renderAylikTakip() {
@@ -8077,6 +8146,77 @@ window.sendTahsilatHatirlatma = (binaAdi, netBakiye, gecikmeGun) => {
 /* ═══════════════════════════════════════════════════════════════
    FIRESTORE CRUD — ARIZA
 ═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   TOAST BİLDİRİM SİSTEMİ
+   alert() yerine köşede çıkan, tıklanabilir, zamanla kaybolan
+   bildirimler. Özellikle WhatsApp yönlendirmesi için kullanılır.
+   Tip: 'basari' | 'hata' | 'uyari' | 'bilgi'
+   aksiyon: { etiket: string, aksiyon: fn } — opsiyonel buton
+═══════════════════════════════════════════════════════════════ */
+function showToast(mesaj, tip = 'basari', aksiyon = null, sure = 4000) {
+  let container = document.getElementById('toastContainer');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toastContainer';
+    container.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:99999;display:flex;flex-direction:column;gap:8px;max-width:360px;';
+    document.body.appendChild(container);
+  }
+
+  const renkler = {
+    basari: { bg: '#10B981', ikon: '✓' },
+    hata:   { bg: '#EF4444', ikon: '✕' },
+    uyari:  { bg: '#F59E0B', ikon: '⚠' },
+    bilgi:  { bg: '#3B82F6', ikon: 'ℹ' },
+  };
+  const { bg, ikon } = renkler[tip] || renkler.bilgi;
+
+  const toast = document.createElement('div');
+  toast.style.cssText = `background:#1E293B;border-left:4px solid ${bg};border-radius:10px;padding:12px 16px;box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:flex-start;gap:10px;animation:toastIn .25s ease;`;
+  toast.innerHTML = `
+    <span style="width:20px;height:20px;border-radius:50%;background:${bg};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;flex-shrink:0;margin-top:1px;">${ikon}</span>
+    <div style="flex:1;min-width:0;">
+      <div style="font-size:12px;color:#E2E8F0;line-height:1.4;">${mesaj}</div>
+      ${aksiyon ? `<button onclick="(${aksiyon.aksiyon.toString()})()" style="margin-top:8px;padding:5px 12px;background:${bg};color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">${aksiyon.etiket}</button>` : ''}
+    </div>
+    <button onclick="this.parentElement.remove()" style="color:#475569;background:none;border:none;cursor:pointer;font-size:16px;line-height:1;flex-shrink:0;">×</button>`;
+
+  container.appendChild(toast);
+  if (sure > 0) setTimeout(() => toast.remove(), sure);
+}
+
+// Toast animasyon CSS (inline inject — sadece bir kez)
+if (!document.getElementById('toastAnimStyle')) {
+  const s = document.createElement('style');
+  s.id = 'toastAnimStyle';
+  s.textContent = '@keyframes toastIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}';
+  document.head.appendChild(s);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   OTOMATİK MÜŞTERİ BİLGİLENDİRME (WhatsApp)
+   Arıza bildirildiğinde veya çözüldüğünde, binanın yetkili telefon
+   numarasına hazır WhatsApp mesajı linki oluşturulur. Kullanıcıya
+   "Müşteriyi Bilgilendir" toast'u gösterilir — tıklayınca WhatsApp
+   Web açılır, mesaj hazır gelir, tek tuşla gönderilir.
+   Telefon numarası bina kaydında yoksa bildirim sessizce atlanır.
+═══════════════════════════════════════════════════════════════ */
+function musteriWhatsappBildirimi(binaAdi, mesajSablonu) {
+  const bina = G_BINALAR.find(b => binaAdiNormalize(b.ad) === binaAdiNormalize(binaAdi));
+  const tel = bina?.telefon?.replace(/\D/g, '');
+  if (!tel || tel.length < 10) return; // Telefon yoksa sessizce atla
+
+  const telFormat = tel.startsWith('0') ? tel.slice(1) : tel;
+  const url = `https://wa.me/90${telFormat}?text=${encodeURIComponent(mesajSablonu)}`;
+
+  // Toast benzeri bildirim — "Müşteriyi Bilgilendir" butonu
+  showToast(
+    `📱 <b>${binaAdi}</b> için müşteri bildirimi hazır`,
+    'bilgi',
+    { etiket: 'WhatsApp\'ta Gönder', aksiyon: () => window.open(url, '_blank') },
+    8000 // 8 saniye görünür
+  );
+}
+
 window.saveAriza = async () => {
   // Bina rolündeki kullanıcı her ne yazarsa yazsın, gönderilecek bina adı
   // kendi profilindeki bina ile zorlanır (HTML readonly client-side bir
@@ -8101,6 +8241,13 @@ window.saveAriza = async () => {
     document.getElementById('f-ariza-bina').value = '';
     document.getElementById('f-ariza-kabin').value = '';
     document.getElementById('f-ariza-aciklama').value = '';
+
+    // Müşteriye otomatik bilgilendirme
+    const tarihStr = new Date().toLocaleDateString('tr-TR', {day:'2-digit',month:'long',year:'numeric'});
+    const kabinBilgi = kabin ? ` (${kabin})` : '';
+    musteriWhatsappBildirimi(bina,
+      `Sayın ${bina} Yetkilisi,\n\n${tarihStr} tarihinde asansörünüzde${kabinBilgi} arıza bildirimi alınmıştır.\n\nArıza Türü: ${tip || 'Genel Arıza'}\n${aciklama ? `Açıklama: ${aciklama}\n` : ''}\nEkibimiz en kısa sürede müdahale edecektir.\n\nAS-EL Asansör · 0533 497 73 17`
+    );
   } catch(e) { alert('Hata: ' + e.message); }
 };
 
@@ -8280,6 +8427,14 @@ window.cozumKaydet = async () => {
     }
 
     await updateDoc(doc(db, 'arizalar', id), guncelleme);
+
+    // Müşteriye arıza çözüm bildirimi
+    const tarihStr = new Date().toLocaleDateString('tr-TR', {day:'2-digit',month:'long',year:'numeric'});
+    const kabinBilgi = ariza.kabin ? ` (${ariza.kabin})` : '';
+    musteriWhatsappBildirimi(ariza.bina,
+      `Sayın ${ariza.bina} Yetkilisi,\n\n${tarihStr} tarihinde bildirilen asansör arızanız${kabinBilgi} giderilmiştir.\n\nArıza Türü: ${ariza.tip || 'Genel Arıza'}\nÇözen Teknisyen: ${teknisyen}\n${not ? `Notlar: ${not}\n` : ''}${genelToplam > 0 ? `Toplam Maliyet: ${genelToplam.toLocaleString('tr-TR')} ₺\n` : ''}\nAsansörünüz kullanıma hazırdır. İyi günler dileriz.\n\nAS-EL Asansör · 0533 497 73 17`
+    );
+
     closeModal('mArizaCozum');
   } catch(e) {
     alert('Kaydedilemedi: ' + e.message);
@@ -10022,6 +10177,14 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <div class="theme-dot" data-theme="mavi" style="background:linear-gradient(135deg,#3B82F6,#2563EB);" onclick="setTema('mavi')" title="Mavi"></div>
       <div class="theme-dot" data-theme="yesil" style="background:linear-gradient(135deg,#10B981,#059669);" onclick="setTema('yesil')" title="Yeşil"></div>
       <div class="theme-dot" data-theme="mor" style="background:linear-gradient(135deg,#8B5CF6,#7C3AED);" onclick="setTema('mor')" title="Mor"></div>
+      <!-- Özel renk seçici -->
+      <div id="ozelRenkDot" class="theme-dot" title="Özel renk seç"
+        style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);position:relative;overflow:hidden;"
+        onclick="document.getElementById('ozelRenkPicker').click()">
+        <input id="ozelRenkPicker" type="color" value="#00ADB5"
+          style="opacity:0;position:absolute;inset:0;width:100%;height:100%;cursor:pointer;border:none;padding:0;"
+          oninput="ozelRenkUygula(this.value)"/>
+      </div>
     </div>
 
     <div style="padding:6px 8px;border-top:1px solid rgba(30,41,59,.6);">
@@ -10392,6 +10555,40 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
             <p style="font-size:11px;color:#475569;margin-top:2px;">Firebase Authentication + Firestore — Gerçek zamanlı</p>
           </div>
           <button onclick="openModal('mKullanici')" class="btn-sm admin-only">+ Kullanıcı Ekle</button>
+        </div>
+
+        <!-- Firma Bilgileri (Franchising Altyapısı) -->
+        <div class="card admin-only" style="padding:16px;margin-bottom:16px;border-color:rgba(0,173,181,.2);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+            <div>
+              <h3 style="font-size:13px;font-weight:700;color:#E2E8F0;">🏢 Firma Bilgileri</h3>
+              <p style="font-size:10.5px;color:#475569;margin-top:2px;">PDF'lerde, bildirimlerde ve panelin başlığında görünür — değiştirince tüm belgelere yansır</p>
+            </div>
+            <button onclick="firmaBilgileriKaydet()" class="btn-sm" style="flex-shrink:0;">💾 Kaydet</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div>
+              <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Firma Adı</label>
+              <input id="firma-ad" type="text" class="db-input" placeholder="AS-EL Asansör"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Telefon</label>
+              <input id="firma-telefon" type="text" class="db-input" placeholder="0533 497 73 17"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">E-posta</label>
+              <input id="firma-email" type="text" class="db-input" placeholder="info@asansor.com.tr"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Adres</label>
+              <input id="firma-adres" type="text" class="db-input" placeholder="Esenyurt / İstanbul"/>
+            </div>
+            <div style="grid-column:1/-1;">
+              <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Vergi No / IBAN (fatura ve tekliflerde gösterilir)</label>
+              <input id="firma-vergiNo" type="text" class="db-input" placeholder="Vergi numarası veya IBAN"/>
+            </div>
+          </div>
+          <div id="firmaBilgisiOk" style="display:none;margin-top:10px;padding:8px 12px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:8px;color:#6EE7B7;font-size:11px;">✓ Firma bilgileri kaydedildi — tüm belgeler güncellendi.</div>
         </div>
 
         <!-- Kendi şifremi değiştir -->
