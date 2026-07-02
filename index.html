@@ -6534,17 +6534,37 @@ function personelIzinOzeti(kullaniciId) {
 
   const kazanilanToplamGun = tamYil * yillikIzinGun;
 
-  // 1) Açık izin günleri + gelmedi günleri
+  // 1) Kullanılan izin günleri:
+  // G_MESAI yerine G_IZIN_TALEPLERI kullanılıyor — çünkü onaylanan izin
+  // talebi, her gün için ayrı bir mesai kaydı oluşturur. G_MESAI'dan
+  // sayılırsa 5 günlük izin için 5 ayrı kayıt bulunur ve 5×5=25 gibi
+  // hatalı çarpım ortaya çıkar. G_IZIN_TALEPLERI'nde ise her izin dönemi
+  // için tek bir kayıt vardır — sadece bu kayıttaki gunSayisi kullanılır.
   let kullanilanGun = 0;
-  G_MESAI.filter(m =>
+
+  // a) İzin Yönetimi modülünden onaylanmış talepler
+  const onayliIzinler = (G_IZIN_TALEPLERI || []).filter(t =>
+    t.personelId === kullaniciId && t.durum === 'onaylandi' &&
+    IZIN_TURLERI[t.tur]?.bakiyedenDus !== false // sadece bakiyeden düşen türler
+  );
+  onayliIzinler.forEach(t => {
+    kullanilanGun += t.gunSayisi || isGunuSayisi(t.baslangic, t.bitis);
+  });
+
+  // b) Eski (İzin Yönetimi öncesi) mesai kayıtlarından "izinli" olanlar
+  // — sadece izinTalepId'si OLMAYAN kayıtları say (talep sistemiyle girilenleri
+  // zaten yukarıda saydık, çift saymayı önlemek için).
+  const eskiIzinliMesailer = G_MESAI.filter(m =>
     m.personelId === kullaniciId &&
-    (m.durum === 'izinli' || m.durum === 'gelmedi')
-  ).forEach(m => {
-    if (m.tarihBaslangic && m.tarihBitis && m.tarihBitis !== m.tarihBaslangic) {
-      const bas = new Date(m.tarihBaslangic + 'T00:00:00');
-      const bit = new Date(m.tarihBitis + 'T00:00:00');
-      kullanilanGun += Math.max(1, Math.round((bit - bas) / 86400000) + 1);
-    } else {
+    (m.durum === 'izinli' || m.durum === 'gelmedi') &&
+    !m.izinTalepId // İzin Yönetimi modülünden GELMEYENler
+  );
+  // Eski kayıtlarda da çift sayım önlemek için tarih bazlı tekil say
+  const sayilanTarihler = new Set();
+  eskiIzinliMesailer.forEach(m => {
+    const tarih = m.tarih || '';
+    if (tarih && !sayilanTarihler.has(tarih)) {
+      sayilanTarihler.add(tarih);
       kullanilanGun += 1;
     }
   });
