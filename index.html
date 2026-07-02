@@ -3881,6 +3881,101 @@ function checklistIlerlemeGuncelle() {
 // dökümanı güncellenir (yeni kayıt veya aylikBakimlar değişikliği
 // yapılmaz — sadece checklist içeriği ve not düzeltilir).
 // Her iki modda da işlem sonunda PDF güncel verilerle yeniden üretilir.
+/* ═══════════════════════════════════════════════════════════════
+   MÜŞTERİ DİJİTAL İMZA MODÜLÜ
+   Bakım tamamlanınca müşteri/bina yetkilisi dokunmatik ekranda
+   imzasını atar. İmza Canvas API ile çizilir, base64 PNG olarak
+   saklanır, bakım fişi PDF'ine eklenir.
+═══════════════════════════════════════════════════════════════ */
+let G_IMZA_CIZILIYOR = false;
+let G_IMZA_VAR = false;
+let G_IMZA_CALLBACK = null; // imza alındıktan sonra çağrılacak fonksiyon
+
+function imzaKanvasiniAl() {
+  return document.getElementById('imzaCanvas');
+}
+
+window.imzaBasla = (e) => {
+  G_IMZA_CIZILIYOR = true;
+  const canvas = imzaKanvasiniAl();
+  const ctx = canvas.getContext('2d');
+  const pos = imzaKonumAl(e, canvas);
+  ctx.beginPath();
+  ctx.moveTo(pos.x, pos.y);
+  document.getElementById('imzaIpucuEl').style.display = 'none';
+  e.preventDefault();
+};
+
+window.imzaCiz = (e) => {
+  if (!G_IMZA_CIZILIYOR) return;
+  const canvas = imzaKanvasiniAl();
+  const ctx = canvas.getContext('2d');
+  const pos = imzaKonumAl(e, canvas);
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineTo(pos.x, pos.y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(pos.x, pos.y);
+  G_IMZA_VAR = true;
+  e.preventDefault();
+};
+
+window.imzaBitir = () => {
+  G_IMZA_CIZILIYOR = false;
+};
+
+function imzaKonumAl(e, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  if (e.touches) {
+    return {
+      x: (e.touches[0].clientX - rect.left) * scaleX,
+      y: (e.touches[0].clientY - rect.top) * scaleY
+    };
+  }
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY
+  };
+}
+
+window.imzaTemizle = () => {
+  const canvas = imzaKanvasiniAl();
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  G_IMZA_VAR = false;
+  document.getElementById('imzaIpucuEl').style.display = 'flex';
+};
+
+window.imzaIptal = () => {
+  document.getElementById('modal-mImza').style.display = 'none';
+  G_IMZA_CALLBACK = null;
+};
+
+window.imzaAtla = () => {
+  // İmzasız devam — callback'e null geçer
+  document.getElementById('modal-mImza').style.display = 'none';
+  if (G_IMZA_CALLBACK) { G_IMZA_CALLBACK(null); G_IMZA_CALLBACK = null; }
+};
+
+window.imzaOnayla = () => {
+  const imzaDataUrl = G_IMZA_VAR ? imzaKanvasiniAl().toDataURL('image/png') : null;
+  document.getElementById('modal-mImza').style.display = 'none';
+  if (G_IMZA_CALLBACK) { G_IMZA_CALLBACK(imzaDataUrl); G_IMZA_CALLBACK = null; }
+};
+
+// İmza modalını aç — callback, modal kapandıktan sonra imza verisiyle çağrılır
+function imzaModalAc(binaAdi, callback) {
+  imzaTemizle();
+  document.getElementById('imzaModalAltBaslik').textContent = binaAdi || '';
+  document.getElementById('modal-mImza').style.display = 'flex';
+  G_IMZA_CALLBACK = callback;
+}
+
 window.checklistTamamla = async () => {
   if (!baglantiKontrolEt()) return;
 
@@ -3891,6 +3986,20 @@ window.checklistTamamla = async () => {
     if (!confirm('Hiçbir madde işaretlemediniz. Yine de kaydetmek istiyor musunuz?')) return;
   }
 
+  // Düzenleme modunda imza sorulmaz
+  if (G_CHECKLIST_DUZENLEME_ID) {
+    await checklistTamamlaDevam(not, yapilanMaddeler, null);
+    return;
+  }
+
+  // Bakımı kaydetmeden önce müşteri dijital imzasını al
+  const binaAdi = G_AYLIK_CHECKLIST_KAYIT?.bina || '';
+  imzaModalAc(binaAdi, async (imzaDataUrl) => {
+    await checklistTamamlaDevam(not, yapilanMaddeler, imzaDataUrl);
+  });
+};
+
+async function checklistTamamlaDevam(not, yapilanMaddeler, imzaDataUrl) {
   // ── DÜZENLEME MODU ──
   if (G_CHECKLIST_DUZENLEME_ID) {
     const kayit = G_BAKIMLAR.find(b => b.id === G_CHECKLIST_DUZENLEME_ID);
@@ -3909,7 +4018,7 @@ window.checklistTamamla = async () => {
       G_CHECKLIST_DUZENLEME_ID = null;
 
       const tarih = kayit.tamamlanmaTarihi?.toDate ? kayit.tamamlanmaTarihi.toDate() : new Date(kayit.tarih);
-      await downloadBakimFisiPDF({ bina: kayit.bina, kabin: kayit.kabin || '' }, yapilanMaddeler, not, tarih, kayit.teknisyen);
+      await downloadBakimFisiPDF({ bina: kayit.bina, kabin: kayit.kabin || '' }, yapilanMaddeler, not, tarih, kayit.teknisyen, imzaDataUrl);
 
       alert('✓ Bakım fişi düzeltmeleri kaydedildi.');
     } catch(e) {
@@ -3927,7 +4036,8 @@ window.checklistTamamla = async () => {
 
     try {
       await updateDoc(doc(db, 'aylikBakimlar', aylikBakimId), {
-        durum: 'yapildi', yapilmaTarihi: serverTimestamp(), yapanKisi: currentUserData?.ad || '—'
+        durum: 'yapildi', yapilmaTarihi: serverTimestamp(), yapanKisi: currentUserData?.ad || '—',
+        imzaAlindi: !!imzaDataUrl
       });
 
       await addDoc(collection(db, 'bakimlar'), {
@@ -3937,12 +4047,13 @@ window.checklistTamamla = async () => {
         notlar: not || 'Aylık Bakım Takibi üzerinden kontrol listesiyle işaretlendi.',
         checklistMaddeleri: yapilanMaddeler,
         checklistToplam: BAKIM_CHECKLIST_MADDELERI.length,
+        imzaAlindi: !!imzaDataUrl,
         durum: 'tamamlandi', tamamlanmaTarihi: serverTimestamp(),
         olusturuldu: serverTimestamp()
       });
 
-      // Bakım fişini otomatik PDF olarak indir — QR akışıyla aynı fiş.
-      await downloadBakimFisiPDF({ bina: binaAdi, kabin: '' }, yapilanMaddeler, not, bugun, teknisyenAd);
+      // Bakım fişini müşteri imzasıyla PDF olarak indir
+      await downloadBakimFisiPDF({ bina: binaAdi, kabin: '' }, yapilanMaddeler, not, bugun, teknisyenAd, imzaDataUrl);
 
       G_AYLIK_TOPLU_TAMAMLANAN++;
       G_AYLIK_CHECKLIST_KAYIT = null;
@@ -3988,7 +4099,7 @@ window.checklistTamamla = async () => {
       closeModal('mBakimChecklist', true);
       G_CHECKLIST_TAMAMLAMA_ID = null;
 
-      await downloadBakimFisiPDF({ bina: kayit.bina, kabin: kayit.kabin || '' }, yapilanMaddeler, not, new Date(), currentUserData?.ad);
+      await downloadBakimFisiPDF({ bina: kayit.bina, kabin: kayit.kabin || '' }, yapilanMaddeler, not, new Date(), currentUserData?.ad, imzaDataUrl);
     } catch(e) {
       alert('Hata: ' + e.message);
     }
@@ -4038,19 +4149,18 @@ window.checklistTamamla = async () => {
     document.getElementById('qrHizliBakimBtn').style.opacity = '0.6';
     document.getElementById('qrHizliBakimBtn').disabled = true;
 
-    // Bakım fişini otomatik PDF olarak indir
-    await downloadBakimFisiPDF(asansor, yapilanMaddeler, not, bugun, currentUserData?.ad);
-
+    // Bakım fişini müşteri imzasıyla PDF olarak indir
+    await downloadBakimFisiPDF(asansor, yapilanMaddeler, not, bugun, currentUserData?.ad, imzaDataUrl);
 
   } catch(e) {
     alert('Hata: ' + e.message);
   }
-};
+}
 
 // Checklist tamamlanınca logolu, teknisyen adı ve tarihli bir Bakım
 // Fişi PDF'i üretir — bina yöneticisi veya teknisyen bunu kanıt
 // belgesi olarak saklayabilir.
-async function downloadBakimFisiPDF(asansor, yapilanMaddeler, not, tarih, teknisyenAdi) {
+async function downloadBakimFisiPDF(asansor, yapilanMaddeler, not, tarih, teknisyenAdi, imzaDataUrl) {
   if (typeof window.html2canvas === 'undefined') {
     alert('PDF kütüphanesi henüz yüklenmedi, lütfen birkaç saniye sonra tekrar deneyin.');
     return;
@@ -4062,6 +4172,20 @@ async function downloadBakimFisiPDF(asansor, yapilanMaddeler, not, tarih, teknis
   document.getElementById('bf-saat').textContent = tarih.toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' });
   document.getElementById('bf-teknisyen').textContent = teknisyenAdi || currentUserData?.ad || '—';
   document.getElementById('bf-not').textContent = not || '—';
+
+  // Teknisyen adını imza alanına yaz
+  document.getElementById('bf-teknisyen-imza-ad').textContent = teknisyenAdi || currentUserData?.ad || '—';
+
+  // Müşteri dijital imzasını PDF şablonuna yerleştir
+  const musteriImzaWrap = document.getElementById('bf-musteri-imza-wrap');
+  const imzaTarihEl = document.getElementById('bf-imza-tarih');
+  if (imzaDataUrl) {
+    musteriImzaWrap.innerHTML = `<img src="${imzaDataUrl}" style="max-height:60px;max-width:200px;object-fit:contain;" alt="İmza"/>`;
+    imzaTarihEl.textContent = new Date().toLocaleString('tr-TR', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  } else {
+    musteriImzaWrap.innerHTML = `<div style="font-size:11px;color:#94A3B8;font-style:italic;">— imza alınmadı —</div>`;
+    imzaTarihEl.textContent = '';
+  }
 
   document.getElementById('bf-maddeler').innerHTML = BAKIM_CHECKLIST_MADDELERI.map(madde => {
     const yapildi = yapilanMaddeler.includes(madde);
@@ -12700,10 +12824,18 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
       <!-- İmza alanı -->
       <div style="display:flex; justify-content:space-between; padding-top:14px; border-top:1px solid #F1F5F9;">
         <div style="text-align:center; width:220px;">
-          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:24px; font-size:10px; color:#64748B; font-weight:600;">Bakımı Yapan Teknisyen</div>
+          <div id="bf-teknisyen-imza-wrap" style="height:60px;display:flex;align-items:center;justify-content:center;">
+            <div style="font-size:11px;color:#94A3B8;font-style:italic;">— imza —</div>
+          </div>
+          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; font-size:10px; color:#64748B; font-weight:600;">Bakımı Yapan Teknisyen</div>
+          <div id="bf-teknisyen-imza-ad" style="font-size:10px;color:#0F172A;margin-top:3px;font-weight:600;"></div>
         </div>
         <div style="text-align:center; width:220px;">
-          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; margin-top:24px; font-size:10px; color:#64748B; font-weight:600;">Bina Yetkilisi</div>
+          <div id="bf-musteri-imza-wrap" style="height:60px;display:flex;align-items:center;justify-content:center;">
+            <div style="font-size:11px;color:#94A3B8;font-style:italic;">— imza —</div>
+          </div>
+          <div style="border-top:1.5px solid #CBD5E1; padding-top:8px; font-size:10px; color:#64748B; font-weight:600;">Bina Yetkilisi</div>
+          <div id="bf-imza-tarih" style="font-size:10px;color:#475569;margin-top:3px;"></div>
         </div>
       </div>
     </div>
@@ -12714,6 +12846,57 @@ body.light-mode #dashboard [style*="border-color:rgba(30,41,59"] { border-color:
     </div>
   </div>
 
+</div>
+
+<!-- ════════════════════════════════════
+     MÜŞTERİ DİJİTAL İMZA MODALI
+     Bakım tamamlandıktan sonra müşteri/bina yetkilisi bu modalda
+     dokunmatik ekran veya mouse ile imzasını atar. İmza Canvas API
+     ile çizilir, base64 PNG olarak saklanır ve bakım fişi PDF'ine
+     eklenerek Firestore'a imzalı olarak kaydedilir.
+════════════════════════════════════ -->
+<div id="modal-mImza" class="modal-wrap" style="z-index:25000;">
+  <div class="modal-box" style="max-width:480px;">
+    <div style="padding:16px 20px;border-bottom:1px solid rgba(30,41,59,.6);display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <h3 style="font-size:14px;font-weight:700;color:#E2E8F0;">✍️ Müşteri / Bina Yetkilisi İmzası</h3>
+        <p id="imzaModalAltBaslik" style="font-size:11px;color:#475569;margin-top:2px;"></p>
+      </div>
+      <button onclick="imzaIptal()" style="color:#475569;background:none;border:none;cursor:pointer;">
+        <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div style="padding:16px 20px;">
+      <p style="font-size:12px;color:#64748B;margin-bottom:10px;">Lütfen aşağıdaki alana imzanızı atın:</p>
+
+      <!-- İmza canvas alanı -->
+      <div style="border:2px solid rgba(0,173,181,.3);border-radius:10px;background:#F8FAFC;position:relative;cursor:crosshair;">
+        <canvas id="imzaCanvas" width="420" height="180"
+          style="display:block;width:100%;height:180px;border-radius:8px;touch-action:none;"
+          onmousedown="imzaBasla(event)" onmousemove="imzaCiz(event)" onmouseup="imzaBitir()" onmouseleave="imzaBitir()"
+          ontouchstart="imzaBasla(event)" ontouchmove="imzaCiz(event)" ontouchend="imzaBitir()">
+        </canvas>
+        <div id="imzaIpucuEl" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;">
+          <span style="font-size:13px;color:#CBD5E1;">← İmzanızı buraya atın →</span>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">
+        <button onclick="imzaTemizle()" style="font-size:12px;color:#475569;background:none;border:1px solid rgba(71,85,105,.3);border-radius:7px;padding:6px 14px;cursor:pointer;">🗑️ Temizle</button>
+        <div style="font-size:10px;color:#475569;">İmza zorunlu değil — atlayabilirsiniz</div>
+      </div>
+
+      <div style="background:rgba(0,173,181,.06);border:1px solid rgba(0,173,181,.15);border-radius:8px;padding:10px 14px;margin-top:12px;font-size:11px;color:#64748B;line-height:1.5;">
+        ℹ️ İmzanız bakım fişine eklenerek kaydedilecektir. Bakım fişi WhatsApp ile de paylaşılabilir.
+      </div>
+    </div>
+
+    <div style="padding:12px 20px;border-top:1px solid rgba(30,41,59,.6);display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="imzaAtla()" class="btn-ghost">İmzasız Devam Et</button>
+      <button onclick="imzaOnayla()" class="btn-sm">✓ İmzayı Onayla ve PDF Oluştur</button>
+    </div>
+  </div>
 </div>
 
 <!-- ════════════════════════════════════
